@@ -1,13 +1,13 @@
 /**
- * @fileoverview Tests for loc://item/{item_id} resource.
- * @module tests/resources/loc-item.resource.test
+ * @fileoverview Tests for libofcongress://item/{item_id} resource.
+ * @module tests/resources/libofcongress-item.resource.test
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { locItemResource } from '@/mcp-server/resources/definitions/loc-item.resource.js';
+import { locItemResource } from '@/mcp-server/resources/definitions/libofcongress-item.resource.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 function makeItemResponse(overrides: Record<string, unknown> = {}) {
@@ -49,7 +49,7 @@ describe('locItemResource', () => {
 
   it('returns full item metadata for a valid item_id', async () => {
     vi.stubGlobal('fetch', mockFetch(makeItemResponse()));
-    const ctx = createMockContext({ uri: new URL('loc://item/2016687584') });
+    const ctx = createMockContext({ uri: new URL('libofcongress://item/2016687584') });
     const params = locItemResource.params.parse({ item_id: '2016687584' });
     const result = await locItemResource.handler(params, ctx);
 
@@ -60,9 +60,9 @@ describe('locItemResource', () => {
     expect(result.subject_headings).toContain('Legislators -- United States -- Portraits');
   });
 
-  it('returns the same shape as loc_get_item', async () => {
+  it('returns the same shape as libofcongress_get_item', async () => {
     vi.stubGlobal('fetch', mockFetch(makeItemResponse()));
-    const ctx = createMockContext({ uri: new URL('loc://item/2016687584') });
+    const ctx = createMockContext({ uri: new URL('libofcongress://item/2016687584') });
     const params = locItemResource.params.parse({ item_id: '2016687584' });
     const result = await locItemResource.handler(params, ctx);
 
@@ -78,7 +78,7 @@ describe('locItemResource', () => {
 
   it('throws NotFound when item is absent from response envelope', async () => {
     vi.stubGlobal('fetch', mockFetch(JSON.stringify({ resources: [], related_items: [] })));
-    const ctx = createMockContext({ uri: new URL('loc://item/nonexistent') });
+    const ctx = createMockContext({ uri: new URL('libofcongress://item/nonexistent') });
     const params = locItemResource.params.parse({ item_id: 'nonexistent' });
     await expect(locItemResource.handler(params, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.NotFound,
@@ -87,7 +87,7 @@ describe('locItemResource', () => {
 
   it('throws NotFound on HTTP 404', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })));
-    const ctx = createMockContext({ uri: new URL('loc://item/bad-id') });
+    const ctx = createMockContext({ uri: new URL('libofcongress://item/bad-id') });
     const params = locItemResource.params.parse({ item_id: 'bad-id' });
     await expect(locItemResource.handler(params, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.NotFound,
@@ -109,7 +109,7 @@ describe('locItemResource', () => {
         }),
       ),
     );
-    const ctx = createMockContext({ uri: new URL('loc://item/sparse-id') });
+    const ctx = createMockContext({ uri: new URL('libofcongress://item/sparse-id') });
     const params = locItemResource.params.parse({ item_id: 'sparse-id' });
     const result = await locItemResource.handler(params, ctx);
 
@@ -127,7 +127,7 @@ describe('locItemResource', () => {
       'fetch',
       vi.fn().mockResolvedValue(new Response('Too Many Requests', { status: 429 })),
     );
-    const ctx = createMockContext({ uri: new URL('loc://item/2016687584') });
+    const ctx = createMockContext({ uri: new URL('libofcongress://item/2016687584') });
     const params = locItemResource.params.parse({ item_id: '2016687584' });
     await expect(locItemResource.handler(params, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.RateLimited,

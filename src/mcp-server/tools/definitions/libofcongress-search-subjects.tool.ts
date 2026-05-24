@@ -1,16 +1,16 @@
 /**
- * @fileoverview loc_search_subjects tool — search Library of Congress Subject Headings (LCSH).
- * @module mcp-server/tools/definitions/loc-search-subjects.tool
+ * @fileoverview libofcongress_search_subjects tool — search Library of Congress Subject Headings (LCSH).
+ * @module mcp-server/tools/definitions/libofcongress-search-subjects.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getLcLinkedDataService } from '@/services/lc-linked-data/lc-linked-data-service.js';
 
-export const locSearchSubjects = tool('loc_search_subjects', {
+export const locSearchSubjects = tool('libofcongress_search_subjects', {
   title: 'Search LC Subject Headings',
   description:
-    'Search Library of Congress Subject Headings (LCSH) by keyword. Returns controlled-vocabulary subject labels and their URIs. Use the returned label as the subject filter in loc_search — LCSH uses precise, standardized terms that differ from natural language (e.g., "World War, 1939-1945" not "World War II"; "Photography, Aerial" not "Aerial photography"). Running this tool before a subject-filtered loc_search dramatically improves result quality.',
+    'Search Library of Congress Subject Headings (LCSH) by keyword. Returns controlled-vocabulary subject labels and their URIs. Use the returned label as the subject filter in libofcongress_search — LCSH uses precise, standardized terms that differ from natural language (e.g., "World War, 1939-1945" not "World War II"; "Photography, Aerial" not "Aerial photography"). Running this tool before a subject-filtered libofcongress_search dramatically improves result quality.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -35,7 +35,7 @@ export const locSearchSubjects = tool('loc_search_subjects', {
             label: z
               .string()
               .describe(
-                'Standardized LCSH heading — use this exact string in the loc_search subject filter.',
+                'Standardized LCSH heading — use this exact string in the libofcongress_search subject filter.',
               ),
             uri: z
               .string()
@@ -70,7 +70,7 @@ export const locSearchSubjects = tool('loc_search_subjects', {
   ],
 
   async handler(input, ctx) {
-    ctx.log.info('loc_search_subjects', { query: input.query, limit: input.limit });
+    ctx.log.info('libofcongress_search_subjects', { query: input.query, limit: input.limit });
     const svc = getLcLinkedDataService();
     const subjects = await svc.searchSubjects(input.query, input.limit, ctx);
 

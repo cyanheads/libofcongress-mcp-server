@@ -1,6 +1,6 @@
 # libofcongress-mcp-server - Directory Structure
 
-Generated on: 2026-05-24 13:20:41
+Generated on: 2026-05-24 22:47:08
 
 ```text
 libofcongress-mcp-server/
@@ -110,15 +110,15 @@ libofcongress-mcp-server/
 │   │   │   └── definitions/
 │   │   ├── resources/
 │   │   │   └── definitions/
-│   │   │       └── loc-item.resource.ts
+│   │   │       └── libofcongress-item.resource.ts
 │   │   └── tools/
 │   │       └── definitions/
-│   │           ├── loc-browse-collections.tool.ts
-│   │           ├── loc-get-item.tool.ts
-│   │           ├── loc-get-newspaper-page.tool.ts
-│   │           ├── loc-search-newspapers.tool.ts
-│   │           ├── loc-search-subjects.tool.ts
-│   │           └── loc-search.tool.ts
+│   │           ├── libofcongress-browse-collections.tool.ts
+│   │           ├── libofcongress-get-item.tool.ts
+│   │           ├── libofcongress-get-newspaper-page.tool.ts
+│   │           ├── libofcongress-search-newspapers.tool.ts
+│   │           ├── libofcongress-search-subjects.tool.ts
+│   │           └── libofcongress-search.tool.ts
 │   ├── services/
 │   │   ├── lc-linked-data/
 │   │   │   ├── lc-linked-data-service.ts
@@ -130,14 +130,14 @@ libofcongress-mcp-server/
 ├── tests/
 │   ├── prompts/
 │   ├── resources/
-│   │   └── loc-item.resource.test.ts
+│   │   └── libofcongress-item.resource.test.ts
 │   └── tools/
-│       ├── loc-browse-collections.tool.test.ts
-│       ├── loc-get-item.tool.test.ts
-│       ├── loc-get-newspaper-page.tool.test.ts
-│       ├── loc-search-newspapers.tool.test.ts
-│       ├── loc-search-subjects.tool.test.ts
-│       └── loc-search.tool.test.ts
+│       ├── libofcongress-browse-collections.tool.test.ts
+│       ├── libofcongress-get-item.tool.test.ts
+│       ├── libofcongress-get-newspaper-page.tool.test.ts
+│       ├── libofcongress-search-newspapers.tool.test.ts
+│       ├── libofcongress-search-subjects.tool.test.ts
+│       └── libofcongress-search.tool.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore

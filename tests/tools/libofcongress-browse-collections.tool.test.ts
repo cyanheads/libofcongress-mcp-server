@@ -1,13 +1,13 @@
 /**
- * @fileoverview Tests for loc_browse_collections tool.
- * @module tests/tools/loc-browse-collections.tool.test
+ * @fileoverview Tests for libofcongress_browse_collections tool.
+ * @module tests/tools/libofcongress-browse-collections.tool.test
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { locBrowseCollections } from '@/mcp-server/tools/definitions/loc-browse-collections.tool.js';
+import { locBrowseCollections } from '@/mcp-server/tools/definitions/libofcongress-browse-collections.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 function makeCollectionsResponse(overrides: { results?: object[]; pagination?: object } = {}) {

@@ -1,13 +1,13 @@
 /**
- * @fileoverview Tests for loc_get_item tool.
- * @module tests/tools/loc-get-item.tool.test
+ * @fileoverview Tests for libofcongress_get_item tool.
+ * @module tests/tools/libofcongress-get-item.tool.test
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { locGetItem } from '@/mcp-server/tools/definitions/loc-get-item.tool.js';
+import { locGetItem } from '@/mcp-server/tools/definitions/libofcongress-get-item.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 /** Full LOC item response fixture */

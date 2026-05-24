@@ -1,13 +1,13 @@
 /**
- * @fileoverview Tests for loc_search_subjects tool.
- * @module tests/tools/loc-search-subjects.tool.test
+ * @fileoverview Tests for libofcongress_search_subjects tool.
+ * @module tests/tools/libofcongress-search-subjects.tool.test
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { locSearchSubjects } from '@/mcp-server/tools/definitions/loc-search-subjects.tool.js';
+import { locSearchSubjects } from '@/mcp-server/tools/definitions/libofcongress-search-subjects.tool.js';
 import { initLcLinkedDataService } from '@/services/lc-linked-data/lc-linked-data-service.js';
 
 /**

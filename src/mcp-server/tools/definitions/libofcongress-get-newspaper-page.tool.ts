@@ -1,6 +1,6 @@
 /**
- * @fileoverview loc_get_newspaper_page tool — retrieve full OCR text for a specific newspaper page.
- * @module mcp-server/tools/definitions/loc-get-newspaper-page.tool
+ * @fileoverview libofcongress_get_newspaper_page tool — retrieve full OCR text for a specific newspaper page.
+ * @module mcp-server/tools/definitions/libofcongress-get-newspaper-page.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -9,16 +9,16 @@ import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 const LOC_PAGE_URL_PREFIX = 'https://www.loc.gov/resource/';
 
-export const locGetNewspaperPage = tool('loc_get_newspaper_page', {
+export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
   title: 'Get Newspaper Page',
   description:
-    'Retrieve the full OCR text of a specific historical newspaper page along with publication metadata. Pass the url field from a loc_search_newspapers result — do not construct this URL manually. OCR quality varies by digitization batch and era: 19th-century and degraded materials may contain fragmented text, garbled words, and line-break artifacts that are surfaced as-is. When a page exists but has no digitized text, ocr_available is false and ocr_text is empty — this is a data property, not an error.',
+    'Retrieve the full OCR text of a specific historical newspaper page along with publication metadata. Pass the url field from a libofcongress_search_newspapers result — do not construct this URL manually. OCR quality varies by digitization batch and era: 19th-century and degraded materials may contain fragmented text, garbled words, and line-break artifacts that are surfaced as-is. When a page exists but has no digitized text, ocr_available is false and ocr_text is empty — this is a data property, not an error.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     page_url: z
       .string()
       .describe(
-        'The url field from a loc_search_newspapers result. Format: https://www.loc.gov/resource/sn{number}/{date-id}.{seq}/. Always pass the value directly from search results — do not construct or modify this URL.',
+        'The url field from a libofcongress_search_newspapers result. Format: https://www.loc.gov/resource/sn{number}/{date-id}.{seq}/. Always pass the value directly from search results — do not construct or modify this URL.',
       ),
   }),
   output: z.object({
@@ -46,7 +46,7 @@ export const locGetNewspaperPage = tool('loc_get_newspaper_page', {
       code: JsonRpcErrorCode.NotFound,
       when: 'The URL does not resolve to a valid LOC newspaper page resource.',
       recovery:
-        'Re-run loc_search_newspapers to get a fresh url from current results. Do not modify or guess page URLs.',
+        'Re-run libofcongress_search_newspapers to get a fresh url from current results. Do not modify or guess page URLs.',
     },
     {
       reason: 'rate_limit_exceeded',
@@ -58,7 +58,7 @@ export const locGetNewspaperPage = tool('loc_get_newspaper_page', {
   ],
 
   handler(input, ctx) {
-    ctx.log.info('loc_get_newspaper_page', { page_url: input.page_url });
+    ctx.log.info('libofcongress_get_newspaper_page', { page_url: input.page_url });
 
     // Validate before any outbound request: must be a well-formed URL on www.loc.gov/resource/
     let parsed: URL;
@@ -66,13 +66,13 @@ export const locGetNewspaperPage = tool('loc_get_newspaper_page', {
       parsed = new URL(input.page_url);
     } catch {
       throw validationError(
-        'page_url must be a valid LOC newspaper page URL (e.g. https://www.loc.gov/resource/sn.../date/). Get it from a loc_search_newspapers result.',
+        'page_url must be a valid LOC newspaper page URL (e.g. https://www.loc.gov/resource/sn.../date/). Get it from a libofcongress_search_newspapers result.',
         { field: 'page_url' },
       );
     }
     if (!input.page_url.startsWith(LOC_PAGE_URL_PREFIX)) {
       throw validationError(
-        'page_url must begin with https://www.loc.gov/resource/. Pass the url field directly from a loc_search_newspapers result.',
+        'page_url must begin with https://www.loc.gov/resource/. Pass the url field directly from a libofcongress_search_newspapers result.',
         { field: 'page_url', received: `${parsed.origin}${parsed.pathname}` },
       );
     }

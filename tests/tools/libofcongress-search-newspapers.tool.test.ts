@@ -1,13 +1,13 @@
 /**
- * @fileoverview Tests for loc_search_newspapers tool.
- * @module tests/tools/loc-search-newspapers.tool.test
+ * @fileoverview Tests for libofcongress_search_newspapers tool.
+ * @module tests/tools/libofcongress-search-newspapers.tool.test
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { locSearchNewspapers } from '@/mcp-server/tools/definitions/loc-search-newspapers.tool.js';
+import { locSearchNewspapers } from '@/mcp-server/tools/definitions/libofcongress-search-newspapers.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 function makeNewspaperSearchResponse(overrides: { results?: object[]; pagination?: object } = {}) {

@@ -1,50 +1,39 @@
 /**
- * @fileoverview loc_search tool — search Library of Congress digital collections.
- * @module mcp-server/tools/definitions/loc-search.tool
+ * @fileoverview libofcongress_search_newspapers tool — search historical newspaper pages in the Chronicling America corpus.
+ * @module mcp-server/tools/definitions/libofcongress-search-newspapers.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
-export const locSearch = tool('loc_search', {
-  title: 'Search LOC Collections',
+export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
+  title: 'Search Historical Newspapers',
   description:
-    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Use loc_get_item to retrieve full metadata for a specific result. Use loc_search_subjects first to find the exact LCSH heading spelling before applying a subject filter.',
+    'Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with OCR text excerpts (~500 characters), publication title, date, state, and the page URL needed for libofcongress_get_newspaper_page. Filters by keyword, date range, US state, and newspaper title. The OCR excerpts are sufficient for relevance assessment — call libofcongress_get_newspaper_page with the returned url field to read the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
-    query: z
-      .string()
-      .min(1)
-      .describe('Full-text search across metadata and available descriptive text.'),
-    format: z
-      .enum(['photo', 'map', 'newspaper', 'manuscript', 'audio', 'film', 'book', 'notated-music'])
-      .optional()
-      .describe(
-        'Material type filter. Options: photo, map, newspaper, manuscript, audio, film, book, notated-music. Omit to search all formats.',
-      ),
+    query: z.string().min(1).describe('Keyword search across OCR text and newspaper metadata.'),
     date_start: z
       .number()
       .int()
       .optional()
-      .describe('Start year for date filter, inclusive (e.g., 1920). Omit for no lower bound.'),
+      .describe('Start year for date filter, inclusive (e.g., 1900). Omit for no lower bound.'),
     date_end: z
       .number()
       .int()
       .optional()
-      .describe('End year for date filter, inclusive (e.g., 1930). Omit for no upper bound.'),
-    subject: z
+      .describe('End year for date filter, inclusive (e.g., 1920). Omit for no upper bound.'),
+    state: z
       .string()
       .optional()
       .describe(
-        'Subject heading filter. Use the exact label from loc_search_subjects results for best precision. Example: "World War, 1939-1945".',
+        'Filter to newspapers published in this US state. Use the full state name, lowercase (e.g., "oklahoma", "new york").',
       ),
-    location: z
+    newspaper_title: z
       .string()
       .optional()
-      .describe(
-        'Geographic location filter (e.g., "oklahoma", "washington d.c."). Lowercase, matches LOC location facets.',
-      ),
+      .describe('Filter to a specific newspaper by title (partial match accepted).'),
     limit: z
       .number()
       .int()
@@ -64,20 +53,24 @@ export const locSearch = tool('loc_search', {
       .array(
         z
           .object({
-            id: z.string().describe('LOC item ID — pass to loc_get_item for full metadata.'),
-            title: z.string().describe('Item title.'),
-            date: z.string().optional().describe('Publication or creation date.'),
-            description: z.string().optional().describe('Brief description or summary.'),
-            format: z
+            url: z
+              .string()
+              .describe(
+                'LOC resource URL for this page — pass to libofcongress_get_newspaper_page to get full OCR text.',
+              ),
+            title: z.string().describe('Page or issue title.'),
+            description: z
               .string()
               .optional()
-              .describe('Material format (e.g., photo, map, manuscript).'),
-            url: z.string().describe('LOC item URL.'),
+              .describe('OCR text excerpt (~500 chars) for relevance assessment.'),
+            date: z.string().optional().describe('Issue publication date.'),
+            state: z.string().optional().describe('State where the newspaper was published.'),
+            newspaper_title: z.string().optional().describe('Newspaper publication title.'),
           })
-          .describe('A single LOC item summary.'),
+          .describe('A single newspaper page search result.'),
       )
-      .describe('Item summaries matching the search query and filters.'),
-    total: z.number().describe('Total number of matching items across all pages.'),
+      .describe('Newspaper page results matching the search query and filters.'),
+    total: z.number().describe('Total number of matching newspaper pages in the result set.'),
     page: z.number().describe('Current 1-indexed page number.'),
     pages: z.number().describe('Total number of pages available.'),
     has_next: z.boolean().describe('True when more pages are available after this one.'),
@@ -93,9 +86,9 @@ export const locSearch = tool('loc_search', {
     {
       reason: 'empty_results',
       code: JsonRpcErrorCode.NotFound,
-      when: 'No items matched the query and filters.',
+      when: 'No newspaper pages matched the query and filters.',
       recovery:
-        'Broaden the query, widen the date range, or use loc_search_subjects to find the correct subject heading spelling.',
+        'Broaden the date range, remove the state filter, or try different keywords. OCR search is approximate — spelling variations in historical text are common.',
     },
     {
       reason: 'rate_limit_exceeded',
@@ -107,7 +100,11 @@ export const locSearch = tool('loc_search', {
   ],
 
   async handler(input, ctx) {
-    ctx.log.info('loc_search', { query: input.query, format: input.format, page: input.page });
+    ctx.log.info('libofcongress_search_newspapers', {
+      query: input.query,
+      state: input.state,
+      page: input.page,
+    });
 
     if (
       input.date_start !== undefined &&
@@ -121,14 +118,13 @@ export const locSearch = tool('loc_search', {
     }
 
     const svc = getLocApiService();
-    const result = await svc.search(
+    const result = await svc.searchNewspapers(
       {
         query: input.query,
-        ...(input.format !== undefined && { format: input.format }),
         ...(input.date_start !== undefined && { dateStart: input.date_start }),
         ...(input.date_end !== undefined && { dateEnd: input.date_end }),
-        ...(input.subject?.trim() && { subject: input.subject.trim() }),
-        ...(input.location?.trim() && { location: input.location.trim() }),
+        ...(input.state?.trim() && { state: input.state.trim() }),
+        ...(input.newspaper_title?.trim() && { newspaperTitle: input.newspaper_title.trim() }),
         limit: input.limit,
         page: input.page,
       },
@@ -143,19 +139,17 @@ export const locSearch = tool('loc_search', {
         pages: 0,
         has_next: false,
         message:
-          `No items matched "${input.query}"` +
-          (input.format ? ` with format "${input.format}"` : '') +
+          `No newspaper pages matched "${input.query}"` +
+          (input.state ? ` in state "${input.state}"` : '') +
           (input.date_start || input.date_end
             ? ` in dates ${input.date_start ?? ''}–${input.date_end ?? ''}`
             : '') +
-          '. Try broadening the query, widening the date range, or running loc_search_subjects to find the exact subject heading.',
+          '. Try broadening the date range, removing the state filter, or using different keywords. Historical OCR is approximate — variant spellings are common.',
       };
     }
 
     const { total, page, pages, hasNext } = result.pagination;
 
-    // Detect contradictory pagination: LOC sometimes returns items on out-of-range pages.
-    // Surface a clear message rather than a confusing "Page 999 of 26" display.
     if (pages > 0 && page > pages) {
       return {
         items: [],
@@ -184,9 +178,9 @@ export const locSearch = tool('loc_search', {
     if (result.message) lines.push(`\n> ${result.message}`);
     for (const item of result.items) {
       lines.push(`\n## ${item.title}`);
-      lines.push(`**ID:** ${item.id}`);
+      if (item.newspaper_title) lines.push(`**Publication:** ${item.newspaper_title}`);
       if (item.date) lines.push(`**Date:** ${item.date}`);
-      if (item.format) lines.push(`**Format:** ${item.format}`);
+      if (item.state) lines.push(`**State:** ${item.state}`);
       if (item.description) lines.push(item.description);
       lines.push(`**URL:** ${item.url}`);
     }

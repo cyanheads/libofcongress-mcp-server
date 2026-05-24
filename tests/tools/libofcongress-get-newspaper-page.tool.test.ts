@@ -1,13 +1,13 @@
 /**
- * @fileoverview Tests for loc_get_newspaper_page tool.
- * @module tests/tools/loc-get-newspaper-page.tool.test
+ * @fileoverview Tests for libofcongress_get_newspaper_page tool.
+ * @module tests/tools/libofcongress-get-newspaper-page.tool.test
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { locGetNewspaperPage } from '@/mcp-server/tools/definitions/loc-get-newspaper-page.tool.js';
+import { locGetNewspaperPage } from '@/mcp-server/tools/definitions/libofcongress-get-newspaper-page.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 const PAGE_URL = 'https://www.loc.gov/resource/sn84026749/1900-01-01/ed-1/?sp=1';

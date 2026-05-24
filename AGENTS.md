@@ -1,7 +1,7 @@
 # Developer Protocol
 
 **Server:** libofcongress-mcp-server
-**Version:** 0.1.1
+**Version:** 0.2.0
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.9.9`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
@@ -50,7 +50,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
-export const locSearch = tool('loc_search', {
+export const locSearch = tool('libofcongress_search', {
   description: 'Search the Library of Congress digital collections by keyword with format, date range, subject heading, and geographic location filters.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
@@ -61,7 +61,7 @@ export const locSearch = tool('loc_search', {
   }),
   output: z.object({
     items: z.array(z.object({
-      id: z.string().describe('LOC item ID — pass to loc_get_item for full metadata.'),
+      id: z.string().describe('LOC item ID — pass to libofcongress_get_item for full metadata.'),
       title: z.string().describe('Item title.'),
       url: z.string().describe('LOC item URL.'),
     })).describe('Item summaries matching the search query and filters.'),
@@ -71,10 +71,10 @@ export const locSearch = tool('loc_search', {
   errors: [
     { reason: 'empty_results', code: JsonRpcErrorCode.NotFound,
       when: 'No items matched the query and filters.',
-      recovery: 'Broaden the query, widen the date range, or use loc_search_subjects to find the correct subject heading spelling.' },
+      recovery: 'Broaden the query, widen the date range, or use libofcongress_search_subjects to find the correct subject heading spelling.' },
   ],
   async handler(input, ctx) {
-    ctx.log.info('loc_search', { query: input.query, page: input.page });
+    ctx.log.info('libofcongress_search', { query: input.query, page: input.page });
     const svc = getLocApiService();
     const result = await svc.search({ query: input.query, limit: input.limit, page: input.page }, ctx);
     return { items: result.items, total: result.pagination.total, has_next: result.pagination.hasNext };
@@ -92,13 +92,13 @@ export const locSearch = tool('loc_search', {
 import { resource, z } from '@cyanheads/mcp-ts-core';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
-export const locItemResource = resource('loc://item/{item_id}', {
+export const locItemResource = resource('libofcongress://item/{item_id}', {
   name: 'loc-item',
   description: 'LOC digital item metadata by ID. Stable URI for injecting item context into agent conversations.',
   mimeType: 'application/json',
   params: z.object({ item_id: z.string().describe('LOC item ID (e.g., "loc.pnp.ppmsc.02404").') }),
   handler(params, ctx) {
-    ctx.log.debug('loc://item resource', { item_id: params.item_id });
+    ctx.log.debug('libofcongress://item resource', { item_id: params.item_id });
     const svc = getLocApiService();
     return svc.getItem(params.item_id, ctx);
   },
@@ -113,7 +113,7 @@ import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 const ServerConfigSchema = z.object({
-  userAgent: z.string().default('libofcongress-mcp-server/0.1.1').describe('User-Agent header for LOC API requests.'),
+  userAgent: z.string().default('libofcongress-mcp-server/0.2.0').describe('User-Agent header for LOC API requests.'),
   requestDelayMs: z.coerce.number().default(3100).describe('Delay in ms between LOC API requests.'),
 });
 
@@ -206,14 +206,14 @@ src/
       types.ts                          # Subject heading types
   mcp-server/
     tools/definitions/
-      loc-search.tool.ts               # loc_search — general LOC collection search
-      loc-get-item.tool.ts             # loc_get_item — full item metadata
-      loc-search-newspapers.tool.ts    # loc_search_newspapers — Chronicling America search
-      loc-get-newspaper-page.tool.ts   # loc_get_newspaper_page — full OCR text
-      loc-search-subjects.tool.ts      # loc_search_subjects — LCSH subject heading lookup
-      loc-browse-collections.tool.ts   # loc_browse_collections — curated collection browser
+      libofcongress-search.tool.ts               # libofcongress_search — general LOC collection search
+      libofcongress-get-item.tool.ts             # libofcongress_get_item — full item metadata
+      libofcongress-search-newspapers.tool.ts    # libofcongress_search_newspapers — Chronicling America search
+      libofcongress-get-newspaper-page.tool.ts   # libofcongress_get_newspaper_page — full OCR text
+      libofcongress-search-subjects.tool.ts      # libofcongress_search_subjects — LCSH subject heading lookup
+      libofcongress-browse-collections.tool.ts   # libofcongress_browse_collections — curated collection browser
     resources/definitions/
-      loc-item.resource.ts             # loc://item/{item_id} — stable item URI
+      libofcongress-item.resource.ts             # libofcongress://item/{item_id} — stable item URI
 ```
 
 ---

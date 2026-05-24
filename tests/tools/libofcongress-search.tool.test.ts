@@ -1,13 +1,13 @@
 /**
- * @fileoverview Tests for loc_search tool.
- * @module tests/tools/loc-search.tool.test
+ * @fileoverview Tests for libofcongress_search tool.
+ * @module tests/tools/libofcongress-search.tool.test
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { locSearch } from '@/mcp-server/tools/definitions/loc-search.tool.js';
+import { locSearch } from '@/mcp-server/tools/definitions/libofcongress-search.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 /** Minimal mock search response from the LOC JSON API */

@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/libofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.11-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/libofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.11-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -27,27 +27,27 @@ Six tools covering the Library of Congress digital holdings — general search w
 
 | Tool | Description |
 |:-----|:------------|
-| `loc_search` | Search LOC digital collections by keyword with optional format, date range, subject heading, and geographic location filters. Returns item summaries with IDs for follow-up retrieval. |
-| `loc_get_item` | Retrieve full metadata for a specific LOC item — contributors, subjects, rights, physical description, resource links (TIFF/JPEG/PDF), and related items. |
-| `loc_search_newspapers` | Search historical newspaper pages in the Chronicling America corpus. Returns pages with OCR text excerpts (~500 chars), publication title, date, state, and the URL needed for `loc_get_newspaper_page`. |
-| `loc_get_newspaper_page` | Retrieve the full OCR text of a specific newspaper page. Pass the `url` field from a `loc_search_newspapers` result. Returns `ocr_available: false` when the page has no digitized text. |
-| `loc_search_subjects` | Search Library of Congress Subject Headings (LCSH) by keyword. Returns controlled-vocabulary labels and URIs — use the label as the `subject` filter in `loc_search`. |
-| `loc_browse_collections` | List and browse LOC curated digital collections with descriptions, item counts, and slugs. Optionally filter by keyword. |
+| `libofcongress_search` | Search LOC digital collections by keyword with optional format, date range, subject heading, and geographic location filters. Returns item summaries with IDs for follow-up retrieval. |
+| `libofcongress_get_item` | Retrieve full metadata for a specific LOC item — contributors, subjects, rights, physical description, resource links (TIFF/JPEG/PDF), and related items. |
+| `libofcongress_search_newspapers` | Search historical newspaper pages in the Chronicling America corpus. Returns pages with OCR text excerpts (~500 chars), publication title, date, state, and the URL needed for `libofcongress_get_newspaper_page`. |
+| `libofcongress_get_newspaper_page` | Retrieve the full OCR text of a specific newspaper page. Pass the `url` field from a `libofcongress_search_newspapers` result. Returns `ocr_available: false` when the page has no digitized text. |
+| `libofcongress_search_subjects` | Search Library of Congress Subject Headings (LCSH) by keyword. Returns controlled-vocabulary labels and URIs — use the label as the `subject` filter in `libofcongress_search`. |
+| `libofcongress_browse_collections` | List and browse LOC curated digital collections with descriptions, item counts, and slugs. Optionally filter by keyword. |
 
-### `loc_search`
+### `libofcongress_search`
 
 Search the LOC digital collections with full-text keyword matching and facet filters.
 
 - Eight material formats: `photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`
 - Date range filtering by year (inclusive start and end)
-- Subject heading filter — use `loc_search_subjects` first to get the exact LCSH spelling
+- Subject heading filter — use `libofcongress_search_subjects` first to get the exact LCSH spelling
 - Geographic location filter (e.g., `"oklahoma"`, `"washington d.c."`)
 - Pagination up to 100 results per page; contradictory pages (LOC API edge case) returned with a clear message
 - Empty results include a `message` field with recovery hints — echoes the applied filters
 
 ---
 
-### `loc_get_item`
+### `libofcongress_get_item`
 
 Retrieve the full metadata record for a specific LOC digital item.
 
@@ -58,44 +58,44 @@ Retrieve the full metadata record for a specific LOC digital item.
 
 ---
 
-### `loc_search_newspapers`
+### `libofcongress_search_newspapers`
 
 Search historical newspaper pages in the Chronicling America corpus via the LOC `/newspapers/` endpoint.
 
 - OCR text excerpts (~500 chars) returned inline for relevance assessment without a second hop
 - Filters: keyword, date range, US state (full state name), newspaper publication title (partial match)
-- Returns the `url` field needed by `loc_get_newspaper_page` — do not construct these URLs manually
+- Returns the `url` field needed by `libofcongress_get_newspaper_page` — do not construct these URLs manually
 - OCR quality varies by digitization batch and era; 19th-century and degraded materials may contain garbled text
 - Empty results include a `message` with recovery suggestions (broaden date, try different keywords, historical OCR caveat)
 
 ---
 
-### `loc_get_newspaper_page`
+### `libofcongress_get_newspaper_page`
 
 Retrieve the full OCR text and metadata for a specific newspaper page.
 
-- Accepts the `url` field from a `loc_search_newspapers` result — validates the URL prefix before any outbound request
+- Accepts the `url` field from a `libofcongress_search_newspapers` result — validates the URL prefix before any outbound request
 - Fetches ALTO XML from the LOC text-services endpoint and extracts plain text from `CONTENT` attributes
 - `ocr_available: false` when the page has no digitized text (image-only batch) — not an error, a data property
 - Strips echoed `q=` params from fulltext URLs to avoid tile.loc.gov 404s (known LOC API quirk)
 
 ---
 
-### `loc_search_subjects`
+### `libofcongress_search_subjects`
 
 Search Library of Congress Subject Headings (LCSH) via `id.loc.gov`.
 
 - Returns standardized labels and stable LOC URIs for subjects matching the keyword
 - `count` field indicates approximate number of LOC items carrying that heading (when available)
-- Use the returned `label` exactly in the `loc_search` `subject` filter — LCSH uses inverted forms ("Photography, Aerial", "World War, 1939-1945") that differ from natural language
+- Use the returned `label` exactly in the `libofcongress_search` `subject` filter — LCSH uses inverted forms ("Photography, Aerial", "World War, 1939-1945") that differ from natural language
 
 ---
 
-### `loc_browse_collections`
+### `libofcongress_browse_collections`
 
 List and browse LOC curated digital collections.
 
-- Returns collection `slug` — use as a `partof` facet value in `loc_search` to scope searches to a single collection
+- Returns collection `slug` — use as a `partof` facet value in `libofcongress_search` to scope searches to a single collection
 - Optional keyword filter by collection name/description
 - Item counts are approximate; omitted when the API doesn't provide them
 - Pagination supported up to 100 collections per page
@@ -104,9 +104,9 @@ List and browse LOC curated digital collections.
 
 | Type | Name | Description |
 |:-----|:-----|:------------|
-| Resource | `loc://item/{item_id}` | LOC digital item metadata by ID. Stable URI for injecting item context into agent conversations. Returns the same full record as `loc_get_item`. |
+| Resource | `libofcongress://item/{item_id}` | LOC digital item metadata by ID. Stable URI for injecting item context into agent conversations. Returns the same full record as `libofcongress_get_item`. |
 
-All resource data is also reachable via `loc_get_item`. Use `loc_search` to discover item IDs first.
+All resource data is also reachable via `libofcongress_get_item`. Use `libofcongress_search` to discover item IDs first.
 
 ## Features
 
@@ -236,7 +236,7 @@ All configuration is validated at startup via Zod schemas in `src/config/server-
 
 | Variable | Description | Default |
 |:---------|:------------|:--------|
-| `LOC_USER_AGENT` | User-Agent header sent with LOC API requests. LOC recommends a descriptive value for polite access. | `libofcongress-mcp-server/0.1.1` |
+| `LOC_USER_AGENT` | User-Agent header sent with LOC API requests. LOC recommends a descriptive value for polite access. | `libofcongress-mcp-server/0.2.0` |
 | `LOC_REQUEST_DELAY_MS` | Delay in milliseconds between LOC API requests to stay under the 20 req/min rate limit. | `3100` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |
@@ -288,7 +288,7 @@ The Dockerfile defaults to HTTP transport and logs to `/var/log/libofcongress-mc
 | `src/index.ts` | `createApp()` entry point — registers tools, resource, and initializes services. |
 | `src/config` | Server-specific environment variable parsing (`LOC_USER_AGENT`, `LOC_REQUEST_DELAY_MS`). |
 | `src/mcp-server/tools` | Tool definitions (`*.tool.ts`) — six LOC tools. |
-| `src/mcp-server/resources` | Resource definitions — `loc://item/{item_id}`. |
+| `src/mcp-server/resources` | Resource definitions — `libofcongress://item/{item_id}`. |
 | `src/services/loc-api` | `LocApiService` wrapping `www.loc.gov` — search, item fetch, newspaper page, collection browser. |
 | `src/services/lc-linked-data` | `LcLinkedDataService` wrapping `id.loc.gov` — LCSH subject heading suggest. |
 | `tests/` | Unit and integration tests mirroring `src/`. |

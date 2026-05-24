@@ -1,16 +1,16 @@
 /**
- * @fileoverview loc_browse_collections tool — list and browse LOC curated digital collections.
- * @module mcp-server/tools/definitions/loc-browse-collections.tool
+ * @fileoverview libofcongress_browse_collections tool — list and browse LOC curated digital collections.
+ * @module mcp-server/tools/definitions/libofcongress-browse-collections.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
-export const locBrowseCollections = tool('loc_browse_collections', {
+export const locBrowseCollections = tool('libofcongress_browse_collections', {
   title: 'Browse LOC Collections',
   description:
-    'List and browse Library of Congress curated digital collections. Returns collection names, descriptions, item counts, slugs, and URLs. Optionally filter by keyword. Collections are curated subsets of the digital holdings with specific focuses (e.g., "Civil War Glass Negatives", "Baseball Cards", "WPA Posters"). Use the slug value with loc_search to scope searches to a single collection by passing it as a partof facet filter.',
+    'List and browse Library of Congress curated digital collections. Returns collection names, descriptions, item counts, slugs, and URLs. Optionally filter by keyword. Collections are curated subsets of the digital holdings with specific focuses (e.g., "Civil War Glass Negatives", "Baseball Cards", "WPA Posters"). Use the slug value with libofcongress_search to scope searches to a single collection by passing it as a partof facet filter.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -41,7 +41,7 @@ export const locBrowseCollections = tool('loc_browse_collections', {
             slug: z
               .string()
               .describe(
-                'Collection URL slug — use as a partof facet value in loc_search to scope searches to this collection.',
+                'Collection URL slug — use as a partof facet value in libofcongress_search to scope searches to this collection.',
               ),
             title: z.string().describe('Collection name.'),
             description: z
@@ -90,7 +90,7 @@ export const locBrowseCollections = tool('loc_browse_collections', {
   ],
 
   async handler(input, ctx) {
-    ctx.log.info('loc_browse_collections', { query: input.query, page: input.page });
+    ctx.log.info('libofcongress_browse_collections', { query: input.query, page: input.page });
     const svc = getLocApiService();
     const result = await svc.browseCollections(
       {
