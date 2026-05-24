@@ -11,19 +11,6 @@
 
 ---
 
-## First Session
-
-This project was just scaffolded with `bunx @cyanheads/mcp-ts-core init`. The framework, skills, and example definitions are in place — the domain isn't. The user's first messages will set direction; wait for them before proceeding.
-
-> **Remove this section** from CLAUDE.md / AGENTS.md after completing these steps. The skills and conventions below remain — this block is one-time onboarding only.
-
-1. **Get your bearings.** Take stock of the project tree, the skills in `skills/`, and the tools/MCP servers available. Light tool use is fine for context-building — you're mapping the territory, not committing yet.
-2. **Read the framework docs** — `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` (builders, Context, errors, exports, conventions)
-3. **Run the `setup` skill** — read `skills/setup/SKILL.md` and follow its checklist (project orientation, agent protocol file selection, echo definition cleanup, skill sync)
-4. **Design the server** — read `skills/design-mcp-server/SKILL.md` and work through it with the user to map the domain into tools, resources, and services before scaffolding
-
----
-
 ## What's Next?
 
 When the user asks what's next or needs direction, suggest options based on the current project state. Common next steps:
@@ -60,35 +47,41 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ```ts
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
-export const searchItems = tool('search_items', {
-  description: 'Search inventory items by query.',
-  annotations: { readOnlyHint: true },
+export const locSearch = tool('loc_search', {
+  description: 'Search the Library of Congress digital collections by keyword with format, date range, subject heading, and geographic location filters.',
+  annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
-    query: z.string().describe('Search terms'),
-    limit: z.number().default(10).describe('Max results'),
+    query: z.string().min(1).describe('Full-text search across metadata and available descriptive text.'),
+    format: z.enum(['photo', 'map', 'newspaper', 'manuscript', 'audio', 'film', 'book', 'notated-music']).optional().describe('Material type filter.'),
+    limit: z.number().int().min(1).max(100).default(25).describe('Results per page. Default 25, max 100.'),
+    page: z.number().int().min(1).default(1).describe('1-indexed page number.'),
   }),
   output: z.object({
     items: z.array(z.object({
-      id: z.string().describe('Item ID'),
-      name: z.string().describe('Item name'),
-    })).describe('Matching items'),
+      id: z.string().describe('LOC item ID — pass to loc_get_item for full metadata.'),
+      title: z.string().describe('Item title.'),
+      url: z.string().describe('LOC item URL.'),
+    })).describe('Item summaries matching the search query and filters.'),
+    total: z.number().describe('Total number of matching items across all pages.'),
+    has_next: z.boolean().describe('True when more pages are available after this one.'),
   }),
-  auth: ['inventory:read'],
-
+  errors: [
+    { reason: 'empty_results', code: JsonRpcErrorCode.NotFound,
+      when: 'No items matched the query and filters.',
+      recovery: 'Broaden the query, widen the date range, or use loc_search_subjects to find the correct subject heading spelling.' },
+  ],
   async handler(input, ctx) {
-    const items = await findItems(input.query, input.limit);
-    ctx.log.info('Search completed', { query: input.query, count: items.length });
-    return { items };
+    ctx.log.info('loc_search', { query: input.query, page: input.page });
+    const svc = getLocApiService();
+    const result = await svc.search({ query: input.query, limit: input.limit, page: input.page }, ctx);
+    return { items: result.items, total: result.pagination.total, has_next: result.pagination.hasNext };
   },
-
-  // format() populates content[] — the markdown twin of structuredContent.
-  // Different clients read different surfaces (Claude Code → structuredContent,
-  // Claude Desktop → content[]); both must carry the same data.
-  // Enforced at lint time: every field in `output` must appear in the rendered text.
   format: (result) => [{
     type: 'text',
-    text: result.items.map(i => `**${i.id}**: ${i.name}`).join('\n'),
+    text: result.items.map(i => `**${i.title}** (${i.id})\n${i.url}`).join('\n\n'),
   }],
 });
 ```
@@ -97,60 +90,44 @@ export const searchItems = tool('search_items', {
 
 ```ts
 import { resource, z } from '@cyanheads/mcp-ts-core';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
+import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
-export const itemData = resource('inventory://{itemId}', {
-  description: 'Fetch an inventory item by ID.',
-  params: z.object({ itemId: z.string().describe('Item identifier') }),
-  auth: ['inventory:read'],
-  async handler(params, ctx) {
-    const item = await ctx.state.get(`item:${params.itemId}`);
-    if (!item) throw notFound(`Item ${params.itemId} not found`, { itemId: params.itemId });
-    return item;
+export const locItemResource = resource('loc://item/{item_id}', {
+  name: 'loc-item',
+  description: 'LOC digital item metadata by ID. Stable URI for injecting item context into agent conversations.',
+  mimeType: 'application/json',
+  params: z.object({ item_id: z.string().describe('LOC item ID (e.g., "loc.pnp.ppmsc.02404").') }),
+  handler(params, ctx) {
+    ctx.log.debug('loc://item resource', { item_id: params.item_id });
+    const svc = getLocApiService();
+    return svc.getItem(params.item_id, ctx);
   },
-});
-```
-
-### Prompt
-
-```ts
-import { prompt, z } from '@cyanheads/mcp-ts-core';
-
-export const reviewCode = prompt('review_code', {
-  description: 'Review code for issues and best practices.',
-  args: z.object({
-    code: z.string().describe('Code to review'),
-    language: z.string().optional().describe('Programming language'),
-  }),
-  generate: (args) => [
-    { role: 'user', content: { type: 'text', text: `Review this ${args.language ?? ''} code:\n${args.code}` } },
-  ],
 });
 ```
 
 ### Server config
 
 ```ts
-// src/config/server-config.ts — lazy-parsed, separate from framework config
+// src/config/server-config.ts
 import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 const ServerConfigSchema = z.object({
-  apiKey: z.string().describe('External API key'),
-  maxResults: z.coerce.number().default(100),
+  userAgent: z.string().default('libofcongress-mcp-server/0.1.0').describe('User-Agent header for LOC API requests.'),
+  requestDelayMs: z.coerce.number().default(3100).describe('Delay in ms between LOC API requests.'),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
 export function getServerConfig() {
   _config ??= parseEnvConfig(ServerConfigSchema, {
-    apiKey: 'MY_API_KEY',
-    maxResults: 'MY_MAX_RESULTS',
+    userAgent: 'LOC_USER_AGENT',
+    requestDelayMs: 'LOC_REQUEST_DELAY_MS',
   });
   return _config;
 }
 ```
 
-`parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`MY_API_KEY`) not the path (`apiKey`). Throws `ConfigurationError`, which the framework prints as a clean startup banner.
+`parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`LOC_USER_AGENT`) not the path (`userAgent`). Throws `ConfigurationError`, which the framework prints as a clean startup banner.
 
 ---
 
@@ -217,20 +194,26 @@ See framework CLAUDE.md and the `api-errors` skill for the full auto-classificat
 
 ```text
 src/
-  index.ts                              # createApp() entry point
+  index.ts                              # createApp() entry point — registers tools, resource, and initializes services
   config/
-    server-config.ts                    # Server-specific env vars (Zod schema)
+    server-config.ts                    # LOC_USER_AGENT and LOC_REQUEST_DELAY_MS (Zod schema)
   services/
-    [domain]/
-      [domain]-service.ts               # Domain service (init/accessor pattern)
-      types.ts                          # Domain types
+    loc-api/
+      loc-api-service.ts               # LOC JSON API client — rate pacing, search, item fetch, newspaper page
+      types.ts                          # Raw and normalized LOC API types
+    lc-linked-data/
+      lc-linked-data-service.ts        # id.loc.gov LCSH subject suggest client
+      types.ts                          # Subject heading types
   mcp-server/
     tools/definitions/
-      [tool-name].tool.ts               # Tool definitions
+      loc-search.tool.ts               # loc_search — general LOC collection search
+      loc-get-item.tool.ts             # loc_get_item — full item metadata
+      loc-search-newspapers.tool.ts    # loc_search_newspapers — Chronicling America search
+      loc-get-newspaper-page.tool.ts   # loc_get_newspaper_page — full OCR text
+      loc-search-subjects.tool.ts      # loc_search_subjects — LCSH subject heading lookup
+      loc-browse-collections.tool.ts   # loc_browse_collections — curated collection browser
     resources/definitions/
-      [resource-name].resource.ts       # Resource definitions
-    prompts/definitions/
-      [prompt-name].prompt.ts           # Prompt definitions
+      loc-item.resource.ts             # loc://item/{item_id} — stable item URI
 ```
 
 ---

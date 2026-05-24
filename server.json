@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "cyanheads/libofcongress-mcp-server",
-  "description": "Search LOC digital collections, Chronicling America newspapers, and LC Subject Headings via MCP.",
+  "name": "io.github.cyanheads/libofcongress-mcp-server",
+  "description": "Search LOC digital collections, Chronicling America newspapers (full OCR), and LC Subject Headings.",
   "repository": {
     "url": "https://github.com/cyanheads/libofcongress-mcp-server",
     "source": "github"
@@ -12,7 +12,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "libofcongress-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "bun",
       "version": "0.1.0",
       "packageArguments": [
         {
@@ -25,6 +25,20 @@
         }
       ],
       "environmentVariables": [
+        {
+          "name": "LOC_USER_AGENT",
+          "description": "User-Agent header sent with LOC API requests. LOC recommends a descriptive value for polite access.",
+          "format": "string",
+          "isRequired": false,
+          "default": "libofcongress-mcp-server/0.1.0"
+        },
+        {
+          "name": "LOC_REQUEST_DELAY_MS",
+          "description": "Delay in milliseconds between LOC API requests to stay under the 20 req/min rate limit.",
+          "format": "string",
+          "isRequired": false,
+          "default": "3100"
+        },
         {
           "name": "MCP_LOG_LEVEL",
           "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
@@ -41,7 +55,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "libofcongress-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "bun",
       "version": "0.1.0",
       "packageArguments": [
         {
@@ -54,6 +68,20 @@
         }
       ],
       "environmentVariables": [
+        {
+          "name": "LOC_USER_AGENT",
+          "description": "User-Agent header sent with LOC API requests. LOC recommends a descriptive value for polite access.",
+          "format": "string",
+          "isRequired": false,
+          "default": "libofcongress-mcp-server/0.1.0"
+        },
+        {
+          "name": "LOC_REQUEST_DELAY_MS",
+          "description": "Delay in milliseconds between LOC API requests to stay under the 20 req/min rate limit.",
+          "format": "string",
+          "isRequired": false,
+          "default": "3100"
+        },
         {
           "name": "MCP_HTTP_HOST",
           "description": "The hostname for the HTTP server.",
