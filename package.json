@@ -1,6 +1,6 @@
 {
-  "name": "libofcongress-mcp-server",
-  "version": "0.2.0",
+  "name": "@cyanheads/libofcongress-mcp-server",
+  "version": "0.2.1",
   "mcpName": "io.github.cyanheads/libofcongress-mcp-server",
   "description": "Search LOC digital collections, browse Chronicling America newspapers with full OCR text, and look up LC Subject Headings via MCP. STDIO or Streamable HTTP.",
   "type": "module",
@@ -31,7 +31,7 @@
     "lint:mcp": "tsx scripts/lint-mcp.ts",
     "lint:packaging": "tsx scripts/lint-packaging.ts",
     "publish-mcp": "mcp-publisher login github -token \"$(security find-generic-password -a \"$USER\" -s mcp-publisher-github-pat -w)\" && mcp-publisher publish",
-    "bundle": "npm run build && npx -y @anthropic-ai/mcpb pack . dist/libofcongress-mcp-server.mcpb",
+    "bundle": "bun run build && npx -y @anthropic-ai/mcpb pack . dist/libofcongress-mcp-server.mcpb",
     "changelog:build": "tsx scripts/build-changelog.ts",
     "changelog:check": "tsx scripts/build-changelog.ts --check",
     "test": "vitest run",
@@ -56,7 +56,7 @@
     "stdio",
     "streamable-http"
   ],
-  "author": "Casey Hand <casey@caseyjhand.com> (https://github.com/cyanheads)",
+  "author": "cyanheads <casey@caseyjhand.com> (https://github.com/cyanheads/libofcongress-mcp-server#readme)",
   "homepage": "https://github.com/cyanheads/libofcongress-mcp-server#readme",
   "bugs": {
     "url": "https://github.com/cyanheads/libofcongress-mcp-server/issues"
