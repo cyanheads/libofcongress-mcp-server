@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "libofcongress-mcp-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Search LOC digital collections, browse Chronicling America newspapers with full OCR text, and look up LC Subject Headings via MCP.",
   "author": { "name": "Casey Hand" },
   "server": {
