@@ -11,6 +11,8 @@
     "ignorePatterns": []
   },
   "outdated": {
-    "allowlist": []
+    "allowlist": [
+      "typescript"
+    ]
   }
 }
