@@ -30,6 +30,7 @@
     "format": "biome check --write --unsafe .",
     "lint:mcp": "tsx scripts/lint-mcp.ts",
     "lint:packaging": "tsx scripts/lint-packaging.ts",
+    "publish-mcp": "mcp-publisher login github -token \"$(security find-generic-password -a \"$USER\" -s mcp-publisher-github-pat -w)\" && mcp-publisher publish",
     "bundle": "npm run build && npx -y @anthropic-ai/mcpb pack . dist/libofcongress-mcp-server.mcpb",
     "changelog:build": "tsx scripts/build-changelog.ts",
     "changelog:check": "tsx scripts/build-changelog.ts --check",
