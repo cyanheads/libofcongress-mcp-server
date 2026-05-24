@@ -15,6 +15,7 @@ export const locGetItem = tool('loc_get_item', {
   input: z.object({
     item_id: z
       .string()
+      .min(1)
       .describe(
         'LOC item ID from a loc_search result\'s "id" field (e.g., "loc.pnp.ppmsc.02404" or "2009632251"). Pass the bare ID only — no URL path segments.',
       ),
@@ -92,8 +93,11 @@ export const locGetItem = tool('loc_get_item', {
       if (result.resource_links.length > 5)
         lines.push(`- … and ${result.resource_links.length - 5} more`);
     }
-    if (result.related_items.length > 0)
+    if (result.related_items.length > 0) {
       lines.push(`**Related items:** ${result.related_items.slice(0, 5).join(', ')}`);
+      if (result.related_items.length > 5)
+        lines.push(`- … and ${result.related_items.length - 5} more`);
+    }
     lines.push(`**URL:** ${result.url}`);
     return [{ type: 'text', text: lines.join('\n') }];
   },

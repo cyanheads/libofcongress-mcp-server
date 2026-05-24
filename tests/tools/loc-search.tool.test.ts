@@ -220,6 +220,55 @@ describe('locSearch', () => {
     expect(text).toContain('Sparse Item');
   });
 
+  it('rejects inverted date range with ValidationError', async () => {
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({ query: 'history', date_start: 1950, date_end: 1920 });
+    await expect(locSearch.handler(input, ctx)).rejects.toSatisfy(
+      (e: unknown) => (e as { code?: number }).code === JsonRpcErrorCode.ValidationError,
+    );
+  });
+
+  it('returns empty result with message when page > pages', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeSearchResponse({
+          results: [
+            {
+              id: 'https://www.loc.gov/item/2009632251/',
+              title: 'Some Item',
+              url: 'https://www.loc.gov/item/2009632251/',
+            },
+          ],
+          pagination: { total: 100, perpage: 25, pages: 4, page: 999 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({ query: 'test', page: 999 });
+    const result = await locSearch.handler(input, ctx);
+
+    expect(result.items).toHaveLength(0);
+    expect(result.has_next).toBe(false);
+    expect(result.message).toBeDefined();
+    expect(result.message).toContain('999');
+    expect(result.message).toContain('4');
+  });
+
+  it('returns empty result when LOC API returns HTTP 400 (out-of-range page)', async () => {
+    vi.stubGlobal('fetch', mockFetch('', 400));
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({ query: 'test', page: 99999 });
+    const result = await locSearch.handler(input, ctx);
+
+    expect(result.items).toHaveLength(0);
+    expect(result.has_next).toBe(false);
+  });
+
+  it('rejects empty query at schema level', () => {
+    expect(() => locSearch.input.parse({ query: '' })).toThrow();
+  });
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil, must not bleed into other tests
   it('throws RateLimited on HTTP 429', async () => {
     vi.stubGlobal(

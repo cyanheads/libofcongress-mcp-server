@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 export const locSearch = tool('loc_search', {
@@ -13,7 +13,10 @@ export const locSearch = tool('loc_search', {
     'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Use loc_get_item to retrieve full metadata for a specific result. Use loc_search_subjects first to find the exact LCSH heading spelling before applying a subject filter.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
-    query: z.string().describe('Full-text search across metadata and available descriptive text.'),
+    query: z
+      .string()
+      .min(1)
+      .describe('Full-text search across metadata and available descriptive text.'),
     format: z
       .enum(['photo', 'map', 'newspaper', 'manuscript', 'audio', 'film', 'book', 'notated-music'])
       .optional()
@@ -105,6 +108,18 @@ export const locSearch = tool('loc_search', {
 
   async handler(input, ctx) {
     ctx.log.info('loc_search', { query: input.query, format: input.format, page: input.page });
+
+    if (
+      input.date_start !== undefined &&
+      input.date_end !== undefined &&
+      input.date_start > input.date_end
+    ) {
+      throw validationError(
+        `date_start (${input.date_start}) must be ≤ date_end (${input.date_end}). Reverse the values to form a valid date range.`,
+        { field: 'date_start', date_start: input.date_start, date_end: input.date_end },
+      );
+    }
+
     const svc = getLocApiService();
     const result = await svc.search(
       {
@@ -137,12 +152,27 @@ export const locSearch = tool('loc_search', {
       };
     }
 
+    const { total, page, pages, hasNext } = result.pagination;
+
+    // Detect contradictory pagination: LOC sometimes returns items on out-of-range pages.
+    // Surface a clear message rather than a confusing "Page 999 of 26" display.
+    if (pages > 0 && page > pages) {
+      return {
+        items: [],
+        total,
+        page,
+        pages,
+        has_next: false,
+        message: `No results on page ${page} — query has ${pages} page(s) total (${total} items). Use a page number between 1 and ${pages}.`,
+      };
+    }
+
     return {
       items: result.items,
-      total: result.pagination.total,
-      page: result.pagination.page,
-      pages: result.pagination.pages,
-      has_next: result.pagination.hasNext,
+      total,
+      page,
+      pages,
+      has_next: hasNext,
     };
   },
 

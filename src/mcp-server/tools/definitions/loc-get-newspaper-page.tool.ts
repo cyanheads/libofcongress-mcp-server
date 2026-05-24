@@ -4,8 +4,10 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
+
+const LOC_PAGE_URL_PREFIX = 'https://www.loc.gov/resource/';
 
 export const locGetNewspaperPage = tool('loc_get_newspaper_page', {
   title: 'Get Newspaper Page',
@@ -57,6 +59,24 @@ export const locGetNewspaperPage = tool('loc_get_newspaper_page', {
 
   handler(input, ctx) {
     ctx.log.info('loc_get_newspaper_page', { page_url: input.page_url });
+
+    // Validate before any outbound request: must be a well-formed URL on www.loc.gov/resource/
+    let parsed: URL;
+    try {
+      parsed = new URL(input.page_url);
+    } catch {
+      throw validationError(
+        'page_url must be a valid LOC newspaper page URL (e.g. https://www.loc.gov/resource/sn.../date/). Get it from a loc_search_newspapers result.',
+        { field: 'page_url' },
+      );
+    }
+    if (!input.page_url.startsWith(LOC_PAGE_URL_PREFIX)) {
+      throw validationError(
+        'page_url must begin with https://www.loc.gov/resource/. Pass the url field directly from a loc_search_newspapers result.',
+        { field: 'page_url', received: `${parsed.origin}${parsed.pathname}` },
+      );
+    }
+
     const svc = getLocApiService();
     return svc.getNewspaperPage(input.page_url, ctx);
   },
@@ -73,7 +93,9 @@ export const locGetNewspaperPage = tool('loc_get_newspaper_page', {
     if (result.ocr_available && result.ocr_text) {
       lines.push('\n---\n');
       lines.push(result.ocr_text);
-    } else if (!result.ocr_available) {
+    } else if (result.ocr_available && !result.ocr_text) {
+      lines.push('\n_OCR is digitized for this page but the text could not be retrieved._');
+    } else {
       lines.push(
         '\n_No digitized OCR text available for this page (image-only digitization batch)._',
       );

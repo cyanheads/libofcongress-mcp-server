@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 export const locSearchNewspapers = tool('loc_search_newspapers', {
@@ -13,7 +13,7 @@ export const locSearchNewspapers = tool('loc_search_newspapers', {
     'Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with OCR text excerpts (~500 characters), publication title, date, state, and the page URL needed for loc_get_newspaper_page. Filters by keyword, date range, US state, and newspaper title. The OCR excerpts are sufficient for relevance assessment — call loc_get_newspaper_page with the returned url field to read the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
-    query: z.string().describe('Keyword search across OCR text and newspaper metadata.'),
+    query: z.string().min(1).describe('Keyword search across OCR text and newspaper metadata.'),
     date_start: z
       .number()
       .int()
@@ -105,6 +105,18 @@ export const locSearchNewspapers = tool('loc_search_newspapers', {
       state: input.state,
       page: input.page,
     });
+
+    if (
+      input.date_start !== undefined &&
+      input.date_end !== undefined &&
+      input.date_start > input.date_end
+    ) {
+      throw validationError(
+        `date_start (${input.date_start}) must be ≤ date_end (${input.date_end}). Reverse the values to form a valid date range.`,
+        { field: 'date_start', date_start: input.date_start, date_end: input.date_end },
+      );
+    }
+
     const svc = getLocApiService();
     const result = await svc.searchNewspapers(
       {
@@ -136,12 +148,25 @@ export const locSearchNewspapers = tool('loc_search_newspapers', {
       };
     }
 
+    const { total, page, pages, hasNext } = result.pagination;
+
+    if (pages > 0 && page > pages) {
+      return {
+        items: [],
+        total,
+        page,
+        pages,
+        has_next: false,
+        message: `No results on page ${page} — query has ${pages} page(s) total (${total} items). Use a page number between 1 and ${pages}.`,
+      };
+    }
+
     return {
       items: result.items,
-      total: result.pagination.total,
-      page: result.pagination.page,
-      pages: result.pagination.pages,
-      has_next: result.pagination.hasNext,
+      total,
+      page,
+      pages,
+      has_next: hasNext,
     };
   },
 

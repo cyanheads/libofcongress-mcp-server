@@ -26,7 +26,8 @@ function makeResourceResponse(overrides: Record<string, unknown> = {}) {
       date_issued: '1900-01-01',
       sequence: 1,
       part_of: 'Oklahoma newspapers',
-      fulltext_file: '/files/sn84026749/1900-01-01/ed-1/seq-1.txt',
+      fulltext_file:
+        'https://tile.loc.gov/text-services/word-coordinates-service?segment=%2Ffiles%2Fsn84026749%2F1900-01-01%2Fed-1%2Fseq-1&format=alto_xml&full_text=1',
       ...overrides,
     },
   });
@@ -167,6 +168,76 @@ describe('locGetNewspaperPage', () => {
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('No');
     expect(text).toContain('image-only');
+  });
+
+  it('rejects non-LOC page_url with ValidationError before any fetch', () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const input = locGetNewspaperPage.input.parse({ page_url: 'https://example.com/not-loc' });
+    let caught: unknown;
+    try {
+      locGetNewspaperPage.handler(input, ctx);
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as { code?: number }).code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed page_url with ValidationError before any fetch', () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const input = locGetNewspaperPage.input.parse({ page_url: 'not-a-url-at-all' });
+    let caught: unknown;
+    try {
+      locGetNewspaperPage.handler(input, ctx);
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as { code?: number }).code).toBe(JsonRpcErrorCode.ValidationError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('strips q= param from page_url before constructing resource URL', async () => {
+    const fetchSpy = mockFetchSequence({
+      body: makeResourceResponse({ fulltext_file: undefined }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const urlWithQ = 'https://www.loc.gov/resource/sn84026749/1900-01-01/ed-1/?sp=1&q=election';
+    const ctx = createMockContext();
+    const input = locGetNewspaperPage.input.parse({ page_url: urlWithQ });
+    await locGetNewspaperPage.handler(input, ctx);
+
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    expect(calledUrl).not.toContain('q=election');
+    expect(calledUrl).toContain('sp=1');
+  });
+
+  it('uses fulltext_file directly as OCR fetch URL (no double-encoding)', async () => {
+    const fetchSpy = mockFetchSequence({ body: makeResourceResponse() }, { body: ALTO_XML });
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
+    await locGetNewspaperPage.handler(input, ctx);
+
+    const ocrFetchUrl = (fetchSpy.mock.calls[1][0] as string) ?? '';
+    // Should fetch the fulltext_file URL directly (tile.loc.gov)
+    expect(ocrFetchUrl).toContain('tile.loc.gov');
+    // Should NOT be double-encoded (the old bug wrapped the full URL in a segment= param)
+    expect(ocrFetchUrl).not.toContain('segment=https');
+  });
+
+  it('format() notes retrieval failure when ocr_available true but ocr_text empty', () => {
+    const output = locGetNewspaperPage.output.parse({
+      page_url: PAGE_URL,
+      ocr_text: '',
+      ocr_available: true,
+    });
+    const blocks = locGetNewspaperPage.format!(output);
+    const text = (blocks[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('could not be retrieved');
   });
 
   // Rate-limit test last — sets module-level rateLimitBlockedUntil

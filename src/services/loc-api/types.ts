@@ -15,7 +15,13 @@ export type RawLocSearchResult = {
   subject?: string[];
   contributor?: string[];
   location?: string[];
+  /** State-level location facet (e.g. "new york (state)") — more precise than location[] for newspapers */
+  location_state?: string[];
   language?: string[];
+  /** Canonical publication title for Chronicling America results (e.g. "The Evening World") */
+  partof_title?: string[];
+  /** Hierarchy of containing collections/publications */
+  partof?: string[];
   /** Number of digitized items */
   item?: Record<string, unknown>;
 };

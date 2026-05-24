@@ -181,6 +181,29 @@ describe('locGetItem', () => {
     expect(text).toContain('Sparse Item');
   });
 
+  it('rejects empty item_id at schema level', () => {
+    expect(() => locGetItem.input.parse({ item_id: '' })).toThrow();
+  });
+
+  it('format() shows truncation note when related_items > 5', () => {
+    const related = Array.from({ length: 7 }, (_, i) => `https://www.loc.gov/item/rel${i}/`);
+    const output = locGetItem.output.parse({
+      item_id: 'many-related',
+      title: 'Item with many related',
+      contributors: [],
+      subject_headings: [],
+      notes: [],
+      resource_links: [],
+      related_items: related,
+      url: 'https://www.loc.gov/item/many-related/',
+    });
+    const blocks = locGetItem.format!(output);
+    const text = (blocks[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('and 2 more');
+    // The 6th item should not appear in the text
+    expect(text).not.toContain('rel5');
+  });
+
   it('format() truncates resource_links to 5 and shows overflow count', () => {
     const links = Array.from({ length: 8 }, (_, i) => `https://tile.loc.gov/file${i}.jpg`);
     const output = locGetItem.output.parse({

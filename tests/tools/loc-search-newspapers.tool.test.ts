@@ -200,6 +200,58 @@ describe('locSearchNewspapers', () => {
     expect(text).toContain('https://www.loc.gov/resource/');
   });
 
+  it('maps newspaper_title from partof_title, not subject', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            {
+              url: 'https://www.loc.gov/resource/sn83030214/1910-10-15/ed-1/?sp=14',
+              title: 'The Evening World, 1910-10-15',
+              date: '1910-10-15',
+              subject: ['united states', 'new york (state)', 'newspapers'],
+              location: ['new york', 'new york county', 'united states'],
+              location_state: ['new york (state)'],
+              partof_title: ['the evening world (new york, n.y.) 1887-1931'],
+              partof: [
+                'chronicling america',
+                'serial and government publications division',
+                'the evening world (new york, n.y.) 1887-1931',
+              ],
+            },
+          ],
+          pagination: { total: 1, perpage: 25, pages: 1 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearchNewspapers.input.parse({ query: 'election' });
+    const result = await locSearchNewspapers.handler(input, ctx);
+
+    expect(result.items[0].newspaper_title).toContain('evening world');
+    expect(result.items[0].newspaper_title).not.toBe('united states');
+    // state should come from location_state, not location[0]
+    expect(result.items[0].state).toContain('new york');
+    expect(result.items[0].state).not.toBe('united states');
+  });
+
+  it('rejects inverted date range with ValidationError', async () => {
+    const ctx = createMockContext();
+    const input = locSearchNewspapers.input.parse({
+      query: 'election',
+      date_start: 1930,
+      date_end: 1900,
+    });
+    await expect(locSearchNewspapers.handler(input, ctx)).rejects.toSatisfy(
+      (e: unknown) => (e as { code?: number }).code === JsonRpcErrorCode.ValidationError,
+    );
+  });
+
+  it('rejects empty query at schema level', () => {
+    expect(() => locSearchNewspapers.input.parse({ query: '' })).toThrow();
+  });
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil
   it('throws RateLimited on HTTP 429', async () => {
     vi.stubGlobal(

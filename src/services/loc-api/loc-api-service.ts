@@ -22,7 +22,6 @@ import type {
 } from './types.js';
 
 const LOC_BASE = 'https://www.loc.gov';
-const TILE_BASE = 'https://tile.loc.gov';
 
 /** Format slug → LOC endpoint path segment */
 const FORMAT_SLUG_MAP: Record<string, string> = {
@@ -132,7 +131,11 @@ export class LocApiService {
     }
   }
 
-  private async fetch(url: string, ctx: Context): Promise<Response> {
+  private async fetch(
+    url: string,
+    ctx: Context,
+    opts?: { allowStatus?: number[] },
+  ): Promise<Response> {
     this.checkRateLimit();
     await pace(this.requestDelayMs);
     ctx.log.debug('LOC API request', { url });
@@ -156,9 +159,12 @@ export class LocApiService {
     if (response.status === 404) {
       return response; // Caller handles 404
     }
+    // Callers can opt-in to receiving certain non-2xx statuses for graceful handling
+    if (opts?.allowStatus?.includes(response.status)) {
+      return response;
+    }
     if (!response.ok) {
       throw serviceUnavailable(`LOC API returned HTTP ${response.status}`, {
-        url,
         status: response.status,
       });
     }
@@ -168,7 +174,32 @@ export class LocApiService {
   private async fetchJson<T>(url: string, ctx: Context): Promise<T> {
     const response = await this.fetch(url, ctx);
     if (response.status === 404) {
-      throw notFound(`LOC resource not found: ${url}`, { url });
+      throw notFound('LOC resource not found', { url });
+    }
+    const text = await response.text();
+    if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
+      throw serviceUnavailable(
+        'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
+        { url },
+      );
+    }
+    return JSON.parse(text) as T;
+  }
+
+  /**
+   * Fetch a LOC search endpoint, treating HTTP 400 and 520 as out-of-range page responses
+   * (LOC returns these for page numbers beyond the result set).
+   * Returns null when the page is out of range.
+   */
+  private async fetchSearchJson<T>(url: string, ctx: Context): Promise<T | null> {
+    const response = await this.fetch(url, ctx, { allowStatus: [400, 520] });
+    if (response.status === 404) {
+      throw notFound('LOC resource not found', { url });
+    }
+    // LOC returns 400 or 520 for out-of-range page numbers — treat as empty
+    if (response.status === 400 || response.status === 520) {
+      ctx.log.debug('LOC search returned out-of-range page', { status: response.status, url });
+      return null;
     }
     const text = await response.text();
     if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
@@ -213,7 +244,11 @@ export class LocApiService {
     if (fa.length > 0) qs.set('fa', fa.join('|'));
 
     const url = `${endpoint}?${qs}`;
-    const data = await this.fetchJson<RawLocSearchResponse>(url, ctx);
+    const data = await this.fetchSearchJson<RawLocSearchResponse>(url, ctx);
+    if (data === null) {
+      // Out-of-range page — return empty with pagination stub so callers can surface a message
+      return { items: [], pagination: normalizePagination(undefined, page, limit) };
+    }
     const rawResults = data.results ?? data.content?.results ?? [];
     const rawPagination = data.pagination ?? data.content?.pagination;
     const items = rawResults.map(normalizeSearchResult);
@@ -226,7 +261,7 @@ export class LocApiService {
     const data = await this.fetchJson<RawLocItemResponse>(url, ctx);
     const item = data.item;
     if (!item) {
-      throw notFound(`LOC item not found: ${itemId}`, { itemId, reason: 'item_not_found' });
+      throw notFound(`LOC item not found: ${itemId}`, { itemId });
     }
     const title = extractFirstString(item.title) ?? 'Untitled';
     const physDesc = extractFirstString(item.physical_description ?? item.medium);
@@ -298,7 +333,10 @@ export class LocApiService {
     if (fa.length > 0) qs.set('fa', fa.join('|'));
 
     const url = `${LOC_BASE}/newspapers/?${qs}`;
-    const data = await this.fetchJson<RawLocSearchResponse>(url, ctx);
+    const data = await this.fetchSearchJson<RawLocSearchResponse>(url, ctx);
+    if (data === null) {
+      return { items: [], pagination: normalizePagination(undefined, page, limit) };
+    }
     const rawResults = data.results ?? data.content?.results ?? [];
     const rawPagination = data.pagination ?? data.content?.pagination;
 
@@ -309,13 +347,20 @@ export class LocApiService {
           ? [r.description]
           : [];
       const description = descArr.slice(0, 3).join(' ').substring(0, 500);
+      // partof_title holds the canonical publication title for Chronicling America pages.
+      // Fall back to last entry of partof if partof_title absent.
+      const rawTitle =
+        extractFirstString(r.partof_title) ??
+        (Array.isArray(r.partof) ? r.partof[r.partof.length - 1] : r.partof);
+      // location_state is the US state; location[0] is often a city or "united states".
+      const rawState = extractFirstString(r.location_state) ?? extractFirstString(r.location);
       return {
         url: r.url ?? '',
         title: extractFirstString(r.title) ?? 'Untitled',
         ...(description && { description }),
         ...(r.date && { date: r.date }),
-        ...(r.location?.[0] && { state: r.location[0] }),
-        ...(r.subject?.[0] && { newspaper_title: r.subject[0] }),
+        ...(rawState && { state: rawState }),
+        ...(rawTitle && { newspaper_title: rawTitle }),
       };
     });
 
@@ -324,11 +369,16 @@ export class LocApiService {
 
   /** Retrieve full OCR text for a specific newspaper page via its resource URL */
   async getNewspaperPage(pageUrl: string, ctx: Context): Promise<LocNewspaperPageDetail> {
-    // The page URL is like https://www.loc.gov/resource/sn84026749/1900-01-01/ed-1/?fo=json
-    // We need to fetch the resource endpoint to get fulltext_file
-    const resourceUrl = pageUrl.includes('?')
-      ? `${pageUrl}&fo=json&at=resource`
-      : `${pageUrl}?fo=json&at=resource`;
+    // Strip search-specific params (q=) that LOC echoes into fulltext_file URLs,
+    // causing tile.loc.gov OCR requests to 404. Keep sp= (selects the page within a resource).
+    const parsed = new URL(pageUrl);
+    parsed.searchParams.delete('q');
+    const cleanUrl = parsed.toString();
+
+    // Build the resource endpoint URL
+    const resourceUrl = cleanUrl.includes('?')
+      ? `${cleanUrl}&fo=json&at=resource`
+      : `${cleanUrl}?fo=json&at=resource`;
 
     const resourceData = await this.fetchJson<{
       resource?: {
@@ -344,10 +394,7 @@ export class LocApiService {
 
     const res = resourceData.resource;
     if (!res) {
-      throw notFound(`LOC newspaper page not found: ${pageUrl}`, {
-        pageUrl,
-        reason: 'page_not_found',
-      });
+      throw notFound(`LOC newspaper page not found: ${pageUrl}`, { pageUrl });
     }
 
     // Extract metadata
@@ -371,8 +418,12 @@ export class LocApiService {
     if (res.fulltext_file) {
       ocrAvailable = true;
       try {
-        const textUrl = `${TILE_BASE}/text-services/word-coordinates-service?segment=${encodeURIComponent(res.fulltext_file)}&format=alto_xml&full_text=1`;
-        ctx.log.debug('Fetching OCR text', { textUrl: res.fulltext_file });
+        // fulltext_file is already a fully-qualified URL from the LOC resource API.
+        // Strip q= to avoid echoed search terms causing tile.loc.gov 404s.
+        const fulltextUrl = new URL(res.fulltext_file);
+        fulltextUrl.searchParams.delete('q');
+        const textUrl = fulltextUrl.toString();
+        ctx.log.debug('Fetching OCR text', { url: textUrl });
         const textResponse = await fetch(textUrl, {
           headers: { 'User-Agent': this.userAgent },
           signal: ctx.signal,
@@ -389,7 +440,6 @@ export class LocApiService {
           // OCR service unavailable — return empty text, still mark as available
           ctx.log.warning('OCR text service returned error', {
             status: textResponse.status,
-            url: res.fulltext_file,
           });
         }
       } catch (err) {
@@ -426,7 +476,10 @@ export class LocApiService {
     if (params.query) qs.set('q', params.query);
 
     const url = `${LOC_BASE}/collections/?${qs}`;
-    const data = await this.fetchJson<RawLocSearchResponse>(url, ctx);
+    const data = await this.fetchSearchJson<RawLocSearchResponse>(url, ctx);
+    if (data === null) {
+      return { items: [], pagination: normalizePagination(undefined, page, limit) };
+    }
     const rawResults = data.results ?? data.content?.results ?? [];
     const rawPagination = data.pagination ?? data.content?.pagination;
 
