@@ -3,7 +3,7 @@
   "name": "libofcongress-mcp-server",
   "version": "0.2.3",
   "description": "Search LOC digital collections, browse Chronicling America newspapers with full OCR text, and look up LC Subject Headings via MCP.",
-  "author": { "name": "Casey Hand" },
+  "author": { "name": "cyanheads" },
   "server": {
     "type": "node",
     "entry_point": "dist/index.js",
