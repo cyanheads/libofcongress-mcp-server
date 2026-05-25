@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "libofcongress-mcp-server",
+      "name": "@cyanheads/libofcongress-mcp-server",
       "dependencies": {
         "@cyanheads/mcp-ts-core": "^0.9.9",
         "pino-pretty": "^13.1.3",

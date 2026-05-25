@@ -15,6 +15,7 @@ export const locSearch = tool('libofcongress_search', {
   input: z.object({
     query: z
       .string()
+      .trim()
       .min(1)
       .describe('Full-text search across metadata and available descriptive text.'),
     format: z
@@ -141,11 +142,24 @@ export const locSearch = tool('libofcongress_search', {
       ctx,
     );
 
+    const { total, page, pages, hasNext } = result.pagination;
+
     if (result.items.length === 0) {
+      // pages === 0 is the sentinel for a LOC 400 (out-of-range page request).
+      if (pages === 0 && page > 1) {
+        return {
+          items: [],
+          total: 0,
+          page,
+          pages: 0,
+          has_next: false,
+          message: `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
+        };
+      }
       return {
         items: [],
         total: 0,
-        page: input.page,
+        page,
         pages: 0,
         has_next: false,
         message:
@@ -157,8 +171,6 @@ export const locSearch = tool('libofcongress_search', {
           '. Try broadening the query, widening the date range, or running libofcongress_search_subjects to find the exact subject heading.',
       };
     }
-
-    const { total, page, pages, hasNext } = result.pagination;
 
     // Detect contradictory pagination: LOC sometimes returns items on out-of-range pages.
     // Surface a clear message rather than a confusing "Page 999 of 26" display.

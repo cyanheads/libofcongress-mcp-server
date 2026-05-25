@@ -15,7 +15,7 @@ const PAGE_URL = 'https://www.loc.gov/resource/sn84026749/1900-01-01/ed-1/?sp=1'
 /**
  * The service makes two fetches when fulltext_file is present:
  * 1. Resource JSON (with fulltext_file pointer)
- * 2. ALTO XML for OCR text
+ * 2. tile.loc.gov JSON for OCR text (shape: { "<key>": { full_text: "..." } })
  *
  * fetchSpy is called sequentially; we alternate responses via mockImplementation.
  */
@@ -33,7 +33,10 @@ function makeResourceResponse(overrides: Record<string, unknown> = {}) {
   });
 }
 
-const ALTO_XML = `<alto><String CONTENT="Hello" /><String CONTENT="World" /></alto>`;
+/** tile.loc.gov returns JSON, not ALTO XML. */
+const OCR_JSON = JSON.stringify({
+  '/service/ndnp/batch/0088.xml': { full_text: 'Hello World', height: 1000, width: 800 },
+});
 
 function mockFetchSequence(...responses: Array<{ body: string; status?: number }>) {
   let callIndex = 0;
@@ -59,7 +62,7 @@ describe('locGetNewspaperPage', () => {
   });
 
   it('returns page metadata and OCR text when fulltext_file is present', async () => {
-    vi.stubGlobal('fetch', mockFetchSequence({ body: makeResourceResponse() }, { body: ALTO_XML }));
+    vi.stubGlobal('fetch', mockFetchSequence({ body: makeResourceResponse() }, { body: OCR_JSON }));
     const ctx = createMockContext();
     const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
     const result = await locGetNewspaperPage.handler(input, ctx);
@@ -170,33 +173,25 @@ describe('locGetNewspaperPage', () => {
     expect(text).toContain('image-only');
   });
 
-  it('rejects non-LOC page_url with ValidationError before any fetch', () => {
+  it('rejects non-LOC page_url with ValidationError before any fetch', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
     const ctx = createMockContext();
     const input = locGetNewspaperPage.input.parse({ page_url: 'https://example.com/not-loc' });
-    let caught: unknown;
-    try {
-      locGetNewspaperPage.handler(input, ctx);
-    } catch (e) {
-      caught = e;
-    }
-    expect((caught as { code?: number }).code).toBe(JsonRpcErrorCode.ValidationError);
+    await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('rejects malformed page_url with ValidationError before any fetch', () => {
+  it('rejects malformed page_url with ValidationError before any fetch', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
     const ctx = createMockContext();
     const input = locGetNewspaperPage.input.parse({ page_url: 'not-a-url-at-all' });
-    let caught: unknown;
-    try {
-      locGetNewspaperPage.handler(input, ctx);
-    } catch (e) {
-      caught = e;
-    }
-    expect((caught as { code?: number }).code).toBe(JsonRpcErrorCode.ValidationError);
+    await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -216,7 +211,7 @@ describe('locGetNewspaperPage', () => {
   });
 
   it('uses fulltext_file directly as OCR fetch URL (no double-encoding)', async () => {
-    const fetchSpy = mockFetchSequence({ body: makeResourceResponse() }, { body: ALTO_XML });
+    const fetchSpy = mockFetchSequence({ body: makeResourceResponse() }, { body: OCR_JSON });
     vi.stubGlobal('fetch', fetchSpy);
     const ctx = createMockContext();
     const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });

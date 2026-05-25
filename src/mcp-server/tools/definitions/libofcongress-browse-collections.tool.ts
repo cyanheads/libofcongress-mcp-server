@@ -10,7 +10,7 @@ import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 export const locBrowseCollections = tool('libofcongress_browse_collections', {
   title: 'Browse LOC Collections',
   description:
-    'List and browse Library of Congress curated digital collections. Returns collection names, descriptions, item counts, slugs, and URLs. Optionally filter by keyword. Collections are curated subsets of the digital holdings with specific focuses (e.g., "Civil War Glass Negatives", "Baseball Cards", "WPA Posters"). Use the slug value with libofcongress_search to scope searches to a single collection by passing it as a partof facet filter.',
+    'List and browse Library of Congress curated digital collections. Returns collection names, descriptions, item counts, slugs, and URLs. Optionally filter by keyword. Collections are curated subsets of the digital holdings with specific focuses (e.g., "Civil War Glass Negatives", "Baseball Cards", "WPA Posters"). Use the returned URL to navigate directly to a collection on loc.gov.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -40,9 +40,7 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
           .object({
             slug: z
               .string()
-              .describe(
-                'Collection URL slug — use as a partof facet value in libofcongress_search to scope searches to this collection.',
-              ),
+              .describe('Collection URL slug — identifies the collection within loc.gov URLs.'),
             title: z.string().describe('Collection name.'),
             description: z
               .string()
@@ -101,11 +99,25 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
       ctx,
     );
 
+    const { total, page, pages, hasNext } = result.pagination;
+
     if (result.items.length === 0) {
+      // Out-of-range page: service returned null (LOC 400) — pages is 0 here.
+      // Distinguish from a genuine empty result by checking page > 1.
+      if (page > 1 && pages === 0) {
+        return {
+          collections: [],
+          total: 0,
+          page,
+          pages: 0,
+          has_next: false,
+          message: `Page ${page} is out of range. Try a smaller page number.`,
+        };
+      }
       return {
         collections: [],
         total: 0,
-        page: input.page,
+        page,
         pages: 0,
         has_next: false,
         message: input.query
@@ -114,12 +126,24 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
       };
     }
 
+    // Detect contradictory pagination: LOC sometimes returns items on out-of-range pages.
+    if (pages > 0 && page > pages) {
+      return {
+        collections: [],
+        total,
+        page,
+        pages,
+        has_next: false,
+        message: `No results on page ${page} — there are ${pages} page(s) total (${total} collections). Use a page number between 1 and ${pages}.`,
+      };
+    }
+
     return {
       collections: result.items,
-      total: result.pagination.total,
-      page: result.pagination.page,
-      pages: result.pagination.pages,
-      has_next: result.pagination.hasNext,
+      total,
+      page,
+      pages,
+      has_next: hasNext,
     };
   },
 

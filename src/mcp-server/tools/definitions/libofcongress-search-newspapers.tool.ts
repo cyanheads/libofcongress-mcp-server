@@ -13,7 +13,11 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     'Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with OCR text excerpts (~500 characters), publication title, date, state, and the page URL needed for libofcongress_get_newspaper_page. Filters by keyword, date range, US state, and newspaper title. The OCR excerpts are sufficient for relevance assessment — call libofcongress_get_newspaper_page with the returned url field to read the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
-    query: z.string().min(1).describe('Keyword search across OCR text and newspaper metadata.'),
+    query: z
+      .string()
+      .trim()
+      .min(1)
+      .describe('Keyword search across OCR text and newspaper metadata.'),
     date_start: z
       .number()
       .int()
@@ -131,11 +135,24 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       ctx,
     );
 
+    const { total, page, pages, hasNext } = result.pagination;
+
     if (result.items.length === 0) {
+      // pages === 0 is the sentinel for a LOC 400 (out-of-range page request).
+      if (pages === 0 && page > 1) {
+        return {
+          items: [],
+          total: 0,
+          page,
+          pages: 0,
+          has_next: false,
+          message: `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
+        };
+      }
       return {
         items: [],
         total: 0,
-        page: input.page,
+        page,
         pages: 0,
         has_next: false,
         message:
@@ -147,8 +164,6 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
           '. Try broadening the date range, removing the state filter, or using different keywords. Historical OCR is approximate — variant spellings are common.',
       };
     }
-
-    const { total, page, pages, hasNext } = result.pagination;
 
     if (pages > 0 && page > pages) {
       return {

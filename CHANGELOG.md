@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.2](changelog/0.2.x/0.2.2.md) — 2026-05-24
+
+Field-test fixes: rights crash, OCR extraction, out-of-range pagination, URL normalization, and tool-definition improvements
+
 ## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-05-24
 
 npm package scoped to @cyanheads/libofcongress-mcp-server

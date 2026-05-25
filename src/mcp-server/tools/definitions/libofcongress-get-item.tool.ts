@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 export const locGetItem = tool('libofcongress_get_item', {
@@ -21,7 +21,9 @@ export const locGetItem = tool('libofcongress_get_item', {
       ),
   }),
   output: z.object({
-    item_id: z.string().describe('The LOC item ID.'),
+    item_id: z
+      .string()
+      .describe('LOC item ID as resolved by the service (matches the input item_id).'),
     title: z.string().describe('Item title.'),
     date: z.string().optional().describe('Publication or creation date.'),
     contributors: z
@@ -65,10 +67,17 @@ export const locGetItem = tool('libofcongress_get_item', {
     },
   ],
 
-  handler(input, ctx) {
+  async handler(input, ctx) {
     ctx.log.info('libofcongress_get_item', { item_id: input.item_id });
     const svc = getLocApiService();
-    return svc.getItem(input.item_id, ctx);
+    try {
+      return await svc.getItem(input.item_id, ctx);
+    } catch (err) {
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
+        throw ctx.fail('item_not_found', err.message, { itemId: input.item_id });
+      }
+      throw err;
+    }
   },
 
   format: (result) => {

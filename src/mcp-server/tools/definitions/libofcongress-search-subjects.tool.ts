@@ -15,6 +15,7 @@ export const locSearchSubjects = tool('libofcongress_search_subjects', {
   input: z.object({
     query: z
       .string()
+      .trim()
       .min(1)
       .describe(
         'Keyword or partial subject heading to search for (e.g., "civil war", "immigration", "jazz").',

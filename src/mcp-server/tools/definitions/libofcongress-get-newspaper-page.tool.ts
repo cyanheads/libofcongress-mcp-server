@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 const LOC_PAGE_URL_PREFIX = 'https://www.loc.gov/resource/';
@@ -18,7 +18,7 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     page_url: z
       .string()
       .describe(
-        'The url field from a libofcongress_search_newspapers result. Format: https://www.loc.gov/resource/sn{number}/{date-id}.{seq}/. Always pass the value directly from search results — do not construct or modify this URL.',
+        'The url field from a libofcongress_search_newspapers result (e.g., "https://www.loc.gov/resource/sn83045462/1905-03-15/ed-1/seq-1/"). Always pass the value directly from search results — do not construct or modify this URL.',
       ),
   }),
   output: z.object({
@@ -57,28 +57,26 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     },
   ],
 
-  handler(input, ctx) {
+  async handler(input, ctx) {
     ctx.log.info('libofcongress_get_newspaper_page', { page_url: input.page_url });
 
     // Validate before any outbound request: must be a well-formed URL on www.loc.gov/resource/
-    let parsed: URL;
-    try {
-      parsed = new URL(input.page_url);
-    } catch {
-      throw validationError(
-        'page_url must be a valid LOC newspaper page URL (e.g. https://www.loc.gov/resource/sn.../date/). Get it from a libofcongress_search_newspapers result.',
-        { field: 'page_url' },
-      );
-    }
     if (!input.page_url.startsWith(LOC_PAGE_URL_PREFIX)) {
       throw validationError(
         'page_url must begin with https://www.loc.gov/resource/. Pass the url field directly from a libofcongress_search_newspapers result.',
-        { field: 'page_url', received: `${parsed.origin}${parsed.pathname}` },
+        { field: 'page_url', received: input.page_url },
       );
     }
 
     const svc = getLocApiService();
-    return svc.getNewspaperPage(input.page_url, ctx);
+    try {
+      return await svc.getNewspaperPage(input.page_url, ctx);
+    } catch (err) {
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
+        throw ctx.fail('page_not_found', err.message, { pageUrl: input.page_url });
+      }
+      throw err;
+    }
   },
 
   format: (result) => {

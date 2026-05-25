@@ -61,8 +61,8 @@ export type RawLocItemResponse = {
     contributor?: string[];
     subject?: string[];
     notes?: string[];
-    rights?: string;
-    rights_information?: string;
+    rights?: string | string[];
+    rights_information?: string | string[];
     medium?: string | string[];
     physical_description?: string | string[];
     summary?: string | string[];

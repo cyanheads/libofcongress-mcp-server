@@ -1,6 +1,6 @@
 # libofcongress-mcp-server - Directory Structure
 
-Generated on: 2026-05-24 22:47:08
+Generated on: 2026-05-25 01:44:00
 
 ```text
 libofcongress-mcp-server/
@@ -14,6 +14,7 @@ libofcongress-mcp-server/
 │   └── settings.json
 ├── changelog/
 │   ├── 0.1.x/
+│   ├── 0.2.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md

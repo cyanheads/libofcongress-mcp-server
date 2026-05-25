@@ -10,7 +10,7 @@ export const locItemResource = resource('libofcongress://item/{item_id}', {
   name: 'loc-item',
   title: 'LOC Item',
   description:
-    'LOC digital item metadata by ID. Stable URI for injecting item context into agent conversations. Returns the same full record as libofcongress_get_item. Use libofcongress_search to discover item IDs first.',
+    'LOC digital item metadata by ID. Returns the same full record as libofcongress_get_item. Use libofcongress_search to discover item IDs first.',
   mimeType: 'application/json',
   params: z.object({
     item_id: z

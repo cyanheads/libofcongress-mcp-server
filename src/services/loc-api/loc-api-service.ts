@@ -23,6 +23,9 @@ import type {
 
 const LOC_BASE = 'https://www.loc.gov';
 
+/** Matches an HTML response body — indicates rate-limiting or a maintenance page. */
+const HTML_RESPONSE_RE = /^\s*<(!DOCTYPE\s+html|html[\s>])/i;
+
 /** Format slug → LOC endpoint path segment */
 const FORMAT_SLUG_MAP: Record<string, string> = {
   photo: 'photos',
@@ -75,6 +78,12 @@ function extractId(result: RawLocSearchResult): string {
   return rawId.replace(/^https?:\/\/[^/]+\//, '').replace(/\/$/, '');
 }
 
+function normalizeUrl(raw: string): string {
+  // LOC sometimes returns protocol-relative URLs (//lccn.loc.gov/...) — normalize to https:
+  if (raw.startsWith('//')) return `https:${raw}`;
+  return raw;
+}
+
 function normalizeSearchResult(result: RawLocSearchResult): LocItemSummary {
   const title = extractFirstString(result.title) ?? 'Untitled';
   const description = Array.isArray(result.description)
@@ -82,7 +91,7 @@ function normalizeSearchResult(result: RawLocSearchResult): LocItemSummary {
     : result.description;
   const format = (result.original_format ?? result.online_format ?? [])[0] ?? undefined;
   const id = extractId(result);
-  const url = result.url ?? `${LOC_BASE}/item/${id}/`;
+  const url = normalizeUrl(result.url ?? `${LOC_BASE}/item/${id}/`);
   return {
     id,
     title,
@@ -144,7 +153,6 @@ export class LocApiService {
       signal: ctx.signal,
     });
     if (response.status === 429) {
-      // Block for 1 hour
       rateLimitBlockedUntil = Date.now() + 60 * 60 * 1000;
       throw rateLimited(
         'LOC API rate limit exceeded. Requests are blocked for approximately 1 hour. Reduce request frequency to stay under 20 req/min.',
@@ -177,7 +185,7 @@ export class LocApiService {
       throw notFound('LOC resource not found', { url });
     }
     const text = await response.text();
-    if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
+    if (HTML_RESPONSE_RE.test(text)) {
       throw serviceUnavailable(
         'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
         { url },
@@ -202,7 +210,7 @@ export class LocApiService {
       return null;
     }
     const text = await response.text();
-    if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
+    if (HTML_RESPONSE_RE.test(text)) {
       throw serviceUnavailable(
         'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
         { url },
@@ -246,8 +254,12 @@ export class LocApiService {
     const url = `${endpoint}?${qs}`;
     const data = await this.fetchSearchJson<RawLocSearchResponse>(url, ctx);
     if (data === null) {
-      // Out-of-range page — return empty with pagination stub so callers can surface a message
-      return { items: [], pagination: normalizePagination(undefined, page, limit) };
+      // LOC returned 400/520 — page is out of range.
+      // Return pages: 0 as a sentinel so handlers can emit a distinct message.
+      return {
+        items: [],
+        pagination: { total: 0, page, perPage: limit, pages: 0, hasNext: false },
+      };
     }
     const rawResults = data.results ?? data.content?.results ?? [];
     const rawPagination = data.pagination ?? data.content?.pagination;
@@ -266,7 +278,6 @@ export class LocApiService {
     const title = extractFirstString(item.title) ?? 'Untitled';
     const physDesc = extractFirstString(item.physical_description ?? item.medium);
 
-    // Collect resource links: flatten nested file arrays
     const resourceLinks: string[] = [];
     for (const resource of data.resources ?? []) {
       if (resource.url) resourceLinks.push(resource.url);
@@ -284,10 +295,10 @@ export class LocApiService {
       if (rel.id) relatedItems.push(rel.id);
       else if (rel.url) relatedItems.push(rel.url);
     }
-    // Also check item.related_items
     relatedItems.push(...(item.related_items ?? []));
 
-    const rights = item.rights_information ?? item.rights;
+    const rawRights = item.rights_information ?? item.rights;
+    const rights = Array.isArray(rawRights) ? rawRights.join(' ') : rawRights;
 
     return {
       item_id: itemId,
@@ -335,7 +346,10 @@ export class LocApiService {
     const url = `${LOC_BASE}/newspapers/?${qs}`;
     const data = await this.fetchSearchJson<RawLocSearchResponse>(url, ctx);
     if (data === null) {
-      return { items: [], pagination: normalizePagination(undefined, page, limit) };
+      return {
+        items: [],
+        pagination: { total: 0, page, perPage: limit, pages: 0, hasNext: false },
+      };
     }
     const rawResults = data.results ?? data.content?.results ?? [];
     const rawPagination = data.pagination ?? data.content?.pagination;
@@ -375,7 +389,6 @@ export class LocApiService {
     parsed.searchParams.delete('q');
     const cleanUrl = parsed.toString();
 
-    // Build the resource endpoint URL
     const resourceUrl = cleanUrl.includes('?')
       ? `${cleanUrl}&fo=json&at=resource`
       : `${cleanUrl}?fo=json&at=resource`;
@@ -397,21 +410,18 @@ export class LocApiService {
       throw notFound(`LOC newspaper page not found: ${pageUrl}`, { pageUrl });
     }
 
-    // Extract metadata
     const title = res.title;
     const dateIssued = res.date_issued;
     const sequence = res.sequence;
 
-    // Try to get state from part_of or notes
+    // part_of is like "Oklahoma newspapers" — extract the state name if present
     let state: string | undefined;
     const partOf = res.part_of;
     if (partOf) {
-      // part_of is like "Oklahoma newspapers" or a title string
       const stateMatch = partOf.match(/^([A-Za-z ]+)\s+newspapers?/i);
       if (stateMatch?.[1]) state = stateMatch[1].trim();
     }
 
-    // Fetch full OCR text if fulltext_file is available
     let ocrText = '';
     let ocrAvailable = false;
 
@@ -429,13 +439,11 @@ export class LocApiService {
           signal: ctx.signal,
         });
         if (textResponse.ok) {
-          const altoXml = await textResponse.text();
-          // Extract plain text from ALTO XML <String CONTENT="..."> attributes
-          ocrText =
-            altoXml
-              .match(/CONTENT="([^"]*)"/g)
-              ?.map((m) => m.slice(9, -1))
-              .join(' ') ?? '';
+          // tile.loc.gov returns JSON, not ALTO XML. Shape:
+          // { "<batch-key>": { "full_text": "...", "height": N, "width": N } }
+          const json = (await textResponse.json()) as Record<string, { full_text?: string }>;
+          const firstEntry = Object.values(json)[0];
+          ocrText = firstEntry?.full_text ?? '';
         } else {
           // OCR service unavailable — return empty text, still mark as available
           ctx.log.warning('OCR text service returned error', {
@@ -478,7 +486,10 @@ export class LocApiService {
     const url = `${LOC_BASE}/collections/?${qs}`;
     const data = await this.fetchSearchJson<RawLocSearchResponse>(url, ctx);
     if (data === null) {
-      return { items: [], pagination: normalizePagination(undefined, page, limit) };
+      return {
+        items: [],
+        pagination: { total: 0, page, perPage: limit, pages: 0, hasNext: false },
+      };
     }
     const rawResults = data.results ?? data.content?.results ?? [];
     const rawPagination = data.pagination ?? data.content?.pagination;
