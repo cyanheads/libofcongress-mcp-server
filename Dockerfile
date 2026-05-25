@@ -1,24 +1,24 @@
 # ==============================================================================
 # Build Stage
 #
-# Uses Node.js to compile TypeScript (tsx requires Node; Bun 1.3 intercepts tsx
-# and runs it natively, which breaks tsx's CJS compatibility shim on Linux).
+# This stage installs all dependencies (including dev), builds the TypeScript
+# source code into JavaScript, and prepares the production assets.
 # ==============================================================================
-FROM node:24-slim AS build
+FROM oven/bun:1.3 AS build
 
 WORKDIR /usr/src/app
 
-# Copy dependency manifests
+# Copy dependency manifests for optimized layer caching
 COPY package.json bun.lock ./
 
-# Install all dependencies using npm (bun.lock is readable by npm for lockfile-aware install)
-RUN npm install --include=dev
+# Install all dependencies (including dev dependencies for building)
+RUN bun install --frozen-lockfile
 
 # Copy the rest of the source code
 COPY . .
 
 # Build the application
-RUN npx tsx scripts/build.ts
+RUN bun run build
 
 
 # ==============================================================================
@@ -34,9 +34,10 @@ WORKDIR /usr/src/app
 ENV NODE_ENV=production
 
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
-LABEL org.opencontainers.image.title="libofcongress-mcp-server"
-LABEL org.opencontainers.image.description=""
+LABEL org.opencontainers.image.title="@cyanheads/libofcongress-mcp-server"
+LABEL org.opencontainers.image.description="Search LOC digital collections, browse Chronicling America newspapers with full OCR text, and look up LC Subject Headings via MCP."
 LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.source="https://github.com/cyanheads/libofcongress-mcp-server"
 
 # Copy dependency manifests
 COPY package.json bun.lock ./
