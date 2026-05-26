@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/libofcongress-mcp-server",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "mcpName": "io.github.cyanheads/libofcongress-mcp-server",
   "description": "Search LOC digital collections, browse Chronicling America newspapers with full OCR text, and look up LC Subject Headings via MCP. STDIO or Streamable HTTP.",
   "type": "module",
@@ -9,16 +9,7 @@
   "bin": {
     "libofcongress-mcp-server": "dist/index.js"
   },
-  "files": [
-    "changelog/",
-    "dist/",
-    "README.md",
-    "LICENSE",
-    "CLAUDE.md",
-    "AGENTS.md",
-    "Dockerfile",
-    "server.json"
-  ],
+  "files": ["dist/", "README.md", "LICENSE", "CLAUDE.md", "Dockerfile", "server.json"],
   "scripts": {
     "build": "bun run scripts/build.ts",
     "rebuild": "bun run scripts/clean.ts && bun run build",
