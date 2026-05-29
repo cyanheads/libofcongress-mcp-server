@@ -1,0 +1,25 @@
+{
+  "name": "@cyanheads/libofcongress-mcp-server",
+  "version": "0.2.5",
+  "description": "Search LOC digital collections, browse Chronicling America newspapers with full OCR text, and look up LC Subject Headings via MCP. STDIO or Streamable HTTP.",
+  "author": {
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
+  },
+  "homepage": "https://github.com/cyanheads/libofcongress-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/libofcongress-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": ["mcp", "mcp-server", "model-context-protocol", "library-of-congress", "loc", "chronicling-america", "newspapers"],
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "interface": {
+    "displayName": "@cyanheads/libofcongress-mcp-server",
+    "shortDescription": "Search LOC digital collections, browse Chronicling America newspapers with full OCR text, and look up LC Subject Headings via MCP.",
+    "longDescription": "Provides MCP tools for accessing Library of Congress digital collections, including full-text search, item metadata retrieval, Chronicling America historical newspaper search with OCR text, and LC Subject Headings (LCSH) lookup. Supports stdio and streamable HTTP transports.",
+    "developerName": "cyanheads",
+    "category": "research",
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/cyanheads/libofcongress-mcp-server#readme",
+    "defaultPrompt": []
+  }
+}

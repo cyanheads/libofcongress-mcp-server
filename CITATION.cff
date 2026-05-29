@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: libofcongress-mcp-server
+abstract: "Model Context Protocol (MCP) server for the Library of Congress, providing search of digital collections, Chronicling America newspapers with full OCR text, and LC Subject Headings."
+type: software
+authors:
+  - family-names: Hand
+    given-names: Casey
+    orcid: "https://orcid.org/0009-0009-3726-568X"
+repository-code: "https://github.com/cyanheads/libofcongress-mcp-server"
+license: Apache-2.0
+keywords:
+  - mcp
+  - model-context-protocol
+  - library-of-congress
+  - digital-collections
+  - newspapers
+  - lcsh

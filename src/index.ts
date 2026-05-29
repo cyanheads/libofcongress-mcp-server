@@ -30,6 +30,10 @@ await createApp({
     'Library of Congress digital collections server. Use libofcongress_search_subjects to find exact LCSH terms before subject-filtering libofcongress_search. ' +
     'Newspaper research: libofcongress_search_newspapers → libofcongress_get_newspaper_page (two hops). ' +
     'Rate limit: 20 req/min; violations block for 1 hour.',
+  landing: {
+    // Public hosted catalog — serve full inventory without auth requirement.
+    requireAuth: false,
+  },
   setup(core) {
     initLocApiService(core.config, core.storage);
     initLcLinkedDataService(core.config, core.storage);

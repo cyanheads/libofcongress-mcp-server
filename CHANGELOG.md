@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.5](changelog/0.2.x/0.2.5.md) — 2026-05-28 · 🛡️ Security
+
+mcp-ts-core ^0.9.9 → ^0.9.13: HTTP 413 body cap, session-init gate, quieter 401/403/400/404 logs, GET /mcp keywords; landing page auth fix; dep refresh
+
 ## [0.2.4](changelog/0.2.x/0.2.4.md) — 2026-05-26
 
 Add .github/FUNDING.yml, hosted server URL to README, trim changelog/ and AGENTS.md from npm files array.
