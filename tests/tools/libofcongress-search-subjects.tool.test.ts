@@ -185,6 +185,26 @@ describe('locSearchSubjects', () => {
     expect(text).toContain('0 subject heading(s) found');
   });
 
+  it('rejects empty query at schema level', () => {
+    expect(() => locSearchSubjects.input.parse({ query: '' })).toThrow();
+  });
+
+  it('rejects limit=0 at schema level (below min)', () => {
+    expect(() => locSearchSubjects.input.parse({ query: 'test', limit: 0 })).toThrow();
+  });
+
+  it('rejects limit=51 at schema level (above max)', () => {
+    expect(() => locSearchSubjects.input.parse({ query: 'test', limit: 51 })).toThrow();
+  });
+
+  it('passes limit=50 (max boundary) without throwing', () => {
+    expect(() => locSearchSubjects.input.parse({ query: 'test', limit: 50 })).not.toThrow();
+  });
+
+  it('passes limit=1 (min boundary) without throwing', () => {
+    expect(() => locSearchSubjects.input.parse({ query: 'test', limit: 1 })).not.toThrow();
+  });
+
   it('format() renders sparse subject — no count', () => {
     const output = locSearchSubjects.output.parse({
       subjects: [

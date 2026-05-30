@@ -284,6 +284,104 @@ describe('locSearch', () => {
     expect(() => locSearch.input.parse({ query: '' })).toThrow();
   });
 
+  it('returns empty result with enrichment.notice when page > pages and items present', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeSearchResponse({
+          results: [
+            {
+              id: 'https://www.loc.gov/item/someitem/',
+              title: 'Some Item',
+              url: 'https://www.loc.gov/item/someitem/',
+            },
+          ],
+          pagination: { total: 50, perpage: 25, pages: 2, page: 5 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({ query: 'history', page: 5 });
+    const result = await locSearch.handler(input, ctx);
+
+    expect(result.items).toHaveLength(0);
+    expect(result.has_next).toBe(false);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(String(enrichment.notice)).toContain('5');
+    expect(String(enrichment.notice)).toContain('2');
+  });
+
+  it('query with injection chars is handled without URL structure breakage', async () => {
+    const fetchSpy = mockFetch(makeSearchResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({
+      query: "'; DROP TABLE items; SELECT * FROM items WHERE '1'='1",
+    });
+    await locSearch.handler(input, ctx);
+
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    // URL must remain parseable and not contain raw SQL injection
+    expect(() => new URL(calledUrl)).not.toThrow();
+    expect(calledUrl).toContain('fo=json');
+    expect(calledUrl).not.toContain("'; DROP TABLE");
+  });
+
+  it('rejects limit=0 at schema level (below min)', () => {
+    expect(() => locSearch.input.parse({ query: 'test', limit: 0 })).toThrow();
+  });
+
+  it('rejects limit=101 at schema level (above max)', () => {
+    expect(() => locSearch.input.parse({ query: 'test', limit: 101 })).toThrow();
+  });
+
+  it('rejects page=0 at schema level (below min)', () => {
+    expect(() => locSearch.input.parse({ query: 'test', page: 0 })).toThrow();
+  });
+
+  it('format() includes description in output text when present', () => {
+    const output = locSearch.output.parse({
+      items: [
+        {
+          id: 'desc-item',
+          title: 'Described Item',
+          date: '1940',
+          format: 'photo',
+          description: 'This is a photograph of the subject.',
+          url: 'https://www.loc.gov/item/desc-item/',
+        },
+      ],
+      total: 1,
+      page: 1,
+      pages: 1,
+      has_next: false,
+    });
+    const blocks = locSearch.format!(output);
+    const text = (blocks[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('photograph of the subject');
+  });
+
+  it('format() includes format label in output when present', () => {
+    const output = locSearch.output.parse({
+      items: [
+        {
+          id: 'fmt-item',
+          title: 'Map Item',
+          format: 'map',
+          url: 'https://www.loc.gov/item/fmt-item/',
+        },
+      ],
+      total: 1,
+      page: 1,
+      pages: 1,
+      has_next: false,
+    });
+    const blocks = locSearch.format!(output);
+    const text = (blocks[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('map');
+  });
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil, must not bleed into other tests
   it('throws RateLimited on HTTP 429', async () => {
     vi.stubGlobal(

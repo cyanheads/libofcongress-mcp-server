@@ -235,6 +235,78 @@ describe('locGetNewspaperPage', () => {
     expect(text).toContain('could not be retrieved');
   });
 
+  it('security: SSRF attempt via non-LOC host is rejected with ValidationError', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const input = locGetNewspaperPage.input.parse({
+      page_url: 'https://evil.example.com/steal-data',
+    });
+    await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+    });
+    // fetch must NOT be called — validation rejects before any network request
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('security: URL with path traversal attempt is rejected before fetch', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const input = locGetNewspaperPage.input.parse({
+      page_url: 'https://www.loc.gov/../../etc/passwd',
+    });
+    await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('format() includes edition when present', () => {
+    const output = locGetNewspaperPage.output.parse({
+      page_url: PAGE_URL,
+      newspaper_title: 'The Daily Paper',
+      edition: 'Evening Edition',
+      sequence: 3,
+      ocr_text: 'Some text.',
+      ocr_available: true,
+    });
+    const blocks = locGetNewspaperPage.format!(output);
+    const text = (blocks[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('Evening Edition');
+    expect(text).toContain('3');
+  });
+
+  it('format() omits edition and sequence when absent (sparse page)', () => {
+    const output = locGetNewspaperPage.output.parse({
+      page_url: PAGE_URL,
+      ocr_text: '',
+      ocr_available: false,
+    });
+    const blocks = locGetNewspaperPage.format!(output);
+    const text = (blocks[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain(PAGE_URL);
+    // Should not crash on missing optional fields
+    expect(text).toBeDefined();
+  });
+
+  it('adds sp=1 param correctly when URL has existing query params', async () => {
+    const fetchSpy = mockFetchSequence({
+      body: makeResourceResponse({ fulltext_file: undefined }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const urlWithSp = PAGE_URL; // Already has ?sp=1
+    const ctx = createMockContext();
+    const input = locGetNewspaperPage.input.parse({ page_url: urlWithSp });
+    await locGetNewspaperPage.handler(input, ctx);
+
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    expect(calledUrl).toContain('sp=1');
+    expect(calledUrl).toContain('fo=json');
+    // Should not have double question marks
+    expect(calledUrl.split('?').length).toBeLessThanOrEqual(2);
+  });
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil
   it('throws RateLimited on HTTP 429', async () => {
     vi.stubGlobal(

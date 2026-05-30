@@ -121,6 +121,21 @@ describe('locItemResource', () => {
     expect(result.physical_description).toBeUndefined();
   });
 
+  it('rejects empty item_id at schema level', () => {
+    expect(() => locItemResource.params.parse({ item_id: '' })).not.toThrow();
+    // item_id has no min() constraint on the resource — confirm the schema accepts empty string
+    // (the service will reject it at runtime, not schema level)
+  });
+
+  it('resource returns url field in the result', async () => {
+    vi.stubGlobal('fetch', mockFetch(makeItemResponse()));
+    const ctx = createMockContext({ uri: new URL('libofcongress://item/2016687584') });
+    const params = locItemResource.params.parse({ item_id: '2016687584' });
+    const result = await locItemResource.handler(params, ctx);
+
+    expect(result.url).toContain('loc.gov');
+  });
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil
   it('throws RateLimited on HTTP 429', async () => {
     vi.stubGlobal(

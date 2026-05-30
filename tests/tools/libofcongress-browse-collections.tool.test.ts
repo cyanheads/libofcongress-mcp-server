@@ -206,6 +206,75 @@ describe('locBrowseCollections', () => {
     expect(text).toContain('Page:');
   });
 
+  it('returns empty result with enrichment.notice when out-of-range page (page > 1, pages === 0)', async () => {
+    vi.stubGlobal('fetch', mockFetch('', 400));
+    const ctx = createMockContext();
+    const input = locBrowseCollections.input.parse({ page: 5 });
+    const result = await locBrowseCollections.handler(input, ctx);
+
+    expect(result.collections).toHaveLength(0);
+    expect(result.has_next).toBe(false);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(String(enrichment.notice)).toContain('5');
+  });
+
+  it('returns empty result with enrichment.notice when page > pages (contradictory pagination)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeCollectionsResponse({
+          results: [
+            {
+              url: 'https://www.loc.gov/collections/some-col/',
+              title: 'Some Collection',
+            },
+          ],
+          pagination: { total: 50, perpage: 25, pages: 2 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locBrowseCollections.input.parse({ page: 10 });
+    const result = await locBrowseCollections.handler(input, ctx);
+
+    expect(result.collections).toHaveLength(0);
+    expect(result.has_next).toBe(false);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(String(enrichment.notice)).toContain('10');
+    expect(String(enrichment.notice)).toContain('2');
+  });
+
+  it('returns empty result with no-query-fallback enrichment.notice when query absent and results empty', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeCollectionsResponse({
+          results: [],
+          pagination: { total: 0, perpage: 25, pages: 0 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locBrowseCollections.input.parse({});
+    const result = await locBrowseCollections.handler(input, ctx);
+
+    expect(result.collections).toHaveLength(0);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    // No keyword case — should mention temporary unavailability
+    expect(String(enrichment.notice)).toContain('unavailable');
+  });
+
+  it('rejects limit=0 at schema level', () => {
+    expect(() => locBrowseCollections.input.parse({ limit: 0 })).toThrow();
+  });
+
+  it('rejects page=0 at schema level', () => {
+    expect(() => locBrowseCollections.input.parse({ page: 0 })).toThrow();
+  });
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil
   it('throws RateLimited on HTTP 429', async () => {
     vi.stubGlobal(

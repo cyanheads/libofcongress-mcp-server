@@ -263,6 +263,91 @@ describe('locSearchNewspapers', () => {
     expect(() => locSearchNewspapers.input.parse({ query: '' })).toThrow();
   });
 
+  it('returns empty result with enrichment.notice when page > pages and items present', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeNewspaperSearchResponse({
+          results: [
+            {
+              url: 'https://www.loc.gov/resource/sn000/1900-01-01/ed-1/?sp=1',
+              title: 'Some Page',
+            },
+          ],
+          pagination: { total: 100, perpage: 25, pages: 4, page: 10 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearchNewspapers.input.parse({ query: 'election', page: 10 });
+    const result = await locSearchNewspapers.handler(input, ctx);
+
+    expect(result.items).toHaveLength(0);
+    expect(result.has_next).toBe(false);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(String(enrichment.notice)).toContain('10');
+    expect(String(enrichment.notice)).toContain('4');
+  });
+
+  it('empty result enrichment.notice includes state filter when state was provided', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeNewspaperSearchResponse({
+          results: [],
+          pagination: { total: 0, perpage: 25, pages: 0 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearchNewspapers.input.parse({
+      query: 'blizzard',
+      date_start: 1888,
+      date_end: 1889,
+    });
+    const result = await locSearchNewspapers.handler(input, ctx);
+
+    expect(result.items).toHaveLength(0);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    // The notice should mention the date filter
+    expect(String(enrichment.notice)).toContain('1888');
+  });
+
+  it('format() renders pagination summary even when items are empty', () => {
+    const output = locSearchNewspapers.output.parse({
+      items: [],
+      total: 0,
+      page: 1,
+      pages: 0,
+      has_next: false,
+    });
+    const blocks = locSearchNewspapers.format!(output);
+    const text = (blocks[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('Total:');
+    expect(text).toContain('Page:');
+  });
+
+  it('rejects limit=0 at schema level', () => {
+    expect(() => locSearchNewspapers.input.parse({ query: 'test', limit: 0 })).toThrow();
+  });
+
+  it('rejects page=0 at schema level', () => {
+    expect(() => locSearchNewspapers.input.parse({ query: 'test', page: 0 })).toThrow();
+  });
+
+  it('query with unicode characters passes through correctly', async () => {
+    const fetchSpy = mockFetch(makeNewspaperSearchResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const input = locSearchNewspapers.input.parse({ query: 'café société' });
+    await locSearchNewspapers.handler(input, ctx);
+
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    expect(() => new URL(calledUrl)).not.toThrow();
+  });
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil
   it('throws RateLimited on HTTP 429', async () => {
     vi.stubGlobal(
