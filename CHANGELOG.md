@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.6](changelog/0.2.x/0.2.6.md) — 2026-05-30
+
+Enrichment adoption — search/browse tools surface query echoes, result totals, and empty-result guidance in a typed enrichment block; removed dead empty_results error contracts
+
 ## [0.2.5](changelog/0.2.x/0.2.5.md) — 2026-05-28 · 🛡️ Security
 
 mcp-ts-core ^0.9.9 → ^0.9.13: HTTP 413 body cap, session-init gate, quieter 401/403/400/404 logs, GET /mcp keywords; landing page auth fix; dep refresh
