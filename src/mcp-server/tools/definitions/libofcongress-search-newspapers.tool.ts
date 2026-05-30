@@ -78,22 +78,27 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     page: z.number().describe('Current 1-indexed page number.'),
     pages: z.number().describe('Total number of pages available.'),
     has_next: z.boolean().describe('True when more pages are available after this one.'),
-    message: z
+  }),
+
+  // Agent-facing success-path context — query echo, result count, and empty-result
+  // guidance. Reaches both structuredContent and content[] automatically; kept out of
+  // the domain output. Keys are disjoint from output (total vs totalCount).
+  enrichment: {
+    effectiveQuery: z
+      .string()
+      .describe('The keyword query as submitted to the Chronicling America API, after trimming.'),
+    totalCount: z
+      .number()
+      .describe('Total matching newspaper pages — mirrors output.total for agent reasoning.'),
+    notice: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty — echoes the applied filters and suggests how to broaden. Absent on non-empty result pages.',
+        'Recovery hint when results are empty or a page is out of range — echoes applied filters and suggests how to broaden. Absent on successful result pages.',
       ),
-  }),
+  },
 
   errors: [
-    {
-      reason: 'empty_results',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No newspaper pages matched the query and filters.',
-      recovery:
-        'Broaden the date range, remove the state filter, or try different keywords. OCR search is approximate — spelling variations in historical text are common.',
-    },
     {
       reason: 'rate_limit_exceeded',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -137,43 +142,33 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
 
     const { total, page, pages, hasNext } = result.pagination;
 
+    ctx.enrich.echo(input.query);
+    ctx.enrich.total(total);
+
     if (result.items.length === 0) {
       // pages === 0 is the sentinel for a LOC 400 (out-of-range page request).
       if (pages === 0 && page > 1) {
-        return {
-          items: [],
-          total: 0,
-          page,
-          pages: 0,
-          has_next: false,
-          message: `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
-        };
+        ctx.enrich.notice(
+          `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
+        );
+        return { items: [], total: 0, page, pages: 0, has_next: false };
       }
-      return {
-        items: [],
-        total: 0,
-        page,
-        pages: 0,
-        has_next: false,
-        message:
-          `No newspaper pages matched "${input.query}"` +
+      ctx.enrich.notice(
+        `No newspaper pages matched "${input.query}"` +
           (input.state ? ` in state "${input.state}"` : '') +
           (input.date_start || input.date_end
             ? ` in dates ${input.date_start ?? ''}–${input.date_end ?? ''}`
             : '') +
           '. Try broadening the date range, removing the state filter, or using different keywords. Historical OCR is approximate — variant spellings are common.',
-      };
+      );
+      return { items: [], total: 0, page, pages: 0, has_next: false };
     }
 
     if (pages > 0 && page > pages) {
-      return {
-        items: [],
-        total,
-        page,
-        pages,
-        has_next: false,
-        message: `No results on page ${page} — query has ${pages} page(s) total (${total} items). Use a page number between 1 and ${pages}.`,
-      };
+      ctx.enrich.notice(
+        `No results on page ${page} — query has ${pages} page(s) total (${total} items). Use a page number between 1 and ${pages}.`,
+      );
+      return { items: [], total, page, pages, has_next: false };
     }
 
     return {
@@ -190,7 +185,6 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     lines.push(
       `**Total:** ${result.total} | **Page:** ${result.page} of ${result.pages} | **has_next:** ${result.has_next}`,
     );
-    if (result.message) lines.push(`\n> ${result.message}`);
     for (const item of result.items) {
       lines.push(`\n## ${item.title}`);
       if (item.newspaper_title) lines.push(`**Publication:** ${item.newspaper_title}`);

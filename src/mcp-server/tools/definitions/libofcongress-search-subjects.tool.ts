@@ -4,7 +4,6 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getLcLinkedDataService } from '@/services/lc-linked-data/lc-linked-data-service.js';
 
 export const locSearchSubjects = tool('libofcongress_search_subjects', {
@@ -52,35 +51,36 @@ export const locSearchSubjects = tool('libofcongress_search_subjects', {
       )
       .describe('LCSH subject headings matching the query, ordered by relevance.'),
     total: z.number().describe('Number of subject headings returned.'),
-    message: z
+  }),
+
+  // Agent-facing success-path context — query echo and empty-result guidance. Reaches
+  // both structuredContent and content[] automatically; kept out of the domain output.
+  enrichment: {
+    effectiveQuery: z
+      .string()
+      .describe(
+        'The keyword query as submitted to the id.loc.gov suggest endpoint, after trimming.',
+      ),
+    notice: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty — suggests alternative search strategies. Absent on non-empty result pages.',
+        'Recovery hint when results are empty — suggests alternative LCSH search strategies. Absent on non-empty results.',
       ),
-  }),
-
-  errors: [
-    {
-      reason: 'empty_results',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No LCSH headings matched the query.',
-      recovery:
-        'Try broader or different terms. LCSH uses inverted forms for many headings (e.g., "Photography, Aerial" not "Aerial photography").',
-    },
-  ],
+  },
 
   async handler(input, ctx) {
     ctx.log.info('libofcongress_search_subjects', { query: input.query, limit: input.limit });
     const svc = getLcLinkedDataService();
     const subjects = await svc.searchSubjects(input.query, input.limit, ctx);
 
+    ctx.enrich.echo(input.query);
+
     if (subjects.length === 0) {
-      return {
-        subjects: [],
-        total: 0,
-        message: `No LCSH headings matched "${input.query}". Try broader or different terms. LCSH uses inverted forms for many headings — for example, "Photography, Aerial" instead of "Aerial photography", or "World War, 1939-1945" instead of "World War II".`,
-      };
+      ctx.enrich.notice(
+        `No LCSH headings matched "${input.query}". Try broader or different terms. LCSH uses inverted forms for many headings — for example, "Photography, Aerial" instead of "Aerial photography", or "World War, 1939-1945" instead of "World War II".`,
+      );
+      return { subjects: [], total: 0 };
     }
 
     return {
@@ -92,7 +92,6 @@ export const locSearchSubjects = tool('libofcongress_search_subjects', {
   format: (result) => {
     const lines: string[] = [];
     lines.push(`**${result.total} subject heading(s) found**`);
-    if (result.message) lines.push(`\n> ${result.message}`);
     for (const s of result.subjects) {
       lines.push(`\n## ${s.label}`);
       lines.push(`**URI:** ${s.uri}`);

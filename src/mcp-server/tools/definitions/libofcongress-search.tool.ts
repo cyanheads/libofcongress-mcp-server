@@ -84,22 +84,27 @@ export const locSearch = tool('libofcongress_search', {
     page: z.number().describe('Current 1-indexed page number.'),
     pages: z.number().describe('Total number of pages available.'),
     has_next: z.boolean().describe('True when more pages are available after this one.'),
-    message: z
+  }),
+
+  // Agent-facing success-path context — query echo, result count, and empty-result
+  // guidance. Reaches both structuredContent and content[] automatically; kept out of
+  // the domain output. Keys are disjoint from output (total vs totalCount).
+  enrichment: {
+    effectiveQuery: z.string().describe('The query as submitted to the LOC API, after trimming.'),
+    totalCount: z
+      .number()
+      .describe(
+        'Total matching items across all pages — mirrors output.total for agent reasoning.',
+      ),
+    notice: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty — echoes the applied filters and suggests how to broaden. Absent on non-empty result pages.',
+        'Recovery hint when results are empty or a page is out of range — echoes applied filters and suggests how to broaden. Absent on successful result pages.',
       ),
-  }),
+  },
 
   errors: [
-    {
-      reason: 'empty_results',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No items matched the query and filters.',
-      recovery:
-        'Broaden the query, widen the date range, or use libofcongress_search_subjects to find the correct subject heading spelling.',
-    },
     {
       reason: 'rate_limit_exceeded',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -144,45 +149,35 @@ export const locSearch = tool('libofcongress_search', {
 
     const { total, page, pages, hasNext } = result.pagination;
 
+    ctx.enrich.echo(input.query);
+    ctx.enrich.total(total);
+
     if (result.items.length === 0) {
       // pages === 0 is the sentinel for a LOC 400 (out-of-range page request).
       if (pages === 0 && page > 1) {
-        return {
-          items: [],
-          total: 0,
-          page,
-          pages: 0,
-          has_next: false,
-          message: `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
-        };
+        ctx.enrich.notice(
+          `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
+        );
+        return { items: [], total: 0, page, pages: 0, has_next: false };
       }
-      return {
-        items: [],
-        total: 0,
-        page,
-        pages: 0,
-        has_next: false,
-        message:
-          `No items matched "${input.query}"` +
+      ctx.enrich.notice(
+        `No items matched "${input.query}"` +
           (input.format ? ` with format "${input.format}"` : '') +
           (input.date_start || input.date_end
             ? ` in dates ${input.date_start ?? ''}–${input.date_end ?? ''}`
             : '') +
           '. Try broadening the query, widening the date range, or running libofcongress_search_subjects to find the exact subject heading.',
-      };
+      );
+      return { items: [], total: 0, page, pages: 0, has_next: false };
     }
 
     // Detect contradictory pagination: LOC sometimes returns items on out-of-range pages.
     // Surface a clear message rather than a confusing "Page 999 of 26" display.
     if (pages > 0 && page > pages) {
-      return {
-        items: [],
-        total,
-        page,
-        pages,
-        has_next: false,
-        message: `No results on page ${page} — query has ${pages} page(s) total (${total} items). Use a page number between 1 and ${pages}.`,
-      };
+      ctx.enrich.notice(
+        `No results on page ${page} — query has ${pages} page(s) total (${total} items). Use a page number between 1 and ${pages}.`,
+      );
+      return { items: [], total, page, pages, has_next: false };
     }
 
     return {
@@ -199,7 +194,6 @@ export const locSearch = tool('libofcongress_search', {
     lines.push(
       `**Total:** ${result.total} | **Page:** ${result.page} of ${result.pages} | **has_next:** ${result.has_next}`,
     );
-    if (result.message) lines.push(`\n> ${result.message}`);
     for (const item of result.items) {
       lines.push(`\n## ${item.title}`);
       lines.push(`**ID:** ${item.id}`);

@@ -6,12 +6,12 @@
 
 | Name | Description | Key Inputs | Annotations | Errors |
 |:-----|:------------|:-----------|:------------|:-------|
-| `libofcongress_search` | Search LOC digital collections by keyword with format, date, and subject filters. Returns item summaries with titles, dates, descriptions, and LOC IDs for follow-up retrieval. | `query`, `format`, `date_start`, `date_end`, `subject`, `location`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `empty_results` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
+| `libofcongress_search` | Search LOC digital collections by keyword with format, date, and subject filters. Returns item summaries with titles, dates, descriptions, and LOC IDs for follow-up retrieval. | `query`, `format`, `date_start`, `date_end`, `subject`, `location`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
 | `libofcongress_get_item` | Retrieve full metadata for a specific LOC item by ID — contributors, subjects, rights, resource links, and related items. | `item_id` | `readOnlyHint: true`, `openWorldHint: true` | `item_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
-| `libofcongress_search_newspapers` | Search historical newspaper pages (Chronicling America corpus) with full-text OCR content. Returns matching pages with article snippets and publication details. Accepts keyword, date range, state, and newspaper title filters. | `query`, `date_start`, `date_end`, `state`, `newspaper_title`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `empty_results` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
+| `libofcongress_search_newspapers` | Search historical newspaper pages (Chronicling America corpus) with full-text OCR content. Returns matching pages with article snippets and publication details. Accepts keyword, date range, state, and newspaper title filters. | `query`, `date_start`, `date_end`, `state`, `newspaper_title`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
 | `libofcongress_get_newspaper_page` | Retrieve the full OCR text of a specific newspaper page. Pass the `url` field from a `libofcongress_search_newspapers` result — two hops total: search, then this tool. Returns `ocr_available: false` when the page has no digitized text. | `page_url` | `readOnlyHint: true`, `openWorldHint: true` | `page_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
-| `libofcongress_search_subjects` | Search LC Subject Headings (LCSH) by keyword — the controlled vocabulary used to categorize LOC items. Returns subject labels and their URIs, which can be used as filters in `libofcongress_search`. | `query`, `limit` | `readOnlyHint: true`, `openWorldHint: true` | `empty_results` (NotFound) |
-| `libofcongress_browse_collections` | List and browse LOC curated digital collections with descriptions and item counts. Optionally filter by subject keyword. | `query`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `empty_results` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
+| `libofcongress_search_subjects` | Search LC Subject Headings (LCSH) by keyword — the controlled vocabulary used to categorize LOC items. Returns subject labels and their URIs, which can be used as filters in `libofcongress_search`. | `query`, `limit` | `readOnlyHint: true`, `openWorldHint: true` | — |
+| `libofcongress_browse_collections` | List and browse LOC curated digital collections with descriptions and item counts. Optionally filter by subject keyword. | `query`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
 
 ### Resources
 
@@ -102,8 +102,9 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 **Output:** Array of item summaries, each with `id` (use in `libofcongress_get_item`), `title`, `date`, `description`, `format`, `url`. Includes `total` count and `pagination` object. If `total > limit`, indicates truncation with next-page info.
 
 **Errors:**
-- `empty_results` (NotFound) — no items matched. Recovery: broaden the query, widen the date range, or use `libofcongress_search_subjects` to find the correct subject heading spelling.
 - `rate_limit_exceeded` (ServiceUnavailable, non-retryable for 1 hour) — 20 req/min exceeded; LOC blocks for 1 hour. Message: "LOC API rate limit exceeded. Requests are blocked for approximately 1 hour. Reduce request frequency to stay under 20 req/min."
+
+**Empty results:** returned as success with `enrichment.notice` populated — the handler returns `{ items: [], total: 0, ... }` with a contextual recovery hint in `enrichment.notice` rather than throwing an error.
 
 **Annotations:** `readOnlyHint: true`, `openWorldHint: true`
 
@@ -142,8 +143,9 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 **Output:** Array of page results, each with `url` (pass to `libofcongress_get_newspaper_page`), `title` (page title/date), `description` (OCR excerpt, ~500 chars), `date`, `state`, `newspaper_title`, and `edition_label`. Includes `total` count and `pagination` object.
 
 **Errors:**
-- `empty_results` (NotFound) — no pages matched. Recovery: broaden the date range, remove the state filter, or try different keywords. OCR search is approximate — spelling variations in historical text are common.
 - `rate_limit_exceeded` (ServiceUnavailable, non-retryable for 1 hour) — see `libofcongress_search` error above.
+
+**Empty results:** returned as success with `enrichment.notice` populated — the handler returns `{ items: [], total: 0, ... }` with a contextual recovery hint in `enrichment.notice` rather than throwing an error.
 
 **Annotations:** `readOnlyHint: true`, `openWorldHint: true`
 
@@ -176,8 +178,9 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 
 **Output:** Array of subject records, each with `label` (the standardized heading — use this in `libofcongress_search subject` filter), `uri` (stable LOC URI for the heading), and `count` (approximate number of LOC items carrying this heading). Ordered by relevance.
 
-**Errors:**
-- `empty_results` (NotFound) — no headings matched the query. Recovery: try broader or different terms; LCSH uses inverted forms for many headings (e.g., "Photography, Aerial" not "Aerial photography").
+**Errors:** None declared.
+
+**Empty results:** returned as success with `enrichment.notice` populated — the handler returns `{ subjects: [], total: 0 }` with a contextual recovery hint in `enrichment.notice` rather than throwing an error.
 
 **Annotations:** `readOnlyHint: true`, `openWorldHint: true`
 
@@ -195,8 +198,9 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 **Output:** Array of collection summaries, each with `slug` (use in `libofcongress_search` partof filter), `title`, `description`, `item_count`, and `url`. Includes `total` count.
 
 **Errors:**
-- `empty_results` (NotFound) — no collections matched the keyword. Recovery: broaden the keyword or call without a query to list all collections.
 - `rate_limit_exceeded` (ServiceUnavailable, non-retryable for 1 hour) — see `libofcongress_search` error above.
+
+**Empty results:** returned as success with `enrichment.notice` populated — the handler returns `{ collections: [], total: 0, ... }` with a contextual recovery hint in `enrichment.notice` rather than throwing an error.
 
 **Annotations:** `readOnlyHint: true`, `openWorldHint: true`
 

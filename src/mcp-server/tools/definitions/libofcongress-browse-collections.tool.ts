@@ -63,21 +63,25 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
     page: z.number().describe('Current 1-indexed page number.'),
     pages: z.number().describe('Total number of pages available.'),
     has_next: z.boolean().describe('True when more pages are available after this one.'),
-    message: z
+  }),
+
+  // Agent-facing success-path context — result count and empty-result guidance. Reaches
+  // both structuredContent and content[] automatically; kept out of the domain output.
+  // No effectiveQuery: query is optional (browse-all default) so the echo is N/A when absent.
+  // Keys are disjoint from output (total vs totalCount).
+  enrichment: {
+    totalCount: z
+      .number()
+      .describe('Total matching collections — mirrors output.total for agent reasoning.'),
+    notice: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty — suggests broadening the keyword. Absent on non-empty result pages.',
+        'Recovery hint when results are empty or a page is out of range — suggests broadening the keyword or removing filters. Absent on successful result pages.',
       ),
-  }),
+  },
 
   errors: [
-    {
-      reason: 'empty_results',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No collections matched the keyword filter.',
-      recovery: 'Broaden the keyword or call without a query to list all LOC digital collections.',
-    },
     {
       reason: 'rate_limit_exceeded',
       code: JsonRpcErrorCode.ServiceUnavailable,
@@ -101,41 +105,29 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
 
     const { total, page, pages, hasNext } = result.pagination;
 
+    ctx.enrich.total(total);
+
     if (result.items.length === 0) {
       // Out-of-range page: service returned null (LOC 400) — pages is 0 here.
       // Distinguish from a genuine empty result by checking page > 1.
       if (page > 1 && pages === 0) {
-        return {
-          collections: [],
-          total: 0,
-          page,
-          pages: 0,
-          has_next: false,
-          message: `Page ${page} is out of range. Try a smaller page number.`,
-        };
+        ctx.enrich.notice(`Page ${page} is out of range. Try a smaller page number.`);
+        return { collections: [], total: 0, page, pages: 0, has_next: false };
       }
-      return {
-        collections: [],
-        total: 0,
-        page,
-        pages: 0,
-        has_next: false,
-        message: input.query
+      ctx.enrich.notice(
+        input.query
           ? `No collections matched "${input.query}". Try a broader keyword or call without a query to list all LOC digital collections.`
           : 'No collections found. The LOC collections endpoint may be temporarily unavailable.',
-      };
+      );
+      return { collections: [], total: 0, page, pages: 0, has_next: false };
     }
 
     // Detect contradictory pagination: LOC sometimes returns items on out-of-range pages.
     if (pages > 0 && page > pages) {
-      return {
-        collections: [],
-        total,
-        page,
-        pages,
-        has_next: false,
-        message: `No results on page ${page} — there are ${pages} page(s) total (${total} collections). Use a page number between 1 and ${pages}.`,
-      };
+      ctx.enrich.notice(
+        `No results on page ${page} — there are ${pages} page(s) total (${total} collections). Use a page number between 1 and ${pages}.`,
+      );
+      return { collections: [], total, page, pages, has_next: false };
     }
 
     return {
@@ -152,7 +144,6 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
     lines.push(
       `**Total:** ${result.total} | **Page:** ${result.page} of ${result.pages} | **has_next:** ${result.has_next}`,
     );
-    if (result.message) lines.push(`\n> ${result.message}`);
     for (const col of result.collections) {
       lines.push(`\n## ${col.title}`);
       lines.push(`**Slug:** ${col.slug}`);

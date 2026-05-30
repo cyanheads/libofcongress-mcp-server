@@ -5,7 +5,11 @@
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createInMemoryStorage,
+  createMockContext,
+  getEnrichment,
+} from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locSearch } from '@/mcp-server/tools/definitions/libofcongress-search.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
@@ -68,9 +72,13 @@ describe('locSearch', () => {
     expect(result.total).toBe(1);
     expect(result.page).toBe(1);
     expect(result.has_next).toBe(false);
+    // Enrichment echoes query and total for both structuredContent and content[] clients
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.effectiveQuery).toBe('civil war photos');
+    expect(enrichment.totalCount).toBe(1);
   });
 
-  it('returns message field and empty items on zero results', async () => {
+  it('populates enrichment.notice and returns empty items on zero results', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(
@@ -84,8 +92,11 @@ describe('locSearch', () => {
     expect(result.items).toHaveLength(0);
     expect(result.total).toBe(0);
     expect(result.has_next).toBe(false);
-    expect(result.message).toBeDefined();
-    expect(result.message).toContain('xyzzy_no_match_expected');
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(enrichment.notice).toContain('xyzzy_no_match_expected');
+    expect(enrichment.effectiveQuery).toBe('xyzzy_no_match_expected');
+    expect(enrichment.totalCount).toBe(0);
   });
 
   it('applies format filter — passes format slug in the URL', async () => {
@@ -186,18 +197,19 @@ describe('locSearch', () => {
     expect(text).toContain('https://www.loc.gov/item/loc.pnp.ppmsc.02404/');
   });
 
-  it('format() renders the message when results are empty', () => {
+  it('format() renders pagination summary even when items are empty', () => {
     const output = locSearch.output.parse({
       items: [],
       total: 0,
       page: 1,
       pages: 0,
       has_next: false,
-      message: 'No items matched "xyzzy".',
     });
     const blocks = locSearch.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
-    expect(text).toContain('No items matched');
+    // Pagination summary line must always be present (notice is in the enrichment trailer, not here)
+    expect(text).toContain('Total:');
+    expect(text).toContain('Page:');
   });
 
   it('format() renders sparse item — no date or format', () => {
@@ -228,7 +240,7 @@ describe('locSearch', () => {
     );
   });
 
-  it('returns empty result with message when page > pages', async () => {
+  it('returns empty result with enrichment.notice when page > pages', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(
@@ -250,9 +262,12 @@ describe('locSearch', () => {
 
     expect(result.items).toHaveLength(0);
     expect(result.has_next).toBe(false);
-    expect(result.message).toBeDefined();
-    expect(result.message).toContain('999');
-    expect(result.message).toContain('4');
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(String(enrichment.notice)).toContain('999');
+    expect(String(enrichment.notice)).toContain('4');
+    expect(enrichment.effectiveQuery).toBe('test');
+    expect(enrichment.totalCount).toBe(100);
   });
 
   it('returns empty result when LOC API returns HTTP 400 (out-of-range page)', async () => {

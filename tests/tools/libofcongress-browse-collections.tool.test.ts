@@ -5,7 +5,11 @@
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createInMemoryStorage,
+  createMockContext,
+  getEnrichment,
+} from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locBrowseCollections } from '@/mcp-server/tools/definitions/libofcongress-browse-collections.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
@@ -64,6 +68,9 @@ describe('locBrowseCollections', () => {
     expect(result.collections[0].title).toBe('Civil War Glass Negatives');
     expect(result.collections[0].url).toContain('civil-war-glass-negatives');
     expect(result.total).toBe(2);
+    // Enrichment echoes total for both structuredContent and content[] clients
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.totalCount).toBe(2);
   });
 
   it('extracts slug from collection URL', async () => {
@@ -100,7 +107,7 @@ describe('locBrowseCollections', () => {
     expect(calledUrl).not.toContain('&q=');
   });
 
-  it('returns message field and empty array on no results with keyword', async () => {
+  it('populates enrichment.notice and returns empty array on no results with keyword', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(
@@ -115,8 +122,10 @@ describe('locBrowseCollections', () => {
     const result = await locBrowseCollections.handler(input, ctx);
 
     expect(result.collections).toHaveLength(0);
-    expect(result.message).toBeDefined();
-    expect(result.message).toContain('xyzzy_no_match');
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(String(enrichment.notice)).toContain('xyzzy_no_match');
+    expect(enrichment.totalCount).toBe(0);
   });
 
   it('computes has_next correctly', async () => {
@@ -182,18 +191,19 @@ describe('locBrowseCollections', () => {
     expect(text).toContain('Sparse Collection');
   });
 
-  it('format() renders the message when results are empty', () => {
+  it('format() renders pagination summary when results are empty', () => {
     const output = locBrowseCollections.output.parse({
       collections: [],
       total: 0,
       page: 1,
       pages: 0,
       has_next: false,
-      message: 'No collections matched "blah".',
     });
     const blocks = locBrowseCollections.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
-    expect(text).toContain('No collections matched');
+    // Pagination summary line must always be present; notice is in the enrichment trailer
+    expect(text).toContain('Total:');
+    expect(text).toContain('Page:');
   });
 
   // Rate-limit test last — sets module-level rateLimitBlockedUntil

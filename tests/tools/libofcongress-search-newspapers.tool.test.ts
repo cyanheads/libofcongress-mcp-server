@@ -5,7 +5,11 @@
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createInMemoryStorage,
+  createMockContext,
+  getEnrichment,
+} from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locSearchNewspapers } from '@/mcp-server/tools/definitions/libofcongress-search-newspapers.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
@@ -64,9 +68,13 @@ describe('locSearchNewspapers', () => {
     expect(result.items[0].date).toBe('1900-01-01');
     expect(result.total).toBe(1);
     expect(result.has_next).toBe(false);
+    // Enrichment echoes query and total for both structuredContent and content[] clients
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.effectiveQuery).toBe('train wreck');
+    expect(enrichment.totalCount).toBe(1);
   });
 
-  it('returns message field and empty items when no results', async () => {
+  it('populates enrichment.notice and returns empty items when no results', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(
@@ -84,9 +92,12 @@ describe('locSearchNewspapers', () => {
     const result = await locSearchNewspapers.handler(input, ctx);
 
     expect(result.items).toHaveLength(0);
-    expect(result.message).toBeDefined();
-    expect(result.message).toContain('xyzzy_nope');
-    expect(result.message).toContain('oklahoma');
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(String(enrichment.notice)).toContain('xyzzy_nope');
+    expect(String(enrichment.notice)).toContain('oklahoma');
+    expect(enrichment.effectiveQuery).toBe('xyzzy_nope');
+    expect(enrichment.totalCount).toBe(0);
   });
 
   it('hits the /newspapers/ endpoint', async () => {

@@ -5,7 +5,11 @@
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createInMemoryStorage,
+  createMockContext,
+  getEnrichment,
+} from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locSearchSubjects } from '@/mcp-server/tools/definitions/libofcongress-search-subjects.tool.js';
 import { initLcLinkedDataService } from '@/services/lc-linked-data/lc-linked-data-service.js';
@@ -67,9 +71,12 @@ describe('locSearchSubjects', () => {
     expect(result.subjects[0].label).toBe('World War, 1939-1945');
     expect(result.subjects[0].uri).toBe('http://id.loc.gov/authorities/subjects/sh85148273');
     expect(result.subjects[0].count).toBe(1500);
+    // Enrichment echoes query for both structuredContent and content[] clients
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.effectiveQuery).toBe('world war');
   });
 
-  it('returns message field and empty subjects when no results', async () => {
+  it('populates enrichment.notice and returns empty subjects when no results', async () => {
     vi.stubGlobal('fetch', mockFetch(makeSuggestResponse([])));
     const ctx = createMockContext();
     const input = locSearchSubjects.input.parse({ query: 'xyzzy_no_match' });
@@ -77,8 +84,10 @@ describe('locSearchSubjects', () => {
 
     expect(result.subjects).toHaveLength(0);
     expect(result.total).toBe(0);
-    expect(result.message).toBeDefined();
-    expect(result.message).toContain('xyzzy_no_match');
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(String(enrichment.notice)).toContain('xyzzy_no_match');
+    expect(enrichment.effectiveQuery).toBe('xyzzy_no_match');
   });
 
   it('omits count when upstream count string is empty', async () => {
@@ -165,15 +174,15 @@ describe('locSearchSubjects', () => {
     expect(text).toContain('1500');
   });
 
-  it('format() renders the message when results are empty', () => {
+  it('format() renders the total count even when results are empty', () => {
     const output = locSearchSubjects.output.parse({
       subjects: [],
       total: 0,
-      message: 'No LCSH headings matched "xyzzy".',
     });
     const blocks = locSearchSubjects.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
-    expect(text).toContain('No LCSH headings matched');
+    // Count line must always be present; notice is in the enrichment trailer, not here
+    expect(text).toContain('0 subject heading(s) found');
   });
 
   it('format() renders sparse subject — no count', () => {
