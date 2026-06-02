@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.7](changelog/0.2.x/0.2.7.md) — 2026-06-02
+
+@cyanheads/mcp-ts-core ^0.9.16 → ^0.9.21: per-request log context fix, secret-scrubbing in error messages, withRetry fail-fast
+
 ## [0.2.6](changelog/0.2.x/0.2.6.md) — 2026-05-30
 
 Enrichment adoption — search/browse tools surface query echoes, result totals, and empty-result guidance in a typed enrichment block; removed dead empty_results error contracts
