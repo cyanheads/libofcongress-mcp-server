@@ -50,7 +50,8 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     },
     {
       reason: 'rate_limit_exceeded',
-      code: JsonRpcErrorCode.ServiceUnavailable,
+      code: JsonRpcErrorCode.RateLimited,
+      retryable: false,
       when: 'LOC API rate limit exceeded; requests are blocked for approximately 1 hour.',
       recovery:
         'Wait approximately 1 hour before retrying. Reduce request frequency to stay under 20 req/min.',
@@ -74,6 +75,9 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
         throw ctx.fail('page_not_found', err.message, { pageUrl: input.page_url });
+      }
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
+        throw ctx.fail('rate_limit_exceeded', err.message);
       }
       throw err;
     }

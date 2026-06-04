@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
@@ -101,7 +101,8 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
   errors: [
     {
       reason: 'rate_limit_exceeded',
-      code: JsonRpcErrorCode.ServiceUnavailable,
+      code: JsonRpcErrorCode.RateLimited,
+      retryable: false,
       when: 'LOC API rate limit exceeded; requests are blocked for approximately 1 hour.',
       recovery:
         'Wait approximately 1 hour before retrying. Reduce request frequency to stay under 20 req/min.',
@@ -127,18 +128,26 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     }
 
     const svc = getLocApiService();
-    const result = await svc.searchNewspapers(
-      {
-        query: input.query,
-        ...(input.date_start !== undefined && { dateStart: input.date_start }),
-        ...(input.date_end !== undefined && { dateEnd: input.date_end }),
-        ...(input.state?.trim() && { state: input.state.trim() }),
-        ...(input.newspaper_title?.trim() && { newspaperTitle: input.newspaper_title.trim() }),
-        limit: input.limit,
-        page: input.page,
-      },
-      ctx,
-    );
+    let result: Awaited<ReturnType<typeof svc.searchNewspapers>>;
+    try {
+      result = await svc.searchNewspapers(
+        {
+          query: input.query,
+          ...(input.date_start !== undefined && { dateStart: input.date_start }),
+          ...(input.date_end !== undefined && { dateEnd: input.date_end }),
+          ...(input.state?.trim() && { state: input.state.trim() }),
+          ...(input.newspaper_title?.trim() && { newspaperTitle: input.newspaper_title.trim() }),
+          limit: input.limit,
+          page: input.page,
+        },
+        ctx,
+      );
+    } catch (err) {
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
+        throw ctx.fail('rate_limit_exceeded', err.message);
+      }
+      throw err;
+    }
 
     const { total, page, pages, hasNext } = result.pagination;
 

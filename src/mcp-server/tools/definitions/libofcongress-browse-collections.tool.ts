@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 export const locBrowseCollections = tool('libofcongress_browse_collections', {
@@ -84,7 +84,8 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
   errors: [
     {
       reason: 'rate_limit_exceeded',
-      code: JsonRpcErrorCode.ServiceUnavailable,
+      code: JsonRpcErrorCode.RateLimited,
+      retryable: false,
       when: 'LOC API rate limit exceeded; requests are blocked for approximately 1 hour.',
       recovery:
         'Wait approximately 1 hour before retrying. Reduce request frequency to stay under 20 req/min.',
@@ -94,14 +95,22 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
   async handler(input, ctx) {
     ctx.log.info('libofcongress_browse_collections', { query: input.query, page: input.page });
     const svc = getLocApiService();
-    const result = await svc.browseCollections(
-      {
-        ...(input.query?.trim() && { query: input.query.trim() }),
-        limit: input.limit,
-        page: input.page,
-      },
-      ctx,
-    );
+    let result: Awaited<ReturnType<typeof svc.browseCollections>>;
+    try {
+      result = await svc.browseCollections(
+        {
+          ...(input.query?.trim() && { query: input.query.trim() }),
+          limit: input.limit,
+          page: input.page,
+        },
+        ctx,
+      );
+    } catch (err) {
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
+        throw ctx.fail('rate_limit_exceeded', err.message);
+      }
+      throw err;
+    }
 
     const { total, page, pages, hasNext } = result.pagination;
 

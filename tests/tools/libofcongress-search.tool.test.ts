@@ -388,7 +388,7 @@ describe('locSearch', () => {
       'fetch',
       vi.fn().mockResolvedValue(new Response('Rate limited', { status: 429 })),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'anything' });
     await expect(locSearch.handler(input, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.RateLimited,
