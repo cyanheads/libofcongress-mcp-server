@@ -16,6 +16,8 @@ import { initLcLinkedDataService } from './services/lc-linked-data/lc-linked-dat
 import { initLocApiService } from './services/loc-api/loc-api-service.js';
 
 await createApp({
+  name: 'libofcongress-mcp-server',
+  title: 'libofcongress-mcp-server',
   tools: [
     locSearch,
     locGetItem,

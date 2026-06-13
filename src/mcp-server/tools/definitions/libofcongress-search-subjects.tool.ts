@@ -53,14 +53,26 @@ export const locSearchSubjects = tool('libofcongress_search_subjects', {
     total: z.number().describe('Number of subject headings returned.'),
   }),
 
-  // Agent-facing success-path context — query echo and empty-result guidance. Reaches
-  // both structuredContent and content[] automatically; kept out of the domain output.
+  // Agent-facing success-path context — query echo, truncation disclosure, and empty-result
+  // guidance. Reaches both structuredContent and content[] automatically; kept out of the
+  // domain output.
   enrichment: {
     effectiveQuery: z
       .string()
       .describe(
         'The keyword query as submitted to the id.loc.gov suggest endpoint, after trimming.',
       ),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe(
+        'True when results were capped at the requested limit. Increase limit or refine the query to surface additional headings.',
+      ),
+    shown: z.number().optional().describe('Number of subject headings returned in this response.'),
+    cap: z
+      .number()
+      .optional()
+      .describe('The limit applied to this response — maximum headings the API will return.'),
     notice: z
       .string()
       .optional()
@@ -81,6 +93,14 @@ export const locSearchSubjects = tool('libofcongress_search_subjects', {
         `No LCSH headings matched "${input.query}". Try broader or different terms. LCSH uses inverted forms for many headings — for example, "Photography, Aerial" instead of "Aerial photography", or "World War, 1939-1945" instead of "World War II".`,
       );
       return { subjects: [], total: 0 };
+    }
+
+    if (subjects.length >= input.limit) {
+      ctx.enrich.truncated({
+        shown: subjects.length,
+        cap: input.limit,
+        guidance: 'Increase limit or refine the query to surface additional headings.',
+      });
     }
 
     return {
