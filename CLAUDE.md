@@ -1,8 +1,8 @@
 # Developer Protocol
 
 **Server:** libofcongress-mcp-server
-**Version:** 0.2.9
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.10.6`
+**Version:** 0.2.10
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.10.9`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
 **Zod:** ^4.4.3
@@ -113,7 +113,7 @@ import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 const ServerConfigSchema = z.object({
-  userAgent: z.string().default('libofcongress-mcp-server/0.2.9').describe('User-Agent header for LOC API requests.'),
+  userAgent: z.string().default('libofcongress-mcp-server/0.2.10').describe('User-Agent header for LOC API requests.'),
   requestDelayMs: z.coerce.number().default(3100).describe('Delay in ms between LOC API requests.'),
 });
 

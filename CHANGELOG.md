@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.10](changelog/0.2.x/0.2.10.md) — 2026-06-20
+
+Maintenance: @cyanheads/mcp-ts-core ^0.10.6 → ^0.10.9, dev-dependency refresh, vendored skill + devcheck-script re-sync; new dependency-specifier and plugin-manifest devcheck guards
+
 ## [0.2.9](changelog/0.2.x/0.2.9.md) — 2026-06-12
 
 Adopt @cyanheads/mcp-ts-core ^0.10.6 — explicit name/title identity, subject-search truncation disclosure, bundle-content cleaning, and a Docker HEALTHCHECK

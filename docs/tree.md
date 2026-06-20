@@ -1,6 +1,6 @@
 # libofcongress-mcp-server - Directory Structure
 
-Generated on: 2026-06-13 03:42:05
+Generated on: 2026-06-20 11:47:58
 
 ```text
 libofcongress-mcp-server/
@@ -28,6 +28,7 @@ libofcongress-mcp-server/
 ├── scripts/
 │   ├── build-changelog.ts
 │   ├── build.ts
+│   ├── check-dependency-specifiers.ts
 │   ├── check-docs-sync.ts
 │   ├── check-framework-antipatterns.ts
 │   ├── check-skill-versions.ts
