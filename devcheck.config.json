@@ -12,5 +12,8 @@
   },
   "outdated": {
     "allowlist": ["typescript"]
+  },
+  "packaging": {
+    "pluginManifests": true
   }
 }
