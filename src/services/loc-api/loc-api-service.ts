@@ -428,6 +428,14 @@ export class LocApiService {
     const dateIssued = res.date_issued;
     const sequence = res.sequence;
 
+    // The ?fo=json&at=resource endpoint structurally omits date_issued/sequence, but both are
+    // encoded in the page URL: the date is the path segment after the LCCN, the sequence is the
+    // `sp` param. Derive them as fallbacks so a real upstream value still wins if LOC adds one.
+    const urlDate = parsed.pathname.split('/').find((seg) => /^\d{4}-\d{2}-\d{2}$/.test(seg));
+    const spParam = parsed.searchParams.get('sp');
+    const urlSequence =
+      spParam && /^\d+$/.test(spParam) && Number(spParam) > 0 ? Number(spParam) : undefined;
+
     // part_of is like "Oklahoma newspapers" — extract the state name if present
     let state: string | undefined;
     const partOf = res.part_of;
@@ -469,13 +477,16 @@ export class LocApiService {
       }
     }
 
+    const date = dateIssued ?? urlDate;
+    const seq = sequence ?? urlSequence;
+
     return {
       page_url: pageUrl,
       ...(title && { newspaper_title: title }),
-      ...(dateIssued && { date: dateIssued }),
+      ...(date && { date }),
       ...(state && { state }),
       ...(res.part_of && { edition: res.part_of }),
-      ...(sequence !== undefined && { sequence }),
+      ...(seq !== undefined && { sequence: seq }),
       ocr_text: ocrText,
       ocr_available: ocrAvailable,
     };

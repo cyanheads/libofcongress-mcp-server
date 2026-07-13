@@ -772,6 +772,92 @@ describe('LocApiService.browseCollections', () => {
   });
 });
 
+describe('LocApiService.getNewspaperPage', () => {
+  beforeEach(async () => {
+    const storage = await createInMemoryStorage();
+    initLocApiService(config, storage);
+    process.env.LOC_REQUEST_DELAY_MS = '0';
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.LOC_REQUEST_DELAY_MS;
+  });
+
+  it('derives date and sequence from the page URL when the resource endpoint omits them', async () => {
+    // The ?fo=json&at=resource endpoint structurally omits date_issued/sequence — both live only
+    // in the page URL (date = path segment after the LCCN, sequence = sp param).
+    const resourceBody = JSON.stringify({
+      resource: {
+        url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/',
+        fulltext_file: 'https://tile.loc.gov/text-services/full_text.json',
+      },
+    });
+    const ocrBody = JSON.stringify({ 'batch/0001.xml': { full_text: 'Hair Falling?' } });
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(resourceBody, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(ocrBody, { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      );
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.getNewspaperPage(
+      'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/?sp=12&q=titanic',
+      ctx,
+    );
+
+    expect(result.date).toBe('1912-04-18');
+    expect(result.sequence).toBe(12);
+    expect(result.ocr_available).toBe(true);
+    expect(result.ocr_text).toContain('Hair Falling');
+  });
+
+  it('prefers upstream date_issued/sequence over URL-derived values when present', async () => {
+    const resourceBody = JSON.stringify({
+      resource: {
+        url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/',
+        date_issued: '1899-12-31',
+        sequence: 5,
+      },
+    });
+    vi.stubGlobal('fetch', mockFetch(resourceBody));
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.getNewspaperPage(
+      'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/?sp=12',
+      ctx,
+    );
+
+    // Upstream values win over the URL's 1912-04-18 / sp=12.
+    expect(result.date).toBe('1899-12-31');
+    expect(result.sequence).toBe(5);
+  });
+
+  it('omits date and sequence when neither the resource nor the URL provides them', async () => {
+    const resourceBody = JSON.stringify({
+      resource: { url: 'https://www.loc.gov/resource/gdc.00519798608/' },
+    });
+    vi.stubGlobal('fetch', mockFetch(resourceBody));
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    // No date-shaped path segment; sp=0 is not a positive integer.
+    const result = await svc.getNewspaperPage(
+      'https://www.loc.gov/resource/gdc.00519798608/?sp=0',
+      ctx,
+    );
+
+    expect(result.date).toBeUndefined();
+    expect(result.sequence).toBeUndefined();
+  });
+});
+
 // Rate-limit test last — sets module-level rateLimitBlockedUntil which bleeds across
 // describe blocks in the same worker. Keep this as the final test in the file.
 describe('LocApiService rate-limit state', () => {

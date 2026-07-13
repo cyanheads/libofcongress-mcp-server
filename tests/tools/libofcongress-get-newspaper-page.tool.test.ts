@@ -77,6 +77,30 @@ describe('locGetNewspaperPage', () => {
     expect(result.ocr_text).toContain('World');
   });
 
+  it('derives date and sequence from page_url when the resource omits them', async () => {
+    // Live ?fo=json&at=resource responses omit date_issued/sequence/part_of; both values live in
+    // the page URL. Mirrors the live shape confirmed in issue #28.
+    vi.stubGlobal(
+      'fetch',
+      mockFetchSequence({
+        body: makeResourceResponse({
+          date_issued: undefined,
+          sequence: undefined,
+          part_of: undefined,
+          fulltext_file: undefined,
+        }),
+      }),
+    );
+    const ctx = createMockContext();
+    const input = locGetNewspaperPage.input.parse({
+      page_url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/?sp=12&q=titanic',
+    });
+    const result = await locGetNewspaperPage.handler(input, ctx);
+
+    expect(result.date).toBe('1912-04-18');
+    expect(result.sequence).toBe(12);
+  });
+
   it('marks ocr_available false and returns empty ocr_text when fulltext_file is absent', async () => {
     vi.stubGlobal(
       'fetch',
