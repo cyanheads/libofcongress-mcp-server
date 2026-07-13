@@ -1,6 +1,6 @@
 # libofcongress-mcp-server - Directory Structure
 
-Generated on: 2026-06-20 11:47:58
+Generated on: 2026-07-13 17:30:38
 
 ```text
 libofcongress-mcp-server/
@@ -14,7 +14,8 @@ libofcongress-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
-│   └── FUNDING.yml
+│   ├── FUNDING.yml
+│   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
@@ -167,6 +168,7 @@ libofcongress-mcp-server/
 │       └── libofcongress-search.tool.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── AGENTS.md

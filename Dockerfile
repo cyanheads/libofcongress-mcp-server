@@ -4,7 +4,7 @@
 # This stage installs all dependencies (including dev), builds the TypeScript
 # source code into JavaScript, and prepares the production assets.
 # ==============================================================================
-FROM oven/bun:1.3 AS build
+FROM oven/bun:1.3.14 AS build
 
 WORKDIR /usr/src/app
 
@@ -12,7 +12,7 @@ WORKDIR /usr/src/app
 COPY package.json bun.lock ./
 
 # Install all dependencies (including dev dependencies for building)
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile --ignore-scripts
 
 # Copy the rest of the source code
 COPY . .
@@ -26,7 +26,7 @@ RUN bun run build
 #
 # Minimal Bun image — only runs the pre-compiled dist/index.js at startup.
 # ==============================================================================
-FROM oven/bun:1.3-slim AS production
+FROM oven/bun:1.3.14-slim AS production
 
 WORKDIR /usr/src/app
 

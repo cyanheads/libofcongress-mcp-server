@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.10-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.11-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.11-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -50,6 +50,7 @@ Search the LOC digital collections with full-text keyword matching and facet fil
 - Geographic location filter (e.g., `"oklahoma"`, `"washington d.c."`)
 - Pagination up to 100 results per page; contradictory pages (LOC API edge case) returned with a clear message
 - Empty results include a `message` field with recovery hints — echoes the applied filters
+- Each result carries `is_item` — `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for non-item results (collections, exhibit/guide pages, newspaper pages); open their `url` instead
 
 ---
 
@@ -61,6 +62,7 @@ Retrieve the full metadata record for a specific LOC digital item.
 - `resource_links` contains URLs to downloadable digital files (TIFF, JPEG, PDF) for items with digital surrogates
 - `related_items` lists IDs of related LOC items for follow-up retrieval
 - Deduplicates resource links from nested `files[]` arrays
+- Accepts multi-segment item IDs verbatim (e.g. newspaper pages `sn95047246/1935-09-05/ed-1`); returned `url` is always an absolute `https://` URL
 
 ---
 

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.11](changelog/0.2.x/0.2.11.md) — 2026-07-13
+
+Fix the search→get_item id contract: results flag is_item, multi-segment newspaper ids resolve via get_item, and get_item urls normalize protocol-relative links to https. Also adopts mcp-ts-core ^0.10.14 and supply-chain install hardening.
+
 ## [0.2.10](changelog/0.2.x/0.2.10.md) — 2026-06-20
 
 Maintenance: @cyanheads/mcp-ts-core ^0.10.6 → ^0.10.9, dev-dependency refresh, vendored skill + devcheck-script re-sync; new dependency-specifier and plugin-manifest devcheck guards
