@@ -114,6 +114,9 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
 
     const { total, page, pages, hasNext } = result.pagination;
 
+    // Mirror the upstream total for agent reasoning. The empty-result branches below return
+    // total: 0 and re-enrich with 0 so totalCount never contradicts the returned total — LOC
+    // reports a nonzero pagination.total even for no-match keywords. Last write wins.
     ctx.enrich.total(total);
 
     if (result.items.length === 0) {
@@ -121,6 +124,7 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
       // Distinguish from a genuine empty result by checking page > 1.
       if (page > 1 && pages === 0) {
         ctx.enrich.notice(`Page ${page} is out of range. Try a smaller page number.`);
+        ctx.enrich.total(0);
         return { collections: [], total: 0, page, pages: 0, has_next: false };
       }
       ctx.enrich.notice(
@@ -128,6 +132,7 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
           ? `No collections matched "${input.query}". Try a broader keyword or call without a query to list all LOC digital collections.`
           : 'No collections found. The LOC collections endpoint may be temporarily unavailable.',
       );
+      ctx.enrich.total(0);
       return { collections: [], total: 0, page, pages: 0, has_next: false };
     }
 

@@ -100,6 +100,28 @@ describe('locSearchNewspapers', () => {
     expect(enrichment.totalCount).toBe(0);
   });
 
+  it('enriches totalCount 0 when upstream reports a nonzero total with empty results', async () => {
+    // LOC returns pagination.total: 1 with results: [] for some no-match queries. The enriched
+    // totalCount must agree with the returned total (0), not the raw upstream count.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeNewspaperSearchResponse({
+          results: [],
+          pagination: { total: 1, perpage: 25, pages: 0 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearchNewspapers.input.parse({ query: 'zzzz_no_such_page_abcdef' });
+    const result = await locSearchNewspapers.handler(input, ctx);
+
+    expect(result.items).toHaveLength(0);
+    expect(result.total).toBe(0);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.totalCount).toBe(0);
+  });
+
   it('hits the /newspapers/ endpoint', async () => {
     const fetchSpy = mockFetch(makeNewspaperSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);

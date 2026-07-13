@@ -99,6 +99,25 @@ describe('locSearch', () => {
     expect(enrichment.totalCount).toBe(0);
   });
 
+  it('enriches totalCount 0 when upstream reports a nonzero total with empty results', async () => {
+    // LOC returns pagination.total: 1 with results: [] for some no-match queries. The enriched
+    // totalCount must agree with the returned total (0), not the raw upstream count.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeSearchResponse({ results: [], pagination: { total: 1, perpage: 25, pages: 0 } }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({ query: 'zzzz_no_such_item_abcdef' });
+    const result = await locSearch.handler(input, ctx);
+
+    expect(result.items).toHaveLength(0);
+    expect(result.total).toBe(0);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.totalCount).toBe(0);
+  });
+
   it('applies format filter — passes format slug in the URL', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);

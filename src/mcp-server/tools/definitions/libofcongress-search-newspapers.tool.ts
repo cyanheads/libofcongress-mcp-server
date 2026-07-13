@@ -152,6 +152,9 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     const { total, page, pages, hasNext } = result.pagination;
 
     ctx.enrich.echo(input.query);
+    // Mirror the upstream total for agent reasoning. The empty-result branches below return
+    // total: 0 and re-enrich with 0 so totalCount never contradicts the returned total — LOC
+    // reports a nonzero pagination.total even for no-match queries. Last write wins.
     ctx.enrich.total(total);
 
     if (result.items.length === 0) {
@@ -160,6 +163,7 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
         ctx.enrich.notice(
           `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
         );
+        ctx.enrich.total(0);
         return { items: [], total: 0, page, pages: 0, has_next: false };
       }
       ctx.enrich.notice(
@@ -170,6 +174,7 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
             : '') +
           '. Try broadening the date range, removing the state filter, or using different keywords. Historical OCR is approximate — variant spellings are common.',
       );
+      ctx.enrich.total(0);
       return { items: [], total: 0, page, pages: 0, has_next: false };
     }
 

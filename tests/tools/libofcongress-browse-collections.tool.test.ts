@@ -128,6 +128,31 @@ describe('locBrowseCollections', () => {
     expect(enrichment.totalCount).toBe(0);
   });
 
+  it('enriches totalCount 0 when upstream reports a nonzero total with empty results', async () => {
+    // LOC returns pagination.total: 1 with results: [] for a no-match keyword. The enriched
+    // totalCount must agree with the returned total (0), not the raw upstream count.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeCollectionsResponse({
+          results: [],
+          pagination: { total: 1, perpage: 2, pages: 0 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locBrowseCollections.input.parse({
+      query: 'zzzz_no_such_collection_abcdef',
+      limit: 2,
+    });
+    const result = await locBrowseCollections.handler(input, ctx);
+
+    expect(result.collections).toHaveLength(0);
+    expect(result.total).toBe(0);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.totalCount).toBe(0);
+  });
+
   it('computes has_next correctly', async () => {
     vi.stubGlobal(
       'fetch',
