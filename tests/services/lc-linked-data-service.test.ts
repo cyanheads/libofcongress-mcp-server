@@ -143,6 +143,90 @@ describe('LcLinkedDataService.searchSubjects', () => {
     expect(results.every((r) => r.label !== '')).toBe(true);
   });
 
+  it('drops non-LCSH records, keeping only /authorities/subjects/ URIs', async () => {
+    // memberOf is ignored by the suggest endpoint, which interleaves name-authority and
+    // childrensSubjects records — only true subject headings may survive.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeSuggest([
+          {
+            label: 'World War 1 Impact on Palestine (Conference)',
+            uri: 'http://id.loc.gov/authorities/names/no2016139038',
+          },
+          {
+            label: 'Aerial photography in wildlife conservation',
+            uri: 'http://id.loc.gov/authorities/childrensSubjects/sj2021051581',
+          },
+          {
+            label: 'Photography, Aerial',
+            uri: 'http://id.loc.gov/authorities/subjects/sh85101360',
+            count: '900',
+          },
+          {
+            label: 'Aerial photography',
+            uri: 'http://id.loc.gov/authorities/subjects/sh2007001301',
+          },
+        ]),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLcLinkedDataService();
+    const results = await svc.searchSubjects('aerial photography', 10, ctx);
+
+    expect(results).toHaveLength(2);
+    expect(results.every((r) => r.uri.startsWith('http://id.loc.gov/authorities/subjects/'))).toBe(
+      true,
+    );
+    expect(results.map((r) => r.uri)).toEqual([
+      'http://id.loc.gov/authorities/subjects/sh85101360',
+      'http://id.loc.gov/authorities/subjects/sh2007001301',
+    ]);
+  });
+
+  it('returns empty when the suggest response contains only name-authority records', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeSuggest([
+          {
+            label: 'World War 1 Impact on Palestine (2014 : London, England)',
+            uri: 'http://id.loc.gov/authorities/names/no2017117310',
+          },
+          {
+            label: 'World War 100 Mirror collection',
+            uri: 'http://id.loc.gov/authorities/names/no2015079945',
+          },
+        ]),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLcLinkedDataService();
+    const results = await svc.searchSubjects('world war', 3, ctx);
+    expect(results).toHaveLength(0);
+  });
+
+  it('over-fetches beyond limit so filtering does not undershoot, then slices to limit', async () => {
+    const fetchSpy = mockFetch(
+      makeSuggest(
+        Array.from({ length: 12 }, (_, i) => ({
+          label: `Subject ${i}`,
+          uri: `http://id.loc.gov/authorities/subjects/sh${i}`,
+        })),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const svc = getLcLinkedDataService();
+    const results = await svc.searchSubjects('test', 5, ctx);
+
+    // Requests more than `limit` from the endpoint to survive namespace filtering...
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    expect(calledUrl).toContain('count=15');
+    // ...but returns only the requested number of real subject headings.
+    expect(results).toHaveLength(5);
+  });
+
   it('throws ServiceUnavailable on non-OK HTTP status', async () => {
     vi.stubGlobal('fetch', mockFetch('Service Error', 503));
     const ctx = createMockContext();

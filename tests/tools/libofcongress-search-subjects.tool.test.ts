@@ -110,15 +110,25 @@ describe('locSearchSubjects', () => {
     expect(result.subjects[0].count).toBeUndefined();
   });
 
-  it('respects the limit parameter', async () => {
-    const fetchSpy = mockFetch(makeSuggestResponse([]));
+  it('over-fetches limit*3 from the endpoint and slices results back to the requested limit', async () => {
+    // The tool over-fetches (bounded at 50) so namespace filtering doesn't undershoot, then
+    // trims to `limit` — so `count` in the request is limit*3, not limit.
+    const fetchSpy = mockFetch(
+      makeSuggestResponse(
+        Array.from({ length: 15 }, (_, i) => ({
+          label: `Subject ${i}`,
+          uri: `http://id.loc.gov/authorities/subjects/sh${i}`,
+        })),
+      ),
+    );
     vi.stubGlobal('fetch', fetchSpy);
     const ctx = createMockContext();
     const input = locSearchSubjects.input.parse({ query: 'music', limit: 5 });
-    await locSearchSubjects.handler(input, ctx);
+    const result = await locSearchSubjects.handler(input, ctx);
 
     const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
-    expect(calledUrl).toContain('count=5');
+    expect(calledUrl).toContain('count=15');
+    expect(result.subjects).toHaveLength(5);
   });
 
   it('caps the count param at 50 for the suggest endpoint', async () => {

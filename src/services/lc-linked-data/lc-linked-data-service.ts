@@ -29,10 +29,14 @@ export class LcLinkedDataService {
 
   /** Search LCSH subject headings via the suggest endpoint */
   async searchSubjects(query: string, limit: number, ctx: Context): Promise<LcSubjectHeading[]> {
+    // `memberOf` is an unenforced hint: the suggest endpoint interleaves /authorities/names/
+    // and childrensSubjects records with real LCSH headings. We drop the non-subject records
+    // below, so over-fetch (bounded by the endpoint's 50-suggestion cap) to reduce the chance
+    // a names-heavy response yields fewer than `limit` headings after filtering.
     const qs = new URLSearchParams({
       q: query,
       memberOf: SUBJECTS_SCHEME,
-      count: String(Math.min(limit, 50)),
+      count: String(Math.min(limit * 3, 50)),
     });
     const url = `${LC_LINKED_DATA_BASE}/suggest/?${qs}`;
     ctx.log.debug('LC Linked Data subject suggest', { url });
@@ -64,6 +68,9 @@ export class LcLinkedDataService {
       const label = labels[i];
       const uri = uris[i];
       if (!label || !uri) continue;
+      // Keep only true LCSH subject headings. Name-authority and childrensSubjects labels are
+      // not valid input for the `fa=subject:<value>` filter these results feed downstream.
+      if (!uri.startsWith(`${SUBJECTS_SCHEME}/`)) continue;
       const countStr = counts[i];
       const count = countStr ? parseInt(countStr, 10) : undefined;
       results.push({
@@ -72,7 +79,7 @@ export class LcLinkedDataService {
         ...(count !== undefined && !Number.isNaN(count) && { count }),
       });
     }
-    return results;
+    return results.slice(0, limit);
   }
 }
 
