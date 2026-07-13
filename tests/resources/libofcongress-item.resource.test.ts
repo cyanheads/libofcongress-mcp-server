@@ -136,6 +136,16 @@ describe('locItemResource', () => {
     expect(result.url).toContain('loc.gov');
   });
 
+  it('returns an absolute https url when upstream item.url is protocol-relative', async () => {
+    vi.stubGlobal('fetch', mockFetch(makeItemResponse({ url: '//lccn.loc.gov/2016687584' })));
+    const ctx = createMockContext({ uri: new URL('libofcongress://item/2016687584') });
+    const params = locItemResource.params.parse({ item_id: '2016687584' });
+    const result = await locItemResource.handler(params, ctx);
+    // Same service-level fix as libofcongress_get_item covers the resource consumer
+    expect(result.url).toBe('https://lccn.loc.gov/2016687584');
+    expect(result.url.startsWith('//')).toBe(false);
+  });
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil
   it('throws RateLimited on HTTP 429', async () => {
     vi.stubGlobal(

@@ -10,7 +10,7 @@ import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 export const locSearch = tool('libofcongress_search', {
   title: 'Search LOC Collections',
   description:
-    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Use libofcongress_get_item to retrieve full metadata for a specific result. Use libofcongress_search_subjects first to find the exact LCSH heading spelling before applying a subject filter.',
+    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Each result carries is_item: pass the id of a result where is_item is true to libofcongress_get_item for full metadata; results where is_item is false are non-item resources (collections, exhibit and research-guide pages, newspaper-page results) with no item record — open their url instead. Use libofcongress_search_subjects first to find the exact LCSH heading spelling before applying a subject filter.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -67,15 +67,22 @@ export const locSearch = tool('libofcongress_search', {
           .object({
             id: z
               .string()
-              .describe('LOC item ID — pass to libofcongress_get_item for full metadata.'),
+              .describe(
+                'LOC identifier for this result. When is_item is true, pass it to libofcongress_get_item for full metadata. When is_item is false it is a non-item resource (a collection, exhibit, guide, or newspaper page), not a get_item input — open url instead.',
+              ),
             title: z.string().describe('Item title.'),
             date: z.string().optional().describe('Publication or creation date.'),
             description: z.string().optional().describe('Brief description or summary.'),
             format: z
               .string()
               .optional()
-              .describe('Material format (e.g., photo, map, manuscript).'),
-            url: z.string().describe('LOC item URL.'),
+              .describe('Material format (e.g., photo, map, manuscript, collection).'),
+            is_item: z
+              .boolean()
+              .describe(
+                'True when this result is a catalog item whose id resolves through libofcongress_get_item. False for collections, exhibits, research guides, newspaper pages, and other non-item results, which have no get_item record — follow url instead. Always present on every result.',
+              ),
+            url: z.string().describe('LOC item or collection URL.'),
           })
           .describe('A single LOC item summary.'),
       )
@@ -206,6 +213,10 @@ export const locSearch = tool('libofcongress_search', {
     for (const item of result.items) {
       lines.push(`\n## ${item.title}`);
       lines.push(`**ID:** ${item.id}`);
+      if (item.is_item === false)
+        lines.push(
+          '_Non-item result (collection/exhibit/guide/newspaper page) — not a libofcongress_get_item target; open the URL._',
+        );
       if (item.date) lines.push(`**Date:** ${item.date}`);
       if (item.format) lines.push(`**Format:** ${item.format}`);
       if (item.description) lines.push(item.description);

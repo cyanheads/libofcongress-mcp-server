@@ -102,6 +102,12 @@ export type LocItemSummary = {
   date?: string;
   description?: string;
   format?: string;
+  /**
+   * True when this result is a catalog item whose `id` resolves through getItem.
+   * False for collection landing pages and other non-item results, which are a
+   * different LOC resource type with no `/item/` equivalent.
+   */
+  is_item: boolean;
   url: string;
 };
 

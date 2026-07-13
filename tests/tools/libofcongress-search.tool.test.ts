@@ -180,6 +180,7 @@ describe('locSearch', () => {
           title: 'Sample Photo',
           date: '1920',
           format: 'photo',
+          is_item: true,
           url: 'https://www.loc.gov/item/loc.pnp.ppmsc.02404/',
         },
       ],
@@ -218,6 +219,7 @@ describe('locSearch', () => {
         {
           id: 'sparse-id',
           title: 'Sparse Item',
+          is_item: true,
           url: 'https://www.loc.gov/item/sparse-id/',
         },
       ],
@@ -349,6 +351,7 @@ describe('locSearch', () => {
           date: '1940',
           format: 'photo',
           description: 'This is a photograph of the subject.',
+          is_item: true,
           url: 'https://www.loc.gov/item/desc-item/',
         },
       ],
@@ -369,6 +372,7 @@ describe('locSearch', () => {
           id: 'fmt-item',
           title: 'Map Item',
           format: 'map',
+          is_item: true,
           url: 'https://www.loc.gov/item/fmt-item/',
         },
       ],
@@ -380,6 +384,60 @@ describe('locSearch', () => {
     const blocks = locSearch.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('map');
+  });
+
+  it('surfaces is_item:false for collection landing pages and is_item:true for items', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeSearchResponse({
+          results: [
+            {
+              id: 'http://www.loc.gov/collections/civil-war/about-this-collection/',
+              title: 'Civil War Collection',
+              url: 'http://www.loc.gov/collections/civil-war/about-this-collection/',
+              original_format: ['collection'],
+            },
+            {
+              id: 'https://www.loc.gov/item/2009632251/',
+              title: 'A Photograph',
+              url: 'https://www.loc.gov/item/2009632251/',
+              original_format: ['photo'],
+            },
+          ],
+          pagination: { total: 2, perpage: 25, pages: 1, page: 1 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({ query: 'civil war' });
+    const result = await locSearch.handler(input, ctx);
+    expect(result.items[0].is_item).toBe(false);
+    expect(result.items[0].id).toBe('collections/civil-war/about-this-collection');
+    expect(result.items[1].is_item).toBe(true);
+    expect(result.items[1].id).toBe('2009632251');
+  });
+
+  it('format() flags collection landing pages as non-get_item targets', () => {
+    const output = locSearch.output.parse({
+      items: [
+        {
+          id: 'collections/civil-war/about-this-collection',
+          title: 'Civil War Collection',
+          format: 'collection',
+          is_item: false,
+          url: 'https://www.loc.gov/collections/civil-war/about-this-collection/',
+        },
+      ],
+      total: 1,
+      page: 1,
+      pages: 1,
+      has_next: false,
+    });
+    const blocks = locSearch.format!(output);
+    const text = (blocks[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('Non-item result');
+    expect(text).toContain('not a libofcongress_get_item target');
   });
 
   // Rate-limit test last — sets module-level rateLimitBlockedUntil, must not bleed into other tests

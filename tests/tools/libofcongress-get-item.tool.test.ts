@@ -221,6 +221,46 @@ describe('locGetItem', () => {
     expect(text).toContain('and 3 more');
   });
 
+  it('returns an absolute https url when upstream item.url is protocol-relative', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: { title: 'Samples of German endpapers', url: '//lccn.loc.gov/2009632251' },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locGetItem.input.parse({ item_id: '2009632251' });
+    const result = await locGetItem.handler(input, ctx);
+    expect(result.url).toBe('https://lccn.loc.gov/2009632251');
+    expect(result.url.startsWith('//')).toBe(false);
+  });
+
+  it('resolves a multi-segment newspaper item_id without mangling slashes', async () => {
+    const fetchSpy = mockFetch(
+      JSON.stringify({
+        item: {
+          title: 'The Evening Star',
+          url: 'https://www.loc.gov/item/sn95047246/1935-09-05/ed-1/',
+        },
+        resources: [],
+        related_items: [],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const input = locGetItem.input.parse({ item_id: 'sn95047246/1935-09-05/ed-1' });
+    const result = await locGetItem.handler(input, ctx);
+    expect(result.item_id).toBe('sn95047246/1935-09-05/ed-1');
+    expect(result.title).toBe('The Evening Star');
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    expect(calledUrl).toContain('/item/sn95047246/1935-09-05/ed-1/');
+    expect(calledUrl).not.toContain('%2F');
+  });
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil
   it('throws RateLimited on HTTP 429', async () => {
     vi.stubGlobal(

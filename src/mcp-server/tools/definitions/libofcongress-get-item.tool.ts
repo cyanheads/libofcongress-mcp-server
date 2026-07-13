@@ -10,14 +10,14 @@ import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 export const locGetItem = tool('libofcongress_get_item', {
   title: 'Get LOC Item',
   description:
-    'Retrieve the full metadata record for a specific LOC digital item. Returns contributors, subjects, rights information, physical description, notes, related items, and links to digital resources (TIFF, JPEG, PDF) for items with digital surrogates. Use after libofcongress_search to get complete details on a result. Pass the bare item ID from the search result — do not include URL path segments.',
+    'Retrieve the full metadata record for a specific LOC digital item. Returns contributors, subjects, rights information, physical description, notes, related items, and links to digital resources (TIFF, JPEG, PDF) for items with digital surrogates. Use after libofcongress_search on a result whose is_item is true. Pass the result id verbatim — it may be a simple ID or a slash-separated newspaper path; do not prepend the loc.gov URL. Non-item results (is_item: false) — collections, exhibits, guides, newspaper pages — have no item record and cannot be retrieved here.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     item_id: z
       .string()
       .min(1)
       .describe(
-        'LOC item ID from a libofcongress_search result\'s "id" field (e.g., "loc.pnp.ppmsc.02404" or "2009632251"). Pass the bare ID only — no URL path segments.',
+        'LOC item id from a libofcongress_search result\'s "id" field (where is_item is true). A simple ID ("2009632251", "loc.pnp.ppmsc.02404") or a slash-separated path for newspaper pages ("sn95047246/1935-09-05/ed-1"). Pass the id verbatim; do not prepend the loc.gov URL or an "item/" prefix.',
       ),
   }),
   output: z.object({

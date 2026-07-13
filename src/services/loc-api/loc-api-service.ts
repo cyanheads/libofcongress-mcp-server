@@ -70,11 +70,12 @@ function extractStringArray(value: string | string[] | undefined): string[] {
 
 function extractId(result: RawLocSearchResult): string {
   // LOC IDs come as full URLs like https://www.loc.gov/item/2009632251/
-  // or as short strings like loc.pnp.ppmsc.02404
+  // or as short strings like loc.pnp.ppmsc.02404. Item paths can be multi-segment
+  // (newspaper pages: /item/sn95047246/1935-09-05/ed-1/) — capture the whole path
+  // after /item/, preserving internal slashes so getItem can rebuild the URL.
   const rawId = result.id ?? result.url ?? '';
-  // Strip URL to just the path component's last segment
-  const urlMatch = rawId.match(/\/item\/([^/]+)\/?$/);
-  if (urlMatch?.[1]) return urlMatch[1];
+  const itemMatch = rawId.match(/\/item\/([^?#]+)/);
+  if (itemMatch?.[1]) return itemMatch[1].replace(/\/+$/, '');
   return rawId.replace(/^https?:\/\/[^/]+\//, '').replace(/\/$/, '');
 }
 
@@ -90,6 +91,12 @@ function normalizeSearchResult(result: RawLocSearchResult): LocItemSummary {
     ? result.description.join(' ')
     : result.description;
   const format = (result.original_format ?? result.online_format ?? [])[0] ?? undefined;
+  // libofcongress_get_item resolves /item/ resources only. LOC search also mixes in
+  // collections (/collections/), exhibit and research-guide pages, and newspaper-page
+  // /resource/ URLs — none of which get_item can consume. A result is get_item-usable
+  // exactly when its canonical URL is an /item/ path; flag that so callers don't pass a
+  // non-item id to get_item (which 404s).
+  const is_item = Boolean(result.url?.includes('/item/') || result.id?.includes('/item/'));
   const id = extractId(result);
   const url = normalizeUrl(result.url ?? `${LOC_BASE}/item/${id}/`);
   return {
@@ -98,6 +105,7 @@ function normalizeSearchResult(result: RawLocSearchResult): LocItemSummary {
     ...(result.date && { date: result.date }),
     ...(description && { description }),
     ...(format && { format }),
+    is_item,
     url,
   };
 }
@@ -269,7 +277,11 @@ export class LocApiService {
 
   /** Get full metadata for a single LOC item */
   async getItem(itemId: string, ctx: Context): Promise<LocItemDetail> {
-    const url = `${LOC_BASE}/item/${encodeURIComponent(itemId)}/?fo=json&at=item,resources,related_items`;
+    // Encode each path segment independently so multi-segment item IDs (newspaper
+    // pages: sn95047246/1935-09-05/ed-1) keep their internal slashes instead of being
+    // flattened to %2F, which LOC cannot route.
+    const encodedId = itemId.split('/').map(encodeURIComponent).join('/');
+    const url = `${LOC_BASE}/item/${encodedId}/?fo=json&at=item,resources,related_items`;
     const data = await this.fetchJson<RawLocItemResponse>(url, ctx);
     const item = data.item;
     if (!item) {
@@ -311,7 +323,9 @@ export class LocApiService {
       ...(physDesc && { physical_description: physDesc }),
       resource_links: [...new Set(resourceLinks)],
       related_items: [...new Set(relatedItems)],
-      url: item.url ?? `${LOC_BASE}/item/${itemId}/`,
+      // Normalize protocol-relative urls (//lccn.loc.gov/...) to https:, matching
+      // normalizeSearchResult — LOC returns these for some items (e.g. LCCN records).
+      url: normalizeUrl(item.url ?? `${LOC_BASE}/item/${itemId}/`),
     };
   }
 

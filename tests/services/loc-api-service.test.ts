@@ -286,6 +286,80 @@ describe('LocApiService.search', () => {
     expect(resultStr).not.toContain(secretAgent);
     delete process.env.LOC_USER_AGENT;
   });
+
+  it('flags non-item results (collection, exhibit, newspaper page) is_item:false; /item/ results is_item:true', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            {
+              id: 'http://www.loc.gov/collections/civil-war/about-this-collection/',
+              title: 'Civil War Collection',
+              url: 'http://www.loc.gov/collections/civil-war/about-this-collection/',
+              original_format: ['collection', 'web page'],
+            },
+            {
+              // Exhibit page — not a collection, but still not a get_item item
+              id: 'https://www.loc.gov/exhibits/lincoln/',
+              title: 'Abraham Lincoln Exhibit',
+              url: 'https://www.loc.gov/exhibits/lincoln/',
+              original_format: ['web page'],
+            },
+            {
+              // Chronicling America newspaper-page /resource/ URL — get_item cannot consume it
+              id: 'https://www.loc.gov/resource/gdc.00519798608/?sp=102',
+              title: "Frank Leslie's Illustrated Newspaper",
+              url: 'https://www.loc.gov/resource/gdc.00519798608/?sp=102',
+              original_format: ['newspaper'],
+            },
+            {
+              id: 'https://www.loc.gov/item/2009632251/',
+              title: 'A Photograph',
+              url: 'https://www.loc.gov/item/2009632251/',
+              original_format: ['photo'],
+            },
+          ],
+          pagination: { total: 4, perpage: 25, pages: 1 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.search({ query: 'civil war', page: 1 }, ctx);
+    const [collection, exhibit, newspaperPage, item] = result.items;
+    expect(collection.is_item).toBe(false);
+    expect(collection.id).toBe('collections/civil-war/about-this-collection');
+    expect(exhibit.is_item).toBe(false);
+    expect(newspaperPage.is_item).toBe(false);
+    expect(item.is_item).toBe(true);
+    expect(item.id).toBe('2009632251');
+  });
+
+  it('preserves the full multi-segment path for deep /item/ newspaper URLs', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            {
+              id: 'https://www.loc.gov/item/sn95047246/1935-09-05/ed-1/',
+              title: 'The Evening Star',
+              url: 'https://www.loc.gov/item/sn95047246/1935-09-05/ed-1/',
+              original_format: ['newspaper'],
+            },
+          ],
+          pagination: { total: 1, perpage: 25, pages: 1 },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.search({ query: 'newspaper', page: 1 }, ctx);
+    // Full path retained — not truncated to the last segment, no leading item/ prefix
+    expect(result.items[0].id).toBe('sn95047246/1935-09-05/ed-1');
+    expect(result.items[0].is_item).toBe(true);
+  });
 });
 
 describe('LocApiService.getItem', () => {
@@ -474,6 +548,62 @@ describe('LocApiService.getItem', () => {
     const resultStr = JSON.stringify(result);
     expect(resultStr).not.toContain(secretAgent);
     delete process.env.LOC_USER_AGENT;
+  });
+
+  it('normalizes a protocol-relative item.url to https:', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: { title: 'Samples of German endpapers', url: '//lccn.loc.gov/2009632251' },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.getItem('2009632251', ctx);
+    expect(result.url).toBe('https://lccn.loc.gov/2009632251');
+  });
+
+  it('encodes multi-segment item IDs per segment, preserving internal slashes', async () => {
+    const fetchSpy = mockFetch(
+      JSON.stringify({
+        item: {
+          title: 'The Evening Star',
+          url: 'https://www.loc.gov/item/sn95047246/1935-09-05/ed-1/',
+        },
+        resources: [],
+        related_items: [],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.getItem('sn95047246/1935-09-05/ed-1', ctx);
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    // Slashes stay literal (not %2F), so LOC can route the deep item path
+    expect(calledUrl).toContain('/item/sn95047246/1935-09-05/ed-1/');
+    expect(calledUrl).not.toContain('%2F');
+    expect(result.item_id).toBe('sn95047246/1935-09-05/ed-1');
+  });
+
+  it('builds a single-segment item URL unchanged (no regression)', async () => {
+    const fetchSpy = mockFetch(
+      JSON.stringify({
+        item: { title: 'Photo', url: 'https://www.loc.gov/item/2009632251/' },
+        resources: [],
+        related_items: [],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    await svc.getItem('2009632251', ctx);
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    expect(calledUrl).toContain('/item/2009632251/');
+    expect(calledUrl).not.toContain('%2F');
   });
 });
 
