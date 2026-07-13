@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.12](changelog/0.2.x/0.2.12.md) — 2026-07-13
+
+Fix search_subjects returning non-LCSH authority records and empty-result totalCount mismatches across three tools; derive newspaper page date/sequence from the page URL
+
 ## [0.2.11](changelog/0.2.x/0.2.11.md) — 2026-07-13
 
 Fix the search→get_item id contract: results flag is_item, multi-segment newspaper ids resolve via get_item, and get_item urls normalize protocol-relative links to https. Also adopts mcp-ts-core ^0.10.14 and supply-chain install hardening.
