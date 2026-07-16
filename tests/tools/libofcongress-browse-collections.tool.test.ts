@@ -14,24 +14,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locBrowseCollections } from '@/mcp-server/tools/definitions/libofcongress-browse-collections.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 
+/**
+ * Live-shaped LOC /collections/ payload: results point at an /about-this-collection/ subpage,
+ * carry a top-level `count`, and paginate with a `results` display range and no `pages` key.
+ * The Aaron Copland entry is the load-bearing one — its title does not match its route, so a
+ * title-derived slug ("aaron-copland-collection") is visibly wrong.
+ */
 function makeCollectionsResponse(overrides: { results?: object[]; pagination?: object } = {}) {
   return JSON.stringify({
     results: overrides.results ?? [
       {
-        url: 'https://www.loc.gov/collections/civil-war-glass-negatives/',
-        title: 'Civil War Glass Negatives',
-        description: 'Glass negatives from the Civil War era.',
+        url: 'https://www.loc.gov/collections/aaron-copland/about-this-collection/',
+        title: 'Aaron Copland Collection',
+        description: 'Music manuscripts, correspondence, and photographs of Aaron Copland.',
+        count: 982,
+        item: { total: 941, digitized: 941 },
       },
       {
-        url: 'https://www.loc.gov/collections/baseball-cards/',
+        url: 'https://www.loc.gov/collections/baseball-cards/about-this-collection/',
         title: 'Baseball Cards',
         description: 'Historic baseball card collection.',
+        count: 2100,
       },
     ],
     pagination: overrides.pagination ?? {
       total: 2,
       perpage: 25,
-      pages: 1,
+      results: '1 - 2',
     },
   });
 }
@@ -64,25 +73,50 @@ describe('locBrowseCollections', () => {
     const result = await locBrowseCollections.handler(input, ctx);
 
     expect(result.collections).toHaveLength(2);
-    expect(result.collections[0].slug).toBe('civil-war-glass-negatives');
-    expect(result.collections[0].title).toBe('Civil War Glass Negatives');
-    expect(result.collections[0].url).toContain('civil-war-glass-negatives');
+    expect(result.collections[0].slug).toBe('aaron-copland');
+    expect(result.collections[0].title).toBe('Aaron Copland Collection');
+    expect(result.collections[0].url).toContain('aaron-copland');
     expect(result.total).toBe(2);
     // Enrichment echoes total for both structuredContent and content[] clients
     const enrichment = getEnrichment(ctx);
     expect(enrichment.totalCount).toBe(2);
   });
 
-  it('extracts slug from collection URL', async () => {
+  it('extracts the route slug, not a title-derived one, from every collection URL', async () => {
     vi.stubGlobal('fetch', mockFetch(makeCollectionsResponse()));
     const ctx = createMockContext();
     const input = locBrowseCollections.input.parse({});
     const result = await locBrowseCollections.handler(input, ctx);
 
+    expect(result.collections.map((c) => c.slug)).toEqual(['aaron-copland', 'baseball-cards']);
     for (const col of result.collections) {
-      expect(col.slug).toBeTruthy();
       expect(col.slug).not.toContain('/');
+      // The slug must round-trip to the collection's own route
+      expect(col.url).toContain(`/collections/${col.slug}/`);
     }
+  });
+
+  it('populates item_count from the upstream count through the full handler path', async () => {
+    vi.stubGlobal('fetch', mockFetch(makeCollectionsResponse()));
+    const ctx = createMockContext();
+    const input = locBrowseCollections.input.parse({});
+    const result = await locBrowseCollections.handler(input, ctx);
+
+    // 982 is the collection-level count; 941 is the nested item.total on the same result
+    expect(result.collections[0].item_count).toBe(982);
+    expect(result.collections[1].item_count).toBe(2100);
+  });
+
+  it('renders item_count from a live-shaped upstream payload in format()', async () => {
+    vi.stubGlobal('fetch', mockFetch(makeCollectionsResponse()));
+    const ctx = createMockContext();
+    const input = locBrowseCollections.input.parse({});
+    const result = await locBrowseCollections.handler(input, ctx);
+
+    const blocks = locBrowseCollections.format!(locBrowseCollections.output.parse(result));
+    const text = (blocks[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('**Slug:** aaron-copland');
+    expect(text).toContain('**Items:** 982');
   });
 
   it('sends keyword query param when query is provided', async () => {

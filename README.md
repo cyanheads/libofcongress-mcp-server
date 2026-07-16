@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.12-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.13-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -33,7 +33,7 @@ Six tools covering the Library of Congress digital holdings — general search w
 
 | Tool | Description |
 |:-----|:------------|
-| `libofcongress_search` | Search LOC digital collections by keyword with optional format, date range, subject heading, and geographic location filters. Returns item summaries with IDs for follow-up retrieval. |
+| `libofcongress_search` | Search LOC digital collections by keyword with optional format, date range, subject heading, geographic location, and collection filters. Returns item summaries with IDs for follow-up retrieval. |
 | `libofcongress_get_item` | Retrieve full metadata for a specific LOC item — contributors, subjects, rights, physical description, resource links (TIFF/JPEG/PDF), and related items. |
 | `libofcongress_search_newspapers` | Search historical newspaper pages in the Chronicling America corpus. Returns pages with OCR text excerpts (~500 chars), publication title, date, state, and the URL needed for `libofcongress_get_newspaper_page`. |
 | `libofcongress_get_newspaper_page` | Retrieve the full OCR text of a specific newspaper page. Pass the `url` field from a `libofcongress_search_newspapers` result. Returns `ocr_available: false` when the page has no digitized text. |
@@ -48,6 +48,7 @@ Search the LOC digital collections with full-text keyword matching and facet fil
 - Date range filtering by year (inclusive start and end)
 - Subject heading filter — use `libofcongress_search_subjects` first to get the exact LCSH spelling
 - Geographic location filter (e.g., `"oklahoma"`, `"washington d.c."`)
+- `collection_slug` scopes the search to one curated collection — pass a slug from `libofcongress_browse_collections`. Mutually exclusive with `format` (each selects a different LOC endpoint); an unknown slug returns `collection_not_found`
 - Pagination up to 100 results per page; contradictory pages (LOC API edge case) returned with a clear message
 - Empty results include a `message` field with recovery hints — echoes the applied filters
 - Each result carries `is_item` — `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for non-item results (collections, exhibit/guide pages, newspaper pages); open their `url` instead
@@ -103,7 +104,8 @@ Search Library of Congress Subject Headings (LCSH) via `id.loc.gov`.
 
 List and browse LOC curated digital collections.
 
-- Returns collection `slug` — use as a `partof` facet value in `libofcongress_search` to scope searches to a single collection
+- Returns collection `slug` — pass it to `libofcongress_search` as `collection_slug` to search inside that collection
+- Slugs come from the collection's loc.gov route, not its title — `"Aaron Copland Collection"` lives at `aaron-copland`, so they aren't guessable
 - Optional keyword filter by collection name/description
 - Item counts are approximate; omitted when the API doesn't provide them
 - Pagination supported up to 100 collections per page

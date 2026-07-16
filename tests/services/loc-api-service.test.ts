@@ -360,6 +360,61 @@ describe('LocApiService.search', () => {
     expect(result.items[0].id).toBe('sn95047246/1935-09-05/ed-1');
     expect(result.items[0].is_item).toBe(true);
   });
+
+  it('routes a collection-scoped search through the collection endpoint', async () => {
+    // Live shape of /collections/{slug}/: the same results[]/pagination envelope /search/
+    // returns, with `results` as a display range and no `pages` key.
+    const fetchSpy = mockFetch(
+      JSON.stringify({
+        results: [
+          {
+            id: 'http://www.loc.gov/item/2023781133/',
+            url: 'https://www.loc.gov/item/2023781133/',
+            title: 'Letter from Aaron Copland to Serge Koussevitzky, April 1932',
+          },
+        ],
+        pagination: { total: 232, perpage: 3, results: '1 - 3' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.search(
+      { query: 'correspondence', collectionSlug: 'aaron-copland', page: 1 },
+      ctx,
+    );
+
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    expect(calledUrl).toContain('/collections/aaron-copland/');
+    expect(calledUrl).not.toContain('/search/');
+    expect(calledUrl).toContain('q=correspondence');
+    // Normalizes through the existing path — no parallel parser for the collection envelope
+    expect(result.items[0].id).toBe('2023781133');
+    expect(result.items[0].is_item).toBe(true);
+    expect(result.pagination.total).toBe(232);
+  });
+
+  it('percent-encodes a collection slug so it cannot escape the collections path', async () => {
+    const fetchSpy = mockFetch(makeSearchResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    await svc.search({ query: 'test', collectionSlug: '../../item/2009632251', page: 1 }, ctx);
+
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    expect(calledUrl).toContain('/collections/');
+    expect(calledUrl).not.toContain('/collections/../');
+    expect(new URL(calledUrl).pathname).toBe('/collections/..%2F..%2Fitem%2F2009632251/');
+  });
+
+  it('throws NotFound when an unrecognized collection slug 404s upstream', async () => {
+    vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    await expect(
+      svc.search({ query: 'test', collectionSlug: 'no-such-collection-xyz9', page: 1 }, ctx),
+    ).rejects.toMatchObject({ code: JsonRpcErrorCode.NotFound });
+  });
 });
 
 describe('LocApiService.getItem', () => {
@@ -729,7 +784,31 @@ describe('LocApiService.browseCollections', () => {
     delete process.env.LOC_REQUEST_DELAY_MS;
   });
 
-  it('extracts slug from collection URL path', async () => {
+  it('extracts the route slug from a URL carrying a trailing collection subpath', async () => {
+    // Live shape: LOC points every browse result at /about-this-collection/, and pagination
+    // sends `results` as a display range with no `pages` key. The title deliberately does not
+    // match the route — a title-derived slug would read "aaron-copland-collection".
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            {
+              url: 'https://www.loc.gov/collections/aaron-copland/about-this-collection/',
+              title: 'Aaron Copland Collection',
+            },
+          ],
+          pagination: { total: 1, perpage: 25, results: '1 - 1' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.browseCollections({ page: 1 }, ctx);
+    expect(result.items[0].slug).toBe('aaron-copland');
+  });
+
+  it('extracts slug from a bare collection URL with no subpath', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(
@@ -740,7 +819,7 @@ describe('LocApiService.browseCollections', () => {
               title: 'Civil War Glass Negatives',
             },
           ],
-          pagination: { total: 1, perpage: 25, pages: 1 },
+          pagination: { total: 1, perpage: 25, results: '1 - 1' },
         }),
       ),
     );
@@ -748,6 +827,122 @@ describe('LocApiService.browseCollections', () => {
     const svc = getLocApiService();
     const result = await svc.browseCollections({ page: 1 }, ctx);
     expect(result.items[0].slug).toBe('civil-war-glass-negatives');
+  });
+
+  it('maps the upstream collection count to item_count', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            {
+              url: 'https://www.loc.gov/collections/tenth-to-sixteenth-century-liturgical-chants/about-this-collection/',
+              title: '10th-16th Century Liturgical Chants',
+              count: 57,
+            },
+          ],
+          pagination: { total: 1, perpage: 25, results: '1 - 1' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.browseCollections({ page: 1 }, ctx);
+    expect(result.items[0].item_count).toBe(57);
+  });
+
+  it('reads item_count from the top-level count, not the nested item.total', async () => {
+    // Live, these disagree: the same result reports count: 57 and item.total: 5000. The
+    // collection-level count is the one that answers "how big is this collection".
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            {
+              url: 'https://www.loc.gov/collections/tenth-to-sixteenth-century-liturgical-chants/about-this-collection/',
+              title: '10th-16th Century Liturgical Chants',
+              count: 57,
+              item: { total: 5000, digitized: 5000 },
+            },
+          ],
+          pagination: { total: 1, perpage: 25, results: '1 - 1' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.browseCollections({ page: 1 }, ctx);
+    expect(result.items[0].item_count).toBe(57);
+  });
+
+  it('keeps item_count when the upstream count is 0', async () => {
+    // A truthiness guard would drop this; an empty collection is a fact, not a missing value.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            {
+              url: 'https://www.loc.gov/collections/empty-collection/about-this-collection/',
+              title: 'Empty Collection',
+              count: 0,
+            },
+          ],
+          pagination: { total: 1, perpage: 25, results: '1 - 1' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.browseCollections({ page: 1 }, ctx);
+    expect(result.items[0].item_count).toBe(0);
+  });
+
+  it('omits item_count when the upstream count is absent (sparse payload)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            {
+              url: 'https://www.loc.gov/collections/sparse-collection/about-this-collection/',
+              title: 'Sparse Collection',
+            },
+          ],
+          pagination: { total: 1, perpage: 25, results: '1 - 1' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.browseCollections({ page: 1 }, ctx);
+    expect(result.items[0].item_count).toBeUndefined();
+  });
+
+  it('ignores the results display range when pagination omits total', async () => {
+    // `results` is a range string ("1 - 3"), not a count. Treating it as a total fallback
+    // yields a string total and NaN pages, so it only applies when LOC sends a number.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            {
+              url: 'https://www.loc.gov/collections/aaron-copland/about-this-collection/',
+              title: 'Aaron Copland Collection',
+            },
+          ],
+          pagination: { perpage: 25, results: '1 - 3' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.browseCollections({ page: 1 }, ctx);
+    expect(result.pagination.total).toBe(0);
+    expect(result.pagination.pages).toBe(1);
+    expect(Number.isNaN(result.pagination.pages)).toBe(false);
   });
 
   it('generates slug from title when URL does not match collections pattern', async () => {

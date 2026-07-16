@@ -115,7 +115,10 @@ function normalizePagination(
   page: number,
   limit: number,
 ): LocPagination {
-  const total = raw?.total ?? raw?.results ?? 0;
+  // `results` is a display range string ("1 - 3") on every observed endpoint, so it can only
+  // stand in for a missing `total` when LOC actually sends a number — a string would flow into
+  // Math.ceil below and yield NaN pages.
+  const total = raw?.total ?? (typeof raw?.results === 'number' ? raw.results : 0);
   const perPage = raw?.perpage ?? limit;
   const pages = raw?.pages ?? (total > 0 ? Math.ceil(total / perPage) : 1);
   const hasNext = page < pages;
@@ -227,11 +230,19 @@ export class LocApiService {
     return JSON.parse(text) as T;
   }
 
-  /** Search LOC digital collections */
+  /**
+   * Search LOC digital collections.
+   *
+   * `collectionSlug` scopes the search to one curated collection via its own endpoint, which
+   * accepts the same query string and returns the same envelope as /search/. It selects a base
+   * path, so it cannot combine with `format` — callers pick one (the search tool rejects the
+   * pair up front). An unrecognized slug 404s, surfacing as NotFound from fetchSearchJson.
+   */
   async search(
     params: {
       query: string;
       format?: string;
+      collectionSlug?: string;
       dateStart?: number;
       dateEnd?: number;
       subject?: string;
@@ -244,7 +255,11 @@ export class LocApiService {
     const limit = Math.min(params.limit ?? 25, 100);
     const page = params.page ?? 1;
     const formatSlug = params.format ? FORMAT_SLUG_MAP[params.format] : undefined;
-    const endpoint = formatSlug ? `${LOC_BASE}/${formatSlug}/` : `${LOC_BASE}/search/`;
+    const endpoint = params.collectionSlug
+      ? `${LOC_BASE}/collections/${encodeURIComponent(params.collectionSlug)}/`
+      : formatSlug
+        ? `${LOC_BASE}/${formatSlug}/`
+        : `${LOC_BASE}/search/`;
 
     const qs = new URLSearchParams({ fo: 'json', q: params.query, at: 'results,pagination' });
     qs.set('c', String(limit));
@@ -523,13 +538,20 @@ export class LocApiService {
       const title = extractFirstString(r.title) ?? 'Untitled';
       const description = Array.isArray(r.description) ? r.description.join(' ') : r.description;
       const itemUrl = r.url ?? '';
-      // Extract slug from URL: https://www.loc.gov/collections/civil-war-glass-negatives/ → civil-war-glass-negatives
-      const slugMatch = itemUrl.match(/\/collections\/([^/]+)\/?$/);
+      // The routable slug is the first path segment after /collections/. LOC points browse
+      // results at a subpage (…/aaron-copland/about-this-collection/), so anchoring the match
+      // to the end of the URL misses every live result and falls through to the title — which
+      // is not a route ("Aaron Copland Collection" → aaron-copland-collection, not aaron-copland).
+      // The title fallback stays for URLs that genuinely lack a /collections/{slug} segment.
+      const slugMatch = itemUrl.match(/\/collections\/([^/?#]+)/);
       const slug = slugMatch?.[1] ?? title.toLowerCase().replace(/\s+/g, '-');
       return {
         slug,
         title,
         ...(description && { description }),
+        // Collection size is the top-level `count`; item.total/item.digitized are different
+        // figures for the same result. typeof-guarded so a genuine count: 0 survives.
+        ...(typeof r.count === 'number' && { item_count: r.count }),
         url: itemUrl,
       };
     });

@@ -22,7 +22,13 @@ export type RawLocSearchResult = {
   partof_title?: string[];
   /** Hierarchy of containing collections/publications */
   partof?: string[];
-  /** Number of digitized items */
+  /**
+   * Number of items in the collection, on /collections/ browse results. Distinct from the
+   * nested `item.total` / `item.digitized`, which report different figures for the same
+   * result — read `count` for a collection's size, never `item.*`.
+   */
+  count?: number;
+  /** Per-result detail block (e.g. `total`, `digitized`); shape varies by endpoint */
   item?: Record<string, unknown>;
 };
 
@@ -32,7 +38,12 @@ export type RawLocPagination = {
   to?: number;
   total?: number;
   perpage?: number;
-  results?: number;
+  /**
+   * Display range for the current page ("1 - 3") despite the numeric-sounding name — LOC
+   * sends a string on the /search/, /collections/, and /collections/{slug}/ endpoints.
+   * Only stands in for a missing `total` when it is genuinely numeric.
+   */
+  results?: number | string;
   page?: number;
   last?: number;
   of?: number;

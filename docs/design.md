@@ -6,7 +6,7 @@
 
 | Name | Description | Key Inputs | Annotations | Errors |
 |:-----|:------------|:-----------|:------------|:-------|
-| `libofcongress_search` | Search LOC digital collections by keyword with format, date, and subject filters. Returns item summaries with titles, dates, descriptions, and LOC IDs for follow-up retrieval. | `query`, `format`, `date_start`, `date_end`, `subject`, `location`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
+| `libofcongress_search` | Search LOC digital collections by keyword with format, date, subject, and collection filters. Returns item summaries with titles, dates, descriptions, and LOC IDs for follow-up retrieval. | `query`, `format`, `date_start`, `date_end`, `subject`, `location`, `collection_slug`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `incompatible_filters` (ValidationError), `collection_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
 | `libofcongress_get_item` | Retrieve full metadata for a specific LOC item by ID — contributors, subjects, rights, resource links, and related items. | `item_id` | `readOnlyHint: true`, `openWorldHint: true` | `item_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
 | `libofcongress_search_newspapers` | Search historical newspaper pages (Chronicling America corpus) with full-text OCR content. Returns matching pages with article snippets and publication details. Accepts keyword, date range, state, and newspaper title filters. | `query`, `date_start`, `date_end`, `state`, `newspaper_title`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
 | `libofcongress_get_newspaper_page` | Retrieve the full OCR text of a specific newspaper page. Pass the `url` field from a `libofcongress_search_newspapers` result — two hops total: search, then this tool. Returns `ocr_available: false` when the page has no digitized text. | `page_url` | `readOnlyHint: true`, `openWorldHint: true` | `page_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
@@ -87,7 +87,7 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 
 ### `libofcongress_search`
 
-**Description:** Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Use `libofcongress_get_item` to retrieve full metadata for a specific result.
+**Description:** Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location, or scope the search to a single curated collection. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Use `libofcongress_get_item` to retrieve full metadata for a specific result.
 
 **Input:**
 - `query: string` — full-text search across metadata and available descriptive text
@@ -96,12 +96,15 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 - `date_end?: number` — end year (e.g., 1930); inclusive
 - `subject?: string` — subject heading filter; use `libofcongress_search_subjects` to find exact headings
 - `location?: string` — geographic location filter (e.g., "oklahoma", "washington d.c.")
+- `collection_slug?: string` — scope the search to one curated collection, via its `/collections/{slug}/` endpoint; slugs come from `libofcongress_browse_collections`. Mutually exclusive with `format`
 - `limit?: number` — results per page, default 25, max 100
 - `page?: number` — 1-indexed page number
 
-**Output:** Array of item summaries, each with `id` (use in `libofcongress_get_item`), `title`, `date`, `description`, `format`, `url`. Includes `total` count and `pagination` object. If `total > limit`, indicates truncation with next-page info.
+**Output:** Array of item summaries, each with `id` (use in `libofcongress_get_item`), `title`, `date`, `description`, `format`, `url`. Includes `total` count and `pagination` object. If `total > limit`, indicates truncation with next-page info. `enrichment.effectiveCollectionSlug` echoes the applied collection scope; absent when the search covered all of LOC.
 
 **Errors:**
+- `incompatible_filters` (ValidationError, non-retryable) — `format` and `collection_slug` were both supplied. Each selects a different LOC base path (`/{format}/` vs `/collections/{slug}/`), so no single request can honor both. Recovery: drop one — omit `format` and filter on each result's `format` field, or omit `collection_slug`.
+- `collection_not_found` (NotFound) — `collection_slug` does not resolve to a LOC collection (upstream 404). Recovery: call `libofcongress_browse_collections` and pass a slug exactly as returned; slugs are not derivable from the collection title.
 - `rate_limit_exceeded` (ServiceUnavailable, non-retryable for 1 hour) — 20 req/min exceeded; LOC blocks for 1 hour. Message: "LOC API rate limit exceeded. Requests are blocked for approximately 1 hour. Reduce request frequency to stay under 20 req/min."
 
 **Empty results:** returned as success with `enrichment.notice` populated — the handler returns `{ items: [], total: 0, ... }` with a contextual recovery hint in `enrichment.notice` rather than throwing an error.
@@ -188,14 +191,14 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 
 ### `libofcongress_browse_collections`
 
-**Description:** List and browse the Library of Congress curated digital collections. Returns collection names, descriptions, item counts, and slugs. Optionally filter by keyword. Collections are curated subsets of the digital holdings — each has a specific focus (e.g., "Civil War Glass Negatives", "Baseball Cards", "WPA Posters"). Use the collection slug with `libofcongress_search` to scope searches to a single collection.
+**Description:** List and browse the Library of Congress curated digital collections. Returns collection names, descriptions, item counts, and slugs. Optionally filter by keyword. Collections are curated subsets of the digital holdings — each has a specific focus (e.g., "Civil War Glass Negatives", "Baseball Cards", "WPA Posters"). Pass a returned slug to `libofcongress_search` as `collection_slug` to search inside one collection.
 
 **Input:**
 - `query?: string` — optional keyword to filter collections by name or description
 - `limit?: number` — max results, default 25, max 100
 - `page?: number` — 1-indexed page number
 
-**Output:** Array of collection summaries, each with `slug` (use in `libofcongress_search` partof filter), `title`, `description`, `item_count`, and `url`. Includes `total` count.
+**Output:** Array of collection summaries, each with `slug` (pass to `libofcongress_search` as `collection_slug`), `title`, `description`, `item_count`, and `url`. Includes `total` count. `slug` is the first path segment after `/collections/` in the collection's route — derived from the URL, not the title, which does not reliably match it ("Aaron Copland Collection" lives at `aaron-copland`). `item_count` comes from the upstream collection-level `count`.
 
 **Errors:**
 - `rate_limit_exceeded` (ServiceUnavailable, non-retryable for 1 hour) — see `libofcongress_search` error above.
@@ -281,7 +284,15 @@ The old `chroniclingamerica.loc.gov/search/pages/results/` endpoint returns 404 
 
 ### No collection-browsing detail tool
 
-The design considered a `loc_get_collection` tool for detailed collection metadata. Dropped — `libofcongress_browse_collections` returns collection descriptions and item counts inline, and items within a collection are searchable via `libofcongress_search` with the collection slug in `partof` facet. A separate detail-fetch tool would add a round trip without material gain.
+The design considered a `loc_get_collection` tool for detailed collection metadata. Dropped — `libofcongress_browse_collections` returns collection descriptions and item counts inline, and items within a collection are searchable via `libofcongress_search`'s `collection_slug` filter. A separate detail-fetch tool would add a round trip without material gain.
+
+### Collection scoping routes through the collection endpoint, not a facet
+
+An earlier iteration of this document claimed collection scoping worked by passing the slug as a `partof` facet (`fa=partof:{slug}`) on `/search/`. It does not — that request returns zero results. The mechanism that works is LOC's own `/collections/{slug}/` endpoint, which accepts the same query string as `/search/` and returns the same `results[]`/`pagination` envelope, so it needed no new parsing path. Hence `collection_slug` as one additive parameter on `libofcongress_search` rather than a second search tool.
+
+The consequence is that `format` and `collection_slug` are mutually exclusive: both choose a base path (`/{format}/` vs `/collections/{slug}/`), and there is no verified way to facet by format *within* a collection. The tool rejects the pair with `incompatible_filters` rather than silently picking a winner — a search the caller did not ask for still returns plausible-looking results, which is worse than a failure that names the choice.
+
+An unrecognized slug 404s upstream, which surfaces as `collection_not_found` naming the slug and pointing back at `libofcongress_browse_collections`. Slugs are not pre-validated with an extra request: the 404 already carries the signal, and a speculative round trip would spend the rate-limit budget to learn nothing new.
 
 ### No LC Linked Data authority record detail
 

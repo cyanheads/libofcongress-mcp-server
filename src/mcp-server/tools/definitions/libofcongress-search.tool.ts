@@ -10,7 +10,7 @@ import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 export const locSearch = tool('libofcongress_search', {
   title: 'Search LOC Collections',
   description:
-    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Each result carries is_item: pass the id of a result where is_item is true to libofcongress_get_item for full metadata; results where is_item is false are non-item resources (collections, exhibit and research-guide pages, newspaper-page results) with no item record — open their url instead. Use libofcongress_search_subjects first to find the exact LCSH heading spelling before applying a subject filter.',
+    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location, or scope the search to a single curated collection with collection_slug. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Each result carries is_item: pass the id of a result where is_item is true to libofcongress_get_item for full metadata; results where is_item is false are non-item resources (collections, exhibit and research-guide pages, newspaper-page results) with no item record — open their url instead. Use libofcongress_search_subjects first to find the exact LCSH heading spelling before applying a subject filter.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -45,6 +45,12 @@ export const locSearch = tool('libofcongress_search', {
       .optional()
       .describe(
         'Geographic location filter (e.g., "oklahoma", "washington d.c."). Lowercase, matches LOC location facets.',
+      ),
+    collection_slug: z
+      .string()
+      .optional()
+      .describe(
+        'Scope the search to one curated collection. Use a slug exactly as returned by libofcongress_browse_collections (e.g., "aaron-copland") — slugs are not derivable from the collection title. Cannot be combined with format; omit format and read each result\'s format field instead. Omit to search all of LOC.',
       ),
     limit: z
       .number()
@@ -98,6 +104,12 @@ export const locSearch = tool('libofcongress_search', {
   // the domain output. Keys are disjoint from output (total vs totalCount).
   enrichment: {
     effectiveQuery: z.string().describe('The query as submitted to the LOC API, after trimming.'),
+    effectiveCollectionSlug: z
+      .string()
+      .optional()
+      .describe(
+        'The collection the search was scoped to, after trimming. Absent when the search covered all of LOC.',
+      ),
     totalCount: z
       .number()
       .describe(
@@ -113,6 +125,21 @@ export const locSearch = tool('libofcongress_search', {
 
   errors: [
     {
+      reason: 'incompatible_filters',
+      code: JsonRpcErrorCode.ValidationError,
+      retryable: false,
+      when: 'format and collection_slug were both supplied; each selects a different LOC endpoint, so only one can apply.',
+      recovery:
+        "Drop one of the two. To search within the collection, omit format and filter on each result's format field; to search one material type across all of LOC, omit collection_slug.",
+    },
+    {
+      reason: 'collection_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'collection_slug does not resolve to a LOC collection.',
+      recovery:
+        'Call libofcongress_browse_collections and pass a slug exactly as returned; slugs are not derivable from the collection title.',
+    },
+    {
       reason: 'rate_limit_exceeded',
       code: JsonRpcErrorCode.RateLimited,
       retryable: false,
@@ -123,9 +150,14 @@ export const locSearch = tool('libofcongress_search', {
   ],
 
   async handler(input, ctx) {
+    // Empty string is what form-based clients send for an untouched optional field — treat it
+    // as absent, matching subject/location.
+    const collectionSlug = input.collection_slug?.trim() || undefined;
+
     ctx.log.info('libofcongress_search', {
       query: input.query,
       format: input.format,
+      collectionSlug,
       page: input.page,
     });
 
@@ -140,6 +172,17 @@ export const locSearch = tool('libofcongress_search', {
       );
     }
 
+    // format and collection_slug each select a different LOC base path, so no request can honor
+    // both. Reject rather than silently dropping one — a search the caller did not ask for that
+    // still returns plausible results is worse than a failure naming the choice.
+    if (input.format !== undefined && collectionSlug !== undefined) {
+      throw ctx.fail(
+        'incompatible_filters',
+        `format ("${input.format}") and collection_slug ("${collectionSlug}") cannot be combined — each scopes the search to a different LOC endpoint. Omit format to search within the collection and filter on each result's format field, or omit collection_slug to search that format across all of LOC.`,
+        { field: 'collection_slug', format: input.format, collectionSlug },
+      );
+    }
+
     const svc = getLocApiService();
     let result: Awaited<ReturnType<typeof svc.search>>;
     try {
@@ -147,6 +190,7 @@ export const locSearch = tool('libofcongress_search', {
         {
           query: input.query,
           ...(input.format !== undefined && { format: input.format }),
+          ...(collectionSlug !== undefined && { collectionSlug }),
           ...(input.date_start !== undefined && { dateStart: input.date_start }),
           ...(input.date_end !== undefined && { dateEnd: input.date_end }),
           ...(input.subject?.trim() && { subject: input.subject.trim() }),
@@ -160,12 +204,27 @@ export const locSearch = tool('libofcongress_search', {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
         throw ctx.fail('rate_limit_exceeded', err.message);
       }
+      // LOC 404s an unrecognized collection slug. Only the collection path can 404 here, and
+      // re-throwing as a typed failure keeps the internal request URL the service attached out
+      // of the wire — an agent needs the slug it got wrong, not our endpoint.
+      if (
+        collectionSlug !== undefined &&
+        err instanceof McpError &&
+        err.code === JsonRpcErrorCode.NotFound
+      ) {
+        throw ctx.fail(
+          'collection_not_found',
+          `No LOC collection has the slug "${collectionSlug}".`,
+          { field: 'collection_slug', collectionSlug },
+        );
+      }
       throw err;
     }
 
     const { total, page, pages, hasNext } = result.pagination;
 
     ctx.enrich.echo(input.query);
+    if (collectionSlug !== undefined) ctx.enrich({ effectiveCollectionSlug: collectionSlug });
     // Mirror the upstream total for agent reasoning. The empty-result branches below return
     // total: 0 and re-enrich with 0 so totalCount never contradicts the returned total — LOC
     // reports a nonzero pagination.total even for no-match queries. Last write wins.
@@ -183,6 +242,7 @@ export const locSearch = tool('libofcongress_search', {
       ctx.enrich.notice(
         `No items matched "${input.query}"` +
           (input.format ? ` with format "${input.format}"` : '') +
+          (collectionSlug ? ` in collection "${collectionSlug}"` : '') +
           (input.date_start || input.date_end
             ? ` in dates ${input.date_start ?? ''}–${input.date_end ?? ''}`
             : '') +

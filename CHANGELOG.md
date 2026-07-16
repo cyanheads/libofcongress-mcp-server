@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.13](changelog/0.2.x/0.2.13.md) — 2026-07-15
+
+Add collection_slug to libofcongress_search for collection-scoped search; fix browse_collections returning slugs that do not match LOC routes and discarding upstream item counts
+
 ## [0.2.12](changelog/0.2.x/0.2.12.md) — 2026-07-13
 
 Fix search_subjects returning non-LCSH authority records and empty-result totalCount mismatches across three tools; derive newspaper page date/sequence from the page URL

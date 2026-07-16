@@ -168,6 +168,128 @@ describe('locSearch', () => {
     expect(calledUrl).not.toContain('fa=');
   });
 
+  it('applies collection_slug — routes the search through the collection endpoint', async () => {
+    const fetchSpy = mockFetch(makeSearchResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({
+      query: 'correspondence',
+      collection_slug: 'aaron-copland',
+    });
+    await locSearch.handler(input, ctx);
+
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    expect(calledUrl).toContain('/collections/aaron-copland/');
+    expect(calledUrl).not.toContain('/search/');
+  });
+
+  it('strips an empty collection_slug string (form-client payload)', async () => {
+    const fetchSpy = mockFetch(makeSearchResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({ query: 'photos', collection_slug: '   ' });
+    await locSearch.handler(input, ctx);
+
+    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    expect(calledUrl).toContain('/search/');
+    expect(calledUrl).not.toContain('/collections/');
+    expect(getEnrichment(ctx).effectiveCollectionSlug).toBeUndefined();
+  });
+
+  it('echoes the applied collection scope in enrichment', async () => {
+    vi.stubGlobal('fetch', mockFetch(makeSearchResponse()));
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({
+      query: 'correspondence',
+      collection_slug: '  aaron-copland  ',
+    });
+    await locSearch.handler(input, ctx);
+
+    expect(getEnrichment(ctx).effectiveCollectionSlug).toBe('aaron-copland');
+  });
+
+  it('names the collection scope in the empty-result notice', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeSearchResponse({ results: [], pagination: { total: 0, perpage: 25, pages: 0 } }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({
+      query: 'zzzz_no_match',
+      collection_slug: 'aaron-copland',
+    });
+    await locSearch.handler(input, ctx);
+
+    // A real collection with no matches must read differently from a bad slug, which 404s
+    expect(String(getEnrichment(ctx).notice)).toContain('aaron-copland');
+  });
+
+  it('rejects format + collection_slug with a typed incompatible_filters failure', async () => {
+    const fetchSpy = mockFetch(makeSearchResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext({ errors: locSearch.errors });
+    const input = locSearch.input.parse({
+      query: 'letters',
+      format: 'photo',
+      collection_slug: 'aaron-copland',
+    });
+
+    const err = await locSearch.handler(input, ctx).catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: { reason: 'incompatible_filters' },
+    });
+    // Rejected before any request — never silently pick one filter and search anyway
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // The message must name the way out, not just the conflict
+    expect((err as Error).message).toContain('collection_slug');
+    expect((err as Error).message).toContain('format');
+  });
+
+  it('surfaces an unrecognized collection_slug as collection_not_found', async () => {
+    vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
+    const ctx = createMockContext({ errors: locSearch.errors });
+    const input = locSearch.input.parse({
+      query: 'letters',
+      collection_slug: 'no-such-collection-xyz9',
+    });
+
+    const err = await locSearch.handler(input, ctx).catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      data: { reason: 'collection_not_found', collectionSlug: 'no-such-collection-xyz9' },
+    });
+    expect((err as Error).message).toContain('no-such-collection-xyz9');
+  });
+
+  it('keeps the internal request URL out of a collection_not_found failure', async () => {
+    vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
+    const ctx = createMockContext({ errors: locSearch.errors });
+    const input = locSearch.input.parse({ query: 'letters', collection_slug: 'nope-xyz9' });
+
+    const err = (await locSearch.handler(input, ctx).catch((e: unknown) => e)) as {
+      message: string;
+      data?: Record<string, unknown>;
+    };
+    // The service attaches the built endpoint to its raw notFound; the tool must not relay it
+    expect(err.data).not.toHaveProperty('url');
+    expect(JSON.stringify(err.data)).not.toContain('loc.gov');
+    expect(err.message).not.toContain('loc.gov');
+  });
+
+  it('does not report a 404 as collection_not_found when no collection_slug was given', async () => {
+    vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
+    const ctx = createMockContext({ errors: locSearch.errors });
+    const input = locSearch.input.parse({ query: 'letters' });
+
+    const err = (await locSearch.handler(input, ctx).catch((e: unknown) => e)) as {
+      data?: Record<string, unknown>;
+    };
+    expect(err.data?.reason).not.toBe('collection_not_found');
+  });
+
   it('computes has_next correctly for multi-page results', async () => {
     vi.stubGlobal(
       'fetch',
