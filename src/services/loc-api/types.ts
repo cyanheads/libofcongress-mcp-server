@@ -36,16 +36,23 @@ export type RawLocSearchResult = {
 export type RawLocPagination = {
   from?: number;
   to?: number;
+  /**
+   * Total *page* count for the query — despite the name, NOT the item count. LOC's live
+   * /search/, /newspapers/, and /collections/ envelopes report the item count in `of` and the
+   * page count here (e.g. `of: 1_780_109`, `total: 17_802`, `perpage: 100`). Read `of` for the
+   * result total; this only stands in when `of` is absent (mocked/legacy shapes).
+   */
   total?: number;
   perpage?: number;
   /**
    * Display range for the current page ("1 - 3") despite the numeric-sounding name — LOC
    * sends a string on the /search/, /collections/, and /collections/{slug}/ endpoints.
-   * Only stands in for a missing `total` when it is genuinely numeric.
+   * Only stands in for a missing total when it is genuinely numeric.
    */
   results?: number | string;
   page?: number;
-  last?: number;
+  last?: number | string;
+  /** Total number of matching items ("… of 1,780,109") — the authoritative result count. */
   of?: number;
   pages?: number;
   next?: string;
@@ -130,6 +137,12 @@ export type LocPagination = {
   perPage: number;
   pages: number;
   hasNext: boolean;
+  /**
+   * True when the match set is larger than LOC will page through (~100,000 items): `pages`/
+   * `hasNext` are capped to the retrieval ceiling, or the requested page already lies beyond it.
+   * Handlers surface this as a recovery notice — partition by date/facet to reach the rest.
+   */
+  ceilingReached: boolean;
 };
 
 /** Normalized full item record */

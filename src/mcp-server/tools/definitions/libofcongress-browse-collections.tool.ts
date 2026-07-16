@@ -136,14 +136,10 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
       return { collections: [], total: 0, page, pages: 0, has_next: false };
     }
 
-    // Detect contradictory pagination: LOC sometimes returns items on out-of-range pages.
-    if (pages > 0 && page > pages) {
-      ctx.enrich.notice(
-        `No results on page ${page} — there are ${pages} page(s) total (${total} collections). Use a page number between 1 and ${pages}.`,
-      );
-      return { collections: [], total, page, pages, has_next: false };
-    }
-
+    // Non-empty results are always returned: LOC's total can under-report the retrievable depth,
+    // so a page beyond the computed count can still carry real collections — discarding them (as
+    // an earlier "contradictory pagination" guard did) dropped valid data. The collections corpus
+    // is far below LOC's ~100k retrieval ceiling, so no ceiling disclosure applies here. See #33.
     return {
       collections: result.items,
       total,

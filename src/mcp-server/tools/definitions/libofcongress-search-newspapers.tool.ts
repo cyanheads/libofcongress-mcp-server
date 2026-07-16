@@ -76,8 +76,16 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       .describe('Newspaper page results matching the search query and filters.'),
     total: z.number().describe('Total number of matching newspaper pages in the result set.'),
     page: z.number().describe('Current 1-indexed page number.'),
-    pages: z.number().describe('Total number of pages available.'),
-    has_next: z.boolean().describe('True when more pages are available after this one.'),
+    pages: z
+      .number()
+      .describe(
+        'Total retrievable pages. For result sets larger than LOC will page through (~100,000 pages) this is capped, and a notice discloses how to reach the rest (partition by date/state).',
+      ),
+    has_next: z
+      .boolean()
+      .describe(
+        "True when a retrievable next page follows this one. Never promises a page past LOC's ~100,000-item retrieval ceiling.",
+      ),
   }),
 
   // Agent-facing success-path context — query echo, result count, and empty-result
@@ -149,7 +157,7 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       throw err;
     }
 
-    const { total, page, pages, hasNext } = result.pagination;
+    const { total, page, pages, hasNext, ceilingReached } = result.pagination;
 
     ctx.enrich.echo(input.query);
     // Mirror the upstream total for agent reasoning. The empty-result branches below return
@@ -161,7 +169,9 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       // pages === 0 is the sentinel for a LOC 400 (out-of-range page request).
       if (pages === 0 && page > 1) {
         ctx.enrich.notice(
-          `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
+          ceilingReached
+            ? `Page ${page} is past LOC's ~100,000-item retrieval ceiling for query "${input.query}" — Chronicling America serves nothing deeper, regardless of the total match count. Narrow the search with a date range (date_start/date_end) or state so the target pages fall within the first 100,000 results.`
+            : `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
         );
         ctx.enrich.total(0);
         return { items: [], total: 0, page, pages: 0, has_next: false };
@@ -178,11 +188,15 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       return { items: [], total: 0, page, pages: 0, has_next: false };
     }
 
-    if (pages > 0 && page > pages) {
+    // Non-empty results are always returned: LOC's total can under-report the retrievable depth,
+    // so a page beyond the computed count can still carry real pages — discarding them (as an
+    // earlier "contradictory pagination" guard did) dropped valid data. See #33.
+    if (ceilingReached) {
+      // The match set is larger than LOC will page through — disclose the cap on both surfaces so
+      // the agent knows has_next stops at the ceiling and how to reach the rest.
       ctx.enrich.notice(
-        `No results on page ${page} — query has ${pages} page(s) total (${total} items). Use a page number between 1 and ${pages}.`,
+        `This query matches ${total.toLocaleString()} pages, but LOC pages through only the first ~100,000. Results past page ${pages} at this page size are unretrievable — partition by date range (date_start/date_end) or state and page within each slice to reach the rest.`,
       );
-      return { items: [], total, page, pages, has_next: false };
     }
 
     return {

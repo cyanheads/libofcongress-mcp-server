@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.16](changelog/0.2.x/0.2.16.md) — 2026-07-16
+
+Honest search pagination: total now reports matching items not pages, pages/has_next stop at LOC's ~100,000-item retrieval ceiling with partition guidance, and the guard that discarded valid deep-page results is removed across all three search tools; content/structuredContent parity closed in search and get_newspaper_page
+
 ## [0.2.15](changelog/0.2.x/0.2.15.md) — 2026-07-16
 
 search_subjects stops reporting false empties when LCSH headings rank below name-authority records; LOC fetches gain a 30s timeout ceiling and a transient-only retry that never re-hits the rate-limit path; the mocked test suite no longer pays live request pacing (~137s → ~2.8s)

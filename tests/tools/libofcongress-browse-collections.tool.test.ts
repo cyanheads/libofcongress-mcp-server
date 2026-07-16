@@ -276,7 +276,8 @@ describe('locBrowseCollections', () => {
     expect(String(enrichment.notice)).toContain('5');
   });
 
-  it('returns empty result with enrichment.notice when page > pages (contradictory pagination)', async () => {
+  it('returns collections served beyond the computed count instead of discarding them (#33 Bug B)', async () => {
+    // A page past the computed count can still carry real collections — the old guard discarded them.
     vi.stubGlobal(
       'fetch',
       mockFetch(
@@ -295,12 +296,28 @@ describe('locBrowseCollections', () => {
     const input = locBrowseCollections.input.parse({ page: 10 });
     const result = await locBrowseCollections.handler(input, ctx);
 
-    expect(result.collections).toHaveLength(0);
-    expect(result.has_next).toBe(false);
-    const enrichment = getEnrichment(ctx);
-    expect(enrichment.notice).toBeDefined();
-    expect(String(enrichment.notice)).toContain('10');
-    expect(String(enrichment.notice)).toContain('2');
+    expect(result.collections).toHaveLength(1);
+    expect(result.collections[0].slug).toBe('some-col');
+    expect(result.page).toBe(10);
+    expect(result.pages).toBeGreaterThanOrEqual(result.page);
+    expect(getEnrichment(ctx).notice).toBeUndefined();
+  });
+
+  it('reads total from `of` (the collection count), not the LOC page-count `total`', async () => {
+    // Live /collections/ shape: `of` is the collection count, `total` the page count.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeCollectionsResponse({
+          pagination: { of: 583, total: 24, perpage: 25, results: '1 - 25' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const result = await locBrowseCollections.handler(locBrowseCollections.input.parse({}), ctx);
+
+    expect(result.total).toBe(583);
+    expect(getEnrichment(ctx).totalCount).toBe(583);
   });
 
   it('returns empty result with no-query-fallback enrichment.notice when query absent and results empty', async () => {

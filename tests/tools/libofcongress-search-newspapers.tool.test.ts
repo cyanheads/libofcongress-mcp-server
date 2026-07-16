@@ -283,7 +283,8 @@ describe('locSearchNewspapers', () => {
     expect(() => locSearchNewspapers.input.parse({ query: '' })).toThrow();
   });
 
-  it('returns empty result with enrichment.notice when page > pages and items present', async () => {
+  it('returns real pages served beyond the computed count instead of discarding them (#33 Bug B)', async () => {
+    // A page past the computed count can still carry real pages — the old guard discarded them.
     vi.stubGlobal(
       'fetch',
       mockFetch(
@@ -291,7 +292,7 @@ describe('locSearchNewspapers', () => {
           results: [
             {
               url: 'https://www.loc.gov/resource/sn000/1900-01-01/ed-1/?sp=1',
-              title: 'Some Page',
+              title: 'Deep-page Result',
             },
           ],
           pagination: { total: 100, perpage: 25, pages: 4, page: 10 },
@@ -302,12 +303,37 @@ describe('locSearchNewspapers', () => {
     const input = locSearchNewspapers.input.parse({ query: 'election', page: 10 });
     const result = await locSearchNewspapers.handler(input, ctx);
 
-    expect(result.items).toHaveLength(0);
-    expect(result.has_next).toBe(false);
-    const enrichment = getEnrichment(ctx);
-    expect(enrichment.notice).toBeDefined();
-    expect(String(enrichment.notice)).toContain('10');
-    expect(String(enrichment.notice)).toContain('4');
+    expect(result.items).toHaveLength(1);
+    expect(result.page).toBe(10);
+    expect(result.pages).toBeGreaterThanOrEqual(result.page);
+    expect(getEnrichment(ctx).notice).toBeUndefined();
+  });
+
+  it('caps pages at the ~100k ceiling and discloses it for the huge newspaper corpus (#33 Bug A)', async () => {
+    // Chronicling America "the" reports ~22.7M pages in `of`; `total` is the page count.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeNewspaperSearchResponse({
+          results: [
+            {
+              url: 'https://www.loc.gov/resource/sn000/1900-01-01/ed-1/?sp=1',
+              title: 'Deep page within the ceiling',
+            },
+          ],
+          pagination: { of: 22730762, total: 227308, perpage: 100, results: '24901 - 25000' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearchNewspapers.input.parse({ query: 'the', limit: 100, page: 250 });
+    const result = await locSearchNewspapers.handler(input, ctx);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.total).toBe(22730762);
+    expect(result.pages).toBe(1000);
+    expect(result.has_next).toBe(true);
+    expect(String(getEnrichment(ctx).notice)).toMatch(/100,000|partition/);
   });
 
   it('empty result enrichment.notice includes state filter when state was provided', async () => {

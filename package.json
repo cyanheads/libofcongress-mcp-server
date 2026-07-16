@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/libofcongress-mcp-server",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "mcpName": "io.github.cyanheads/libofcongress-mcp-server",
   "description": "Search LOC digital collections, browse Chronicling America newspapers with full OCR text, and look up LC Subject Headings via MCP. STDIO or Streamable HTTP.",
   "type": "module",
@@ -86,7 +86,7 @@
     "@types/node": "^26.1.1",
     "depcheck": "^1.4.7",
     "ignore": "^7.0.6",
-    "tsc-alias": "^1.9.0",
+    "tsc-alias": "^1.9.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
   }

@@ -25,6 +25,24 @@ import type {
 
 const LOC_BASE = 'https://www.loc.gov';
 
+/**
+ * LOC serves search results only through roughly the first 100,000 matches. A deeper page
+ * 302-redirects to an error page that terminates as HTTP 400 (absorbed by
+ * {@link LocApiService.fetchSearchJson}'s `allowStatus`), so pages past this depth are
+ * unretrievable regardless of the reported total — pagination must not advertise them.
+ */
+const RETRIEVAL_CEILING = 100_000;
+
+/** The deepest page whose items still fall within the retrieval ceiling at a given page size. */
+function maxRetrievablePage(perPage: number): number {
+  return Math.max(1, Math.floor(RETRIEVAL_CEILING / perPage));
+}
+
+/** True when a page lies entirely beyond LOC's ~100k-item retrieval ceiling (LOC will 400 it). */
+function isBeyondRetrievalCeiling(page: number, perPage: number): boolean {
+  return page > maxRetrievablePage(perPage);
+}
+
 /** Matches an HTML response body — indicates rate-limiting or a maintenance page. */
 const HTML_RESPONSE_RE = /^\s*<(!DOCTYPE\s+html|html[\s>])/i;
 
@@ -116,15 +134,32 @@ function normalizePagination(
   raw: RawLocPagination | undefined,
   page: number,
   limit: number,
+  itemCount: number,
 ): LocPagination {
-  // `results` is a display range string ("1 - 3") on every observed endpoint, so it can only
-  // stand in for a missing `total` when LOC actually sends a number — a string would flow into
-  // Math.ceil below and yield NaN pages.
-  const total = raw?.total ?? (typeof raw?.results === 'number' ? raw.results : 0);
+  // LOC's live envelope reports the item count in `of` and the page count in `total` (inverse of
+  // the intuitive names). Prefer `of`; fall back to `total`, then a numeric `results` display
+  // range — a string `results` would flow into Math.ceil below and yield NaN pages. Mocked and
+  // legacy shapes without `of` keep their `total`-as-count meaning through the fallback.
+  const total = raw?.of ?? raw?.total ?? (typeof raw?.results === 'number' ? raw.results : 0);
   const perPage = raw?.perpage ?? limit;
-  const pages = raw?.pages ?? (total > 0 ? Math.ceil(total / perPage) : 1);
+  const rawPages = raw?.pages ?? (total > 0 ? Math.ceil(total / perPage) : 1);
+
+  // LOC stops serving past ~RETRIEVAL_CEILING items, so pages beyond that depth are unretrievable
+  // even though the total implies they exist. Cap the advertised page count so `hasNext` never
+  // promises a page the API will reject.
+  const cap = maxRetrievablePage(perPage);
+  const ceilingReached = rawPages > cap;
+  let pages = ceilingReached ? cap : rawPages;
+
+  // Trust a real served page over the computed count: when LOC returns items past the computed
+  // last page (its total under-reported the retrievable depth), advertise at least the reached
+  // page so `page <= pages` stays consistent — but never claim a page past the ceiling.
+  if (itemCount > 0 && page > pages && !isBeyondRetrievalCeiling(page, perPage)) {
+    pages = page;
+  }
+
   const hasNext = page < pages;
-  return { total, page, perPage, pages, hasNext };
+  return { total, page, perPage, pages, hasNext, ceilingReached };
 }
 
 export class LocApiService {
@@ -305,17 +340,25 @@ export class LocApiService {
     const url = `${endpoint}?${qs}`;
     const data = await this.fetchSearchJson<RawLocSearchResponse>(url, ctx);
     if (data === null) {
-      // LOC returned 400/520 — page is out of range.
-      // Return pages: 0 as a sentinel so handlers can emit a distinct message.
+      // LOC returned 400/520 — page is out of range. pages: 0 is the sentinel handlers key their
+      // distinct out-of-range message on; ceilingReached separates "asked past the ~100k retrieval
+      // ceiling" (recovery: partition by facet) from a genuine overshoot (recovery: smaller page).
       return {
         items: [],
-        pagination: { total: 0, page, perPage: limit, pages: 0, hasNext: false },
+        pagination: {
+          total: 0,
+          page,
+          perPage: limit,
+          pages: 0,
+          hasNext: false,
+          ceilingReached: isBeyondRetrievalCeiling(page, limit),
+        },
       };
     }
     const rawResults = data.results ?? data.content?.results ?? [];
     const rawPagination = data.pagination ?? data.content?.pagination;
     const items = rawResults.map(normalizeSearchResult);
-    return { items, pagination: normalizePagination(rawPagination, page, limit) };
+    return { items, pagination: normalizePagination(rawPagination, page, limit, items.length) };
   }
 
   /** Get full metadata for a single LOC item */
@@ -421,7 +464,14 @@ export class LocApiService {
     if (data === null) {
       return {
         items: [],
-        pagination: { total: 0, page, perPage: limit, pages: 0, hasNext: false },
+        pagination: {
+          total: 0,
+          page,
+          perPage: limit,
+          pages: 0,
+          hasNext: false,
+          ceilingReached: isBeyondRetrievalCeiling(page, limit),
+        },
       };
     }
     const rawResults = data.results ?? data.content?.results ?? [];
@@ -451,7 +501,7 @@ export class LocApiService {
       };
     });
 
-    return { items, pagination: normalizePagination(rawPagination, page, limit) };
+    return { items, pagination: normalizePagination(rawPagination, page, limit, items.length) };
   }
 
   /** Retrieve full OCR text for a specific newspaper page via its resource URL */
@@ -576,7 +626,14 @@ export class LocApiService {
     if (data === null) {
       return {
         items: [],
-        pagination: { total: 0, page, perPage: limit, pages: 0, hasNext: false },
+        pagination: {
+          total: 0,
+          page,
+          perPage: limit,
+          pages: 0,
+          hasNext: false,
+          ceilingReached: isBeyondRetrievalCeiling(page, limit),
+        },
       };
     }
     const rawResults = data.results ?? data.content?.results ?? [];
@@ -604,7 +661,7 @@ export class LocApiService {
       };
     });
 
-    return { items, pagination: normalizePagination(rawPagination, page, limit) };
+    return { items, pagination: normalizePagination(rawPagination, page, limit, items.length) };
   }
 }
 

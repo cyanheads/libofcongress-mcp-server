@@ -5,7 +5,11 @@
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createInMemoryStorage,
+  createMockContext,
+  getEnrichment,
+} from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locGetNewspaperPage } from '@/mcp-server/tools/definitions/libofcongress-get-newspaper-page.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
@@ -114,7 +118,7 @@ describe('locGetNewspaperPage', () => {
     expect(result.ocr_text).toBe('');
   });
 
-  it('still returns page metadata when OCR fetch fails (graceful degradation)', async () => {
+  it('still returns page metadata and discloses the OCR retrieval miss when OCR fetch fails (graceful degradation)', async () => {
     // First call: resource JSON; second call: OCR fetch errors
     vi.stubGlobal(
       'fetch',
@@ -127,6 +131,12 @@ describe('locGetNewspaperPage', () => {
     expect(result.ocr_available).toBe(true);
     expect(result.ocr_text).toBe(''); // OCR unavailable but not an error
     expect(result.newspaper_title).toBe('The Daily Oklahoman');
+    // The retrieval-miss fact now rides ctx.enrich.notice, reaching structuredContent (notice
+    // field) and content[] (enrichment trailer) identically — a structured-only client is no
+    // longer blind to it, since the bare ocr_available:true/ocr_text:"" shape is ambiguous. #31
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.notice).toBeDefined();
+    expect(String(enrichment.notice)).toContain('OCR');
   });
 
   it('throws NotFound when resource key is missing from response', async () => {
@@ -277,7 +287,36 @@ describe('locGetNewspaperPage', () => {
     expect(ocrFetchUrl).not.toContain('segment=https');
   });
 
-  it('format() notes retrieval failure when ocr_available true but ocr_text empty', () => {
+  it('emits the OCR retrieval-miss notice only when ocr_available is true and ocr_text is empty (#31)', async () => {
+    // Retrieval miss (fulltext_file present, OCR fetch fails) → notice present.
+    vi.stubGlobal(
+      'fetch',
+      mockFetchSequence({ body: makeResourceResponse() }, { body: 'err', status: 503 }),
+    );
+    let ctx = createMockContext();
+    await locGetNewspaperPage.handler(locGetNewspaperPage.input.parse({ page_url: PAGE_URL }), ctx);
+    expect(getEnrichment(ctx).notice).toBeDefined();
+
+    // OCR text present → no notice; the text speaks for itself.
+    vi.stubGlobal('fetch', mockFetchSequence({ body: makeResourceResponse() }, { body: OCR_JSON }));
+    ctx = createMockContext();
+    await locGetNewspaperPage.handler(locGetNewspaperPage.input.parse({ page_url: PAGE_URL }), ctx);
+    expect(getEnrichment(ctx).notice).toBeUndefined();
+
+    // Image-only page (ocr_available false) → no notice; that state is already honest in
+    // structuredContent via ocr_available:false, so no disclosure is needed.
+    vi.stubGlobal(
+      'fetch',
+      mockFetchSequence({ body: makeResourceResponse({ fulltext_file: undefined }) }),
+    );
+    ctx = createMockContext();
+    await locGetNewspaperPage.handler(locGetNewspaperPage.input.parse({ page_url: PAGE_URL }), ctx);
+    expect(getEnrichment(ctx).notice).toBeUndefined();
+  });
+
+  it('format() carries no retrieval-miss prose (the fact rides enrichment, not format) (#31)', () => {
+    // format() renders the domain payload only; the retrieval-miss disclosure is enrichment, so
+    // it must not also appear here (that would double it on content[] under the enrichment trailer).
     const output = locGetNewspaperPage.output.parse({
       page_url: PAGE_URL,
       ocr_text: '',
@@ -285,7 +324,8 @@ describe('locGetNewspaperPage', () => {
     });
     const blocks = locGetNewspaperPage.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
-    expect(text).toContain('could not be retrieved');
+    expect(text).toContain('**OCR available:** Yes');
+    expect(text).not.toContain('could not be retrieved');
   });
 
   it('security: SSRF attempt via non-LOC host is rejected with ValidationError', async () => {

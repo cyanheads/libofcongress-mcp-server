@@ -40,6 +40,17 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       ),
   }),
 
+  // Agent-facing retrieval-state disclosure. Reaches structuredContent and content[] identically,
+  // so a structured client sees the same fact format() would otherwise render only into text.
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Set when ocr_available is true but ocr_text is empty — the page has digitized OCR, but the text service did not return it this call. Distinguishes a transient retrieval miss from a genuinely image-only page (where ocr_available is false). Absent when OCR text was returned or the page has no OCR.',
+      ),
+  },
+
   errors: [
     {
       reason: 'page_not_found',
@@ -70,8 +81,9 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     }
 
     const svc = getLocApiService();
+    let result: Awaited<ReturnType<typeof svc.getNewspaperPage>>;
     try {
-      return await svc.getNewspaperPage(input.page_url, ctx);
+      result = await svc.getNewspaperPage(input.page_url, ctx);
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
         throw ctx.fail('page_not_found', err.message, { pageUrl: input.page_url });
@@ -81,6 +93,17 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       }
       throw err;
     }
+
+    // ocr_available true with empty ocr_text means the secondary OCR-text fetch came back empty —
+    // a retrieval miss, not an image-only page. structuredContent alone shows ocr_available:true,
+    // ocr_text:"" (ambiguous), so disclose the state as a notice reaching both surfaces. See #31.
+    if (result.ocr_available && !result.ocr_text) {
+      ctx.enrich.notice(
+        'OCR is digitized for this page, but the full text was not returned this call. Retry libofcongress_get_newspaper_page; a persistent empty result means the OCR text service is temporarily unavailable.',
+      );
+    }
+
+    return result;
   },
 
   format: (result) => {
@@ -95,13 +118,14 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     if (result.ocr_available && result.ocr_text) {
       lines.push('\n---\n');
       lines.push(result.ocr_text);
-    } else if (result.ocr_available && !result.ocr_text) {
-      lines.push('\n_OCR is digitized for this page but the text could not be retrieved._');
-    } else {
+    } else if (!result.ocr_available) {
       lines.push(
         '\n_No digitized OCR text available for this page (image-only digitization batch)._',
       );
     }
+    // The ocr_available-but-empty (retrieval miss) case is disclosed via ctx.enrich.notice in the
+    // handler — appended to content[] as the enrichment trailer and mirrored into
+    // structuredContent — so it isn't rendered here; doing both would double it on content[]. #31
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

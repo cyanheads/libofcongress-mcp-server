@@ -95,8 +95,16 @@ export const locSearch = tool('libofcongress_search', {
       .describe('Item summaries matching the search query and filters.'),
     total: z.number().describe('Total number of matching items across all pages.'),
     page: z.number().describe('Current 1-indexed page number.'),
-    pages: z.number().describe('Total number of pages available.'),
-    has_next: z.boolean().describe('True when more pages are available after this one.'),
+    pages: z
+      .number()
+      .describe(
+        'Total retrievable pages. For result sets larger than LOC will page through (~100,000 items) this is capped, and a notice discloses how to reach the rest (partition by date/subject/location).',
+      ),
+    has_next: z
+      .boolean()
+      .describe(
+        "True when a retrievable next page follows this one. Never promises a page past LOC's ~100,000-item retrieval ceiling.",
+      ),
   }),
 
   // Agent-facing success-path context — query echo, result count, and empty-result
@@ -221,7 +229,7 @@ export const locSearch = tool('libofcongress_search', {
       throw err;
     }
 
-    const { total, page, pages, hasNext } = result.pagination;
+    const { total, page, pages, hasNext, ceilingReached } = result.pagination;
 
     ctx.enrich.echo(input.query);
     if (collectionSlug !== undefined) ctx.enrich({ effectiveCollectionSlug: collectionSlug });
@@ -234,7 +242,9 @@ export const locSearch = tool('libofcongress_search', {
       // pages === 0 is the sentinel for a LOC 400 (out-of-range page request).
       if (pages === 0 && page > 1) {
         ctx.enrich.notice(
-          `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
+          ceilingReached
+            ? `Page ${page} is past LOC's ~100,000-item retrieval ceiling for query "${input.query}" — LOC serves nothing deeper, regardless of the total match count. Narrow the search with a date range (date_start/date_end), subject, or location so the target items fall within the first 100,000 results.`
+            : `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
         );
         ctx.enrich.total(0);
         return { items: [], total: 0, page, pages: 0, has_next: false };
@@ -252,13 +262,15 @@ export const locSearch = tool('libofcongress_search', {
       return { items: [], total: 0, page, pages: 0, has_next: false };
     }
 
-    // Detect contradictory pagination: LOC sometimes returns items on out-of-range pages.
-    // Surface a clear message rather than a confusing "Page 999 of 26" display.
-    if (pages > 0 && page > pages) {
+    // Non-empty results are always returned: LOC's total can under-report the retrievable depth,
+    // so a page beyond the computed count can still carry real items — discarding them (as an
+    // earlier "contradictory pagination" guard did) dropped valid data. See #33.
+    if (ceilingReached) {
+      // The match set is larger than LOC will page through — disclose the cap on both surfaces so
+      // the agent knows has_next stops at the ceiling and how to reach the rest.
       ctx.enrich.notice(
-        `No results on page ${page} — query has ${pages} page(s) total (${total} items). Use a page number between 1 and ${pages}.`,
+        `This query matches ${total.toLocaleString()} items, but LOC pages through only the first ~100,000. Results past page ${pages} at this page size are unretrievable — partition by date range (date_start/date_end), subject, or location and page within each slice to reach the rest.`,
       );
-      return { items: [], total, page, pages, has_next: false };
     }
 
     return {
@@ -278,7 +290,12 @@ export const locSearch = tool('libofcongress_search', {
     for (const item of result.items) {
       lines.push(`\n## ${item.title}`);
       lines.push(`**ID:** ${item.id}`);
-      if (item.is_item === false)
+      // Render both is_item states so a content[]-only client (no structuredContent) can tell a
+      // get_item-eligible result from a non-item one — the structured `is_item` flag alone never
+      // reaches it. See #31.
+      if (item.is_item)
+        lines.push('_Item — pass this ID to libofcongress_get_item for full metadata._');
+      else
         lines.push(
           '_Non-item result (collection/exhibit/guide/newspaper page) — not a libofcongress_get_item target; open the URL._',
         );

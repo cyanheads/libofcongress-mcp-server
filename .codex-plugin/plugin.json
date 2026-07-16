@@ -1,6 +1,6 @@
 {
   "name": "libofcongress-mcp-server",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "description": "Search LOC digital collections, browse Chronicling America newspapers with full OCR text, and look up LC Subject Headings via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",

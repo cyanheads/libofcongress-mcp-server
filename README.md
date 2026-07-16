@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.15-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.16-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -49,8 +49,8 @@ Search the LOC digital collections with full-text keyword matching and facet fil
 - Subject heading filter — use `libofcongress_search_subjects` first to get the exact LCSH spelling
 - Geographic location filter (e.g., `"oklahoma"`, `"washington d.c."`)
 - `collection_slug` scopes the search to one curated collection — pass a slug from `libofcongress_browse_collections`. Mutually exclusive with `format` (each selects a different LOC endpoint); an unknown slug returns `collection_not_found`
-- Pagination up to 100 results per page; contradictory pages (LOC API edge case) returned with a clear message
-- Empty results include a `message` field with recovery hints — echoes the applied filters
+- Pagination up to 100 results per page — `pages`/`has_next` respect LOC's ~100,000-item retrieval ceiling (a notice discloses how to reach the rest: partition by date, subject, or location); real results on a page beyond the reported total are always returned, never discarded
+- Empty results include a `notice` field with recovery hints — echoes the applied filters
 - Each result carries `is_item` — `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for non-item results (collections, exhibit/guide pages, newspaper pages); open their `url` instead
 
 ---
@@ -78,7 +78,7 @@ Search historical newspaper pages in the Chronicling America corpus via the LOC 
 - Filters: keyword, date range, US state (full state name), newspaper publication title (partial match)
 - Returns the `url` field needed by `libofcongress_get_newspaper_page` — do not construct these URLs manually
 - OCR quality varies by digitization batch and era; 19th-century and degraded materials may contain garbled text
-- Empty results include a `message` with recovery suggestions (broaden date, try different keywords, historical OCR caveat)
+- Empty results include a `notice` with recovery suggestions (broaden date, try different keywords, historical OCR caveat)
 
 ---
 
@@ -89,6 +89,7 @@ Retrieve the full OCR text and metadata for a specific newspaper page.
 - Accepts the `url` field from a `libofcongress_search_newspapers` result — validates the URL prefix before any outbound request
 - Fetches JSON from the LOC text-services endpoint (`tile.loc.gov`) and reads plain text from the `full_text` field
 - `ocr_available: false` when the page has no digitized text (image-only batch) — not an error, a data property
+- When `ocr_available` is `true` but the text service returns nothing, a notice discloses the retrieval miss on both response surfaces — distinct from a genuinely image-only page
 - Strips echoed `q=` params from fulltext URLs to avoid tile.loc.gov 404s (known LOC API quirk)
 
 ---
@@ -147,8 +148,8 @@ LOC-specific:
 
 Agent-friendly output:
 
-- Empty results always include a `message` field with recovery hints — echoes the applied filters and suggests how to broaden
-- Pagination status on every search response: `total`, `page`, `pages`, `has_next`
+- Empty results always include a `notice` field with recovery hints — echoes the applied filters and suggests how to broaden
+- Pagination status on every search response: `total`, `page`, `pages`, `has_next` — capped at LOC's ~100,000-item retrieval ceiling, with a notice disclosing how to page past it
 - `ocr_available` discriminator on newspaper page results so callers can branch on data availability without parsing text
 - Recovery hints on all error contracts — actionable next steps for the agent on every failure mode
 

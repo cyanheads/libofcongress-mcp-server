@@ -225,6 +225,67 @@ describe('LocApiService.search', () => {
     expect(result.pagination.pages).toBe(0);
   });
 
+  it('reads total from `of` (item count) and caps pages at the ~100k retrieval ceiling (#33)', async () => {
+    // Live LOC pagination: `of` is the item count, `total` the page count, and there is no `pages`
+    // key — the inverse of the intuitive names. ~1.78M items span ~17,800 pages, but only ~100,000
+    // items (1,000 pages at this size) are retrievable.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            { id: 'https://www.loc.gov/item/x/', title: 'X', url: 'https://www.loc.gov/item/x/' },
+          ],
+          pagination: { of: 1779931, total: 17800, perpage: 100, results: '1 - 100' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.search({ query: 'civil rights', limit: 100, page: 1 }, ctx);
+
+    expect(result.pagination.total).toBe(1779931);
+    expect(result.pagination.pages).toBe(1000);
+    expect(result.pagination.ceilingReached).toBe(true);
+    expect(result.pagination.hasNext).toBe(true);
+  });
+
+  it('trusts a served deep page over a low computed page count, keeping page <= pages (#33)', async () => {
+    // No `of`, a small `total`, but LOC served real items past the computed count — advertise at
+    // least the reached page rather than a count that contradicts the served data.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          results: [
+            { id: 'https://www.loc.gov/item/y/', title: 'Y', url: 'https://www.loc.gov/item/y/' },
+          ],
+          pagination: { total: 50, perpage: 25, results: '226 - 250' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.search({ query: 'test', limit: 25, page: 10 }, ctx);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.pagination.pages).toBe(10);
+    expect(result.pagination.page).toBe(10);
+  });
+
+  it('flags ceilingReached on the 400 sentinel only when the page is past the retrieval ceiling (#33)', async () => {
+    vi.stubGlobal('fetch', mockFetch('', 400));
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+
+    const past = await svc.search({ query: 'test', limit: 25, page: 5000 }, ctx);
+    expect(past.pagination.pages).toBe(0);
+    expect(past.pagination.ceilingReached).toBe(true); // 5000 > 100000 / 25
+
+    const within = await svc.search({ query: 'test', limit: 25, page: 8 }, ctx);
+    expect(within.pagination.ceilingReached).toBe(false); // 8 <= 100000 / 25
+  });
+
   it('throws ServiceUnavailable when HTML is returned', async () => {
     vi.stubGlobal('fetch', mockFetch('<!DOCTYPE html><html><body>Rate limited</body></html>'));
     const ctx = createMockContext();

@@ -380,7 +380,9 @@ describe('locSearch', () => {
     );
   });
 
-  it('returns empty result with enrichment.notice when page > pages', async () => {
+  it('returns real items served on a page beyond the computed count instead of discarding them (#33 Bug B)', async () => {
+    // A page past the computed page count can still carry real items — LOC's `total` under-reports
+    // the retrievable depth. The old "contradictory pagination" guard discarded these; it must not.
     vi.stubGlobal(
       'fetch',
       mockFetch(
@@ -388,7 +390,7 @@ describe('locSearch', () => {
           results: [
             {
               id: 'https://www.loc.gov/item/2009632251/',
-              title: 'Some Item',
+              title: 'Deep-page Item',
               url: 'https://www.loc.gov/item/2009632251/',
             },
           ],
@@ -400,14 +402,57 @@ describe('locSearch', () => {
     const input = locSearch.input.parse({ query: 'test', page: 999 });
     const result = await locSearch.handler(input, ctx);
 
-    expect(result.items).toHaveLength(0);
-    expect(result.has_next).toBe(false);
+    // The served item is returned, not thrown away.
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].id).toBe('2009632251');
+    // Pagination stays consistent: page never exceeds pages.
+    expect(result.page).toBe(999);
+    expect(result.pages).toBeGreaterThanOrEqual(result.page);
+    // No false "no results on page 999" notice — the items are real.
+    expect(getEnrichment(ctx).notice).toBeUndefined();
+  });
+
+  it('caps pages at the ~100k retrieval ceiling, discloses it, and still returns the served items (#33 Bug A)', async () => {
+    // Live LOC shape: `of` is the item count, `total` the page count, no `pages` key. A ~1.78M-item
+    // query spans ~17,800 pages, but LOC serves only the first ~100,000 items.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeSearchResponse({
+          results: [
+            {
+              id: 'https://www.loc.gov/item/2009632251/',
+              title: 'Deep result within the ceiling',
+              url: 'https://www.loc.gov/item/2009632251/',
+            },
+          ],
+          pagination: { of: 1779931, total: 17800, perpage: 100, results: '24901 - 25000' },
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({ query: 'civil rights', limit: 100, page: 250 });
+    const result = await locSearch.handler(input, ctx);
+
+    expect(result.items).toHaveLength(1); // served item not discarded
+    expect(result.total).toBe(1779931); // total reads from `of`, not the page count
+    expect(result.pages).toBe(1000); // capped at 100000 / 100
+    expect(result.has_next).toBe(true); // page 250 is within the retrievable ceiling
     const enrichment = getEnrichment(ctx);
-    expect(enrichment.notice).toBeDefined();
-    expect(String(enrichment.notice)).toContain('999');
-    expect(String(enrichment.notice)).toContain('4');
-    expect(enrichment.effectiveQuery).toBe('test');
-    expect(enrichment.totalCount).toBe(100);
+    expect(enrichment.totalCount).toBe(1779931);
+    expect(String(enrichment.notice)).toMatch(/100,000|partition/);
+  });
+
+  it('flags a page past the ~100k ceiling with partition guidance, not just "smaller page" (#33 Bug A)', async () => {
+    vi.stubGlobal('fetch', mockFetch('', 400)); // LOC 400s a page past the retrieval ceiling
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({ query: 'civil rights', limit: 100, page: 1500 });
+    const result = await locSearch.handler(input, ctx);
+
+    expect(result.items).toHaveLength(0);
+    const notice = String(getEnrichment(ctx).notice);
+    expect(notice).toMatch(/ceiling|100,000/);
+    expect(notice).toMatch(/partition|date range|subject|location/i);
   });
 
   it('returns empty result when LOC API returns HTTP 400 (out-of-range page)', async () => {
@@ -420,36 +465,43 @@ describe('locSearch', () => {
     expect(result.has_next).toBe(false);
   });
 
+  it('reports a generic out-of-range page (400 within the ceiling) without ceiling language', async () => {
+    vi.stubGlobal('fetch', mockFetch('', 400));
+    const ctx = createMockContext();
+    const input = locSearch.input.parse({ query: 'niche query', limit: 25, page: 8 });
+    const result = await locSearch.handler(input, ctx);
+
+    expect(result.items).toHaveLength(0);
+    const notice = String(getEnrichment(ctx).notice);
+    expect(notice).toContain('out of range');
+    expect(notice).not.toContain('ceiling');
+  });
+
   it('rejects empty query at schema level', () => {
     expect(() => locSearch.input.parse({ query: '' })).toThrow();
   });
 
-  it('returns empty result with enrichment.notice when page > pages and items present', async () => {
-    vi.stubGlobal(
-      'fetch',
-      mockFetch(
-        makeSearchResponse({
-          results: [
-            {
-              id: 'https://www.loc.gov/item/someitem/',
-              title: 'Some Item',
-              url: 'https://www.loc.gov/item/someitem/',
-            },
-          ],
-          pagination: { total: 50, perpage: 25, pages: 2, page: 5 },
-        }),
-      ),
-    );
-    const ctx = createMockContext();
-    const input = locSearch.input.parse({ query: 'history', page: 5 });
-    const result = await locSearch.handler(input, ctx);
-
-    expect(result.items).toHaveLength(0);
-    expect(result.has_next).toBe(false);
-    const enrichment = getEnrichment(ctx);
-    expect(enrichment.notice).toBeDefined();
-    expect(String(enrichment.notice)).toContain('5');
-    expect(String(enrichment.notice)).toContain('2');
+  it('format() renders a get_item-eligible line for is_item:true results (#31 parity)', () => {
+    // is_item:true has no content[] representation before #31 — a text-only client could not tell a
+    // get_item target from a non-item result. Both boolean states must render.
+    const output = locSearch.output.parse({
+      items: [
+        {
+          id: '2009632251',
+          title: 'A Photograph',
+          is_item: true,
+          url: 'https://www.loc.gov/item/2009632251/',
+        },
+      ],
+      total: 1,
+      page: 1,
+      pages: 1,
+      has_next: false,
+    });
+    const blocks = locSearch.format!(output);
+    const text = (blocks[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('libofcongress_get_item');
+    expect(text).not.toContain('Non-item result');
   });
 
   it('query with injection chars is handled without URL structure breakage', async () => {
