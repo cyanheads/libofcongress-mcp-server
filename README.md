@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.14-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.15-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -87,7 +87,7 @@ Search historical newspaper pages in the Chronicling America corpus via the LOC 
 Retrieve the full OCR text and metadata for a specific newspaper page.
 
 - Accepts the `url` field from a `libofcongress_search_newspapers` result — validates the URL prefix before any outbound request
-- Fetches ALTO XML from the LOC text-services endpoint and extracts plain text from `CONTENT` attributes
+- Fetches JSON from the LOC text-services endpoint (`tile.loc.gov`) and reads plain text from the `full_text` field
 - `ocr_available: false` when the page has no digitized text (image-only batch) — not an error, a data property
 - Strips echoed `q=` params from fulltext URLs to avoid tile.loc.gov 404s (known LOC API quirk)
 
@@ -100,6 +100,7 @@ Search Library of Congress Subject Headings (LCSH) via `id.loc.gov`.
 - Returns standardized labels and stable LOC URIs for subjects matching the keyword
 - `count` field indicates approximate number of LOC items carrying that heading (when available)
 - Use the returned `label` exactly in the `libofcongress_search` `subject` filter — LCSH uses inverted forms ("Photography, Aerial", "World War, 1939-1945") that differ from natural language
+- Draws from the id.loc.gov suggest endpoint's full 50-candidate pool (not scaled to `limit`) and filters to true LCSH headings, so a heading ranked below name-authority records isn't reported as a false empty; when that ranked pool — rather than a lack of coverage — yields an empty or short result, the response discloses it with a recovery hint
 
 ---
 
@@ -140,7 +141,8 @@ LOC-specific:
 - Configurable pacing delay (default 3100ms, ~19 req/min) applied before every outbound LOC API request
 - HTML-response detection guards against silent rate-limit proxy pages that return 200 with HTML
 - Out-of-range page handling: LOC returns HTTP 400 or 520 for page numbers beyond the result set — treated as empty rather than errors
-- ALTO XML parser for newspaper OCR text — extracts `CONTENT` attributes from LOC text-services responses
+- Transient-fault resilience: network drops and timeouts retry with backoff behind a 30s per-request timeout ceiling; the 429 rate-limit path is never retried, since a retry would deepen LOC's 1-hour block
+- JSON OCR extraction for newspaper text — reads the `full_text` field from LOC text-services responses
 - Two-service architecture: `LocApiService` for `www.loc.gov` and `LcLinkedDataService` for `id.loc.gov`
 
 Agent-friendly output:

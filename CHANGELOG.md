@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.15](changelog/0.2.x/0.2.15.md) — 2026-07-16
+
+search_subjects stops reporting false empties when LCSH headings rank below name-authority records; LOC fetches gain a 30s timeout ceiling and a transient-only retry that never re-hits the rate-limit path; the mocked test suite no longer pays live request pacing (~137s → ~2.8s)
+
 ## [0.2.14](changelog/0.2.x/0.2.14.md) — 2026-07-16
 
 libofcongress_get_item exposes eight previously-discarded metadata fields and renders all resource_links/related_items without truncation; the item resource reads multi-segment newspaper IDs; the internal LOC request URL is no longer attached to error data

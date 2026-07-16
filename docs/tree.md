@@ -1,6 +1,6 @@
 # libofcongress-mcp-server - Directory Structure
 
-Generated on: 2026-07-13 17:30:38
+Generated on: 2026-07-16 10:51:00
 
 ```text
 libofcongress-mcp-server/
@@ -148,15 +148,19 @@ libofcongress-mcp-server/
 │   │   ├── lc-linked-data/
 │   │   │   ├── lc-linked-data-service.ts
 │   │   │   └── types.ts
-│   │   └── loc-api/
-│   │       ├── loc-api-service.ts
-│   │       └── types.ts
+│   │   ├── loc-api/
+│   │   │   ├── loc-api-service.ts
+│   │   │   └── types.ts
+│   │   └── http.ts
 │   └── index.ts
 ├── tests/
+│   ├── config/
+│   │   └── server-config.test.ts
 │   ├── prompts/
 │   ├── resources/
 │   │   └── libofcongress-item.resource.test.ts
 │   ├── services/
+│   │   ├── http.test.ts
 │   │   ├── lc-linked-data-service.test.ts
 │   │   └── loc-api-service.test.ts
 │   └── tools/

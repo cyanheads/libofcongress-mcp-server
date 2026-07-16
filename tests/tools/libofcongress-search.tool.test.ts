@@ -51,13 +51,10 @@ describe('locSearch', () => {
     // Reset rate-limit state by re-initializing the service
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
-    // Default to a small request delay in tests
-    process.env.LOC_REQUEST_DELAY_MS = '0';
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.LOC_REQUEST_DELAY_MS;
   });
 
   it('returns items and pagination for a basic keyword search', async () => {

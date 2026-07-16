@@ -7,7 +7,9 @@ import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { notFound, rateLimited, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
+import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
+import { locRetryOptions, timedFetch } from '@/services/http.js';
 import type {
   LocCollection,
   LocItemDetail,
@@ -159,10 +161,11 @@ export class LocApiService {
     this.checkRateLimit();
     await pace(this.requestDelayMs);
     ctx.log.debug('LOC API request', { url });
-    const response = await fetch(url, {
-      headers: { 'User-Agent': this.userAgent, Accept: 'application/json' },
-      signal: ctx.signal,
-    });
+    const response = await timedFetch(
+      url,
+      { headers: { 'User-Agent': this.userAgent, Accept: 'application/json' } },
+      ctx,
+    );
     if (response.status === 429) {
       rateLimitBlockedUntil = Date.now() + 60 * 60 * 1000;
       throw rateLimited(
@@ -193,24 +196,34 @@ export class LocApiService {
   /**
    * Fetch and parse a LOC JSON endpoint.
    *
+   * The retry boundary wraps the full pipeline — fetch, body read, and parse — so a socket
+   * drop mid-body is retried, not just a failed connection. Only transient network faults and
+   * timeouts retry ({@link locRetryOptions}); the 429 and HTML soft-block throws below fail fast
+   * so a retry never re-hits a rate-limited endpoint.
+   *
    * Neither failure path attaches the request `url` to its error data — it embeds the
    * internal endpoint and query string, and callers already hold the caller-facing
    * identifier (item ID, page URL) worth reporting. The resource path in particular has
    * no catch block to rewrite the payload, so anything attached here reaches the client
    * verbatim. The URL stays in the debug log above.
    */
-  private async fetchJson<T>(url: string, ctx: Context): Promise<T> {
-    const response = await this.fetch(url, ctx);
-    if (response.status === 404) {
-      throw notFound('LOC resource not found');
-    }
-    const text = await response.text();
-    if (HTML_RESPONSE_RE.test(text)) {
-      throw serviceUnavailable(
-        'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
-      );
-    }
-    return JSON.parse(text) as T;
+  private fetchJson<T>(url: string, ctx: Context): Promise<T> {
+    return withRetry(
+      async () => {
+        const response = await this.fetch(url, ctx);
+        if (response.status === 404) {
+          throw notFound('LOC resource not found');
+        }
+        const text = await response.text();
+        if (HTML_RESPONSE_RE.test(text)) {
+          throw serviceUnavailable(
+            'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
+          );
+        }
+        return JSON.parse(text) as T;
+      },
+      locRetryOptions(ctx, 'loc-api-fetch-json'),
+    );
   }
 
   /**
@@ -221,23 +234,28 @@ export class LocApiService {
    * Withholds the request `url` from error data for the same reason as `fetchJson` above —
    * here the query string carries the caller's own search terms.
    */
-  private async fetchSearchJson<T>(url: string, ctx: Context): Promise<T | null> {
-    const response = await this.fetch(url, ctx, { allowStatus: [400, 520] });
-    if (response.status === 404) {
-      throw notFound('LOC resource not found');
-    }
-    // LOC returns 400 or 520 for out-of-range page numbers — treat as empty
-    if (response.status === 400 || response.status === 520) {
-      ctx.log.debug('LOC search returned out-of-range page', { status: response.status, url });
-      return null;
-    }
-    const text = await response.text();
-    if (HTML_RESPONSE_RE.test(text)) {
-      throw serviceUnavailable(
-        'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
-      );
-    }
-    return JSON.parse(text) as T;
+  private fetchSearchJson<T>(url: string, ctx: Context): Promise<T | null> {
+    return withRetry(
+      async () => {
+        const response = await this.fetch(url, ctx, { allowStatus: [400, 520] });
+        if (response.status === 404) {
+          throw notFound('LOC resource not found');
+        }
+        // LOC returns 400 or 520 for out-of-range page numbers — treat as empty
+        if (response.status === 400 || response.status === 520) {
+          ctx.log.debug('LOC search returned out-of-range page', { status: response.status, url });
+          return null;
+        }
+        const text = await response.text();
+        if (HTML_RESPONSE_RE.test(text)) {
+          throw serviceUnavailable(
+            'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
+          );
+        }
+        return JSON.parse(text) as T;
+      },
+      locRetryOptions(ctx, 'loc-api-search-json'),
+    );
   }
 
   /**
@@ -497,10 +515,14 @@ export class LocApiService {
         fulltextUrl.searchParams.delete('q');
         const textUrl = fulltextUrl.toString();
         ctx.log.debug('Fetching OCR text', { url: textUrl });
-        const textResponse = await fetch(textUrl, {
-          headers: { 'User-Agent': this.userAgent },
-          signal: ctx.signal,
-        });
+        // Retry + timeout this secondary tile.loc.gov fetch too. It intentionally skips the
+        // www.loc.gov pace()/checkRateLimit() guards — a different host, already best-effort
+        // inside this try/catch — so any residual failure degrades to ocr_available with empty
+        // text rather than failing the whole page.
+        const textResponse = await withRetry(
+          () => timedFetch(textUrl, { headers: { 'User-Agent': this.userAgent } }, ctx),
+          locRetryOptions(ctx, 'loc-api-ocr-text'),
+        );
         if (textResponse.ok) {
           // tile.loc.gov returns JSON, not ALTO XML. Shape:
           // { "<batch-key>": { "full_text": "...", "height": N, "width": N } }

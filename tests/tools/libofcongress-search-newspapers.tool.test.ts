@@ -47,12 +47,10 @@ describe('locSearchNewspapers', () => {
   beforeEach(async () => {
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
-    process.env.LOC_REQUEST_DELAY_MS = '0';
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.LOC_REQUEST_DELAY_MS;
   });
 
   it('returns newspaper pages for a basic keyword search', async () => {

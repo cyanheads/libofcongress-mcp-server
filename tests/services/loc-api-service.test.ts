@@ -55,12 +55,10 @@ describe('LocApiService.search', () => {
   beforeEach(async () => {
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
-    process.env.LOC_REQUEST_DELAY_MS = '0';
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.LOC_REQUEST_DELAY_MS;
   });
 
   it('normalizes protocol-relative URLs in item url field to https:', async () => {
@@ -451,12 +449,10 @@ describe('LocApiService.getItem', () => {
   beforeEach(async () => {
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
-    process.env.LOC_REQUEST_DELAY_MS = '0';
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.LOC_REQUEST_DELAY_MS;
   });
 
   it('throws NotFound when item property is missing from response envelope', async () => {
@@ -854,12 +850,10 @@ describe('LocApiService.searchNewspapers', () => {
   beforeEach(async () => {
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
-    process.env.LOC_REQUEST_DELAY_MS = '0';
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.LOC_REQUEST_DELAY_MS;
   });
 
   it('uses location_state for state, not location[0]', async () => {
@@ -964,12 +958,10 @@ describe('LocApiService.browseCollections', () => {
   beforeEach(async () => {
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
-    process.env.LOC_REQUEST_DELAY_MS = '0';
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.LOC_REQUEST_DELAY_MS;
   });
 
   it('extracts the route slug from a URL carrying a trailing collection subpath', async () => {
@@ -1159,12 +1151,10 @@ describe('LocApiService.getNewspaperPage', () => {
   beforeEach(async () => {
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
-    process.env.LOC_REQUEST_DELAY_MS = '0';
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.LOC_REQUEST_DELAY_MS;
   });
 
   it('derives date and sequence from the page URL when the resource endpoint omits them', async () => {
@@ -1239,6 +1229,89 @@ describe('LocApiService.getNewspaperPage', () => {
     expect(result.date).toBeUndefined();
     expect(result.sequence).toBeUndefined();
   });
+
+  it('retries a transient OCR fetch failure and still returns the text', async () => {
+    // The OCR fetch (tile.loc.gov) is a bare fetch the issue flagged as easy to miss — it now
+    // carries the same retry + timeout as the primary path. Real timers (one ~1.1s backoff).
+    const resourceBody = JSON.stringify({
+      resource: {
+        url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/',
+        fulltext_file: 'https://tile.loc.gov/text-services/full_text.json',
+      },
+    });
+    const ocrBody = JSON.stringify({ 'batch/0001.xml': { full_text: 'Recovered OCR text' } });
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(resourceBody, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockRejectedValueOnce(new TypeError('The socket connection was closed unexpectedly'))
+      .mockResolvedValueOnce(
+        new Response(ocrBody, { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      );
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+
+    const result = await svc.getNewspaperPage(
+      'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/?sp=12',
+      ctx,
+    );
+
+    // 3 fetches: resource (1) + OCR transient failure (2) + OCR retry success (3).
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(result.ocr_available).toBe(true);
+    expect(result.ocr_text).toContain('Recovered OCR text');
+  });
+});
+
+// Retry uses real timers with a single ~1.1s backoff — cheap, and it avoids fake-timer state
+// bleeding into the module-level rate-limit test below. Timeout firing is covered in isolation
+// by tests/services/http.test.ts (its own file, so fake timers can't leak here).
+describe('LocApiService retry', () => {
+  beforeEach(async () => {
+    const storage = await createInMemoryStorage();
+    initLocApiService(config, storage);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('retries a transient network fault, then succeeds', async () => {
+    const good = new Response(makeSearchResponse(), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const fetchSpy = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('The socket connection was closed unexpectedly'))
+      .mockResolvedValueOnce(good);
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+
+    const result = await svc.search({ query: 'test', page: 1 }, ctx);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(result.items).toHaveLength(1);
+  });
+
+  it('does not retry a non-transient upstream error (500)', async () => {
+    const fetchSpy = mockFetch('Internal Server Error', 500);
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+
+    await expect(svc.search({ query: 'test', page: 1 }, ctx)).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+    });
+    // A 5xx is status-derived, not a transient network fault — fail fast, no retry.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 // Rate-limit test last — sets module-level rateLimitBlockedUntil which bleeds across
@@ -1247,23 +1320,21 @@ describe('LocApiService rate-limit state', () => {
   beforeEach(async () => {
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
-    process.env.LOC_REQUEST_DELAY_MS = '0';
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.LOC_REQUEST_DELAY_MS;
   });
 
-  it('throws RateLimited on HTTP 429 and sets module-level block', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response('Too Many Requests', { status: 429 })),
-    );
+  it('throws RateLimited on HTTP 429, sets the block, and does not retry the 429', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('Too Many Requests', { status: 429 }));
+    vi.stubGlobal('fetch', fetchSpy);
     const ctx = createMockContext();
     const svc = getLocApiService();
     await expect(svc.search({ query: 'test', page: 1 }, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.RateLimited,
     });
+    // Retrying a 429 would deepen LOC's ~1-hour IP block — the predicate must never retry it.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

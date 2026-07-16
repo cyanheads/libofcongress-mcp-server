@@ -7,17 +7,44 @@ import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
+import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
+import { locRetryOptions, timedFetch } from '@/services/http.js';
 import type { LcSubjectHeading } from './types.js';
 
 const LC_LINKED_DATA_BASE = 'https://id.loc.gov';
 const SUBJECTS_SCHEME = 'http://id.loc.gov/authorities/subjects';
 
 /**
+ * Hard ceiling on candidates the id.loc.gov `/suggest/` endpoint returns for any query.
+ * Requested on every call regardless of `limit`: the endpoint ranks name-authority and other
+ * non-subject records ahead of real LCSH headings, so a valid heading can sit deep in this pool.
+ * A limit-scaled request size would miss it and report a false empty (issue #25).
+ */
+export const SUGGEST_MAX_COUNT = 50;
+
+/**
  * Response shape from the id.loc.gov suggest endpoint:
  * [query, labels[], counts[], uris[]]
  */
 type SuggestResponse = [string, string[], string[], string[]];
+
+/** Outcome of a subject-heading search, carrying the disclosure signal the tool turns into recovery hints. */
+export interface SubjectSuggestResult {
+  /**
+   * Count of subject-namespace matches before slicing to `limit`. Greater than `limit` means more
+   * headings exist within the candidate pool — the tool surfaces a truncation hint.
+   */
+  matchCount: number;
+  /**
+   * True when the endpoint returned its full {@link SUGGEST_MAX_COUNT} candidate cap, so a matching
+   * heading may rank beyond the visible pool. Lets the tool distinguish "exhausted by ranking"
+   * (recoverable via a more specific query) from "no LCSH coverage" when results are empty or short.
+   */
+  poolCapReached: boolean;
+  /** LCSH subject headings, filtered to the `/authorities/subjects/` namespace and sliced to `limit`. */
+  subjects: LcSubjectHeading[];
+}
 
 export class LcLinkedDataService {
   private readonly userAgent: string;
@@ -28,42 +55,52 @@ export class LcLinkedDataService {
   }
 
   /** Search LCSH subject headings via the suggest endpoint */
-  async searchSubjects(query: string, limit: number, ctx: Context): Promise<LcSubjectHeading[]> {
-    // `memberOf` is an unenforced hint: the suggest endpoint interleaves /authorities/names/
-    // and childrensSubjects records with real LCSH headings. We drop the non-subject records
-    // below, so over-fetch (bounded by the endpoint's 50-suggestion cap) to reduce the chance
-    // a names-heavy response yields fewer than `limit` headings after filtering.
+  async searchSubjects(query: string, limit: number, ctx: Context): Promise<SubjectSuggestResult> {
+    // Request the endpoint's full candidate cap regardless of `limit`. `memberOf` is an unenforced
+    // hint — /suggest/ interleaves /authorities/names/ and childrensSubjects records with real LCSH
+    // headings and ranks them ahead, so a valid heading can sit deep in the pool. Decoupling request
+    // size from `limit` means a small and a large `limit` draw from the same pool and differ only in
+    // how many filtered results get sliced off (issue #25).
     const qs = new URLSearchParams({
       q: query,
       memberOf: SUBJECTS_SCHEME,
-      count: String(Math.min(limit * 3, 50)),
+      count: String(SUGGEST_MAX_COUNT),
     });
     const url = `${LC_LINKED_DATA_BASE}/suggest/?${qs}`;
     ctx.log.debug('LC Linked Data subject suggest', { url });
 
-    const response = await fetch(url, {
-      headers: { 'User-Agent': this.userAgent, Accept: 'application/json' },
-      signal: ctx.signal,
-    });
-    if (!response.ok) {
-      throw serviceUnavailable(`LC Linked Data returned HTTP ${response.status}`, {
-        url,
-        status: response.status,
-      });
-    }
+    // Retry the transient-network class only, with a timeout ceiling. The non-OK and HTML throws
+    // below are ServiceUnavailable, which the predicate treats as non-transient — they fail fast.
+    const data = await withRetry(
+      async () => {
+        const response = await timedFetch(
+          url,
+          { headers: { 'User-Agent': this.userAgent, Accept: 'application/json' } },
+          ctx,
+        );
+        if (!response.ok) {
+          // The request `url` carries the caller's query in its string — withhold it from error
+          // data (it stays in the debug log above), matching the loc-api service's no-internal-URL
+          // invariant. Bare status is safe.
+          throw serviceUnavailable(`LC Linked Data returned HTTP ${response.status}`, {
+            status: response.status,
+          });
+        }
+        const text = await response.text();
+        if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
+          throw serviceUnavailable('LC Linked Data returned HTML — temporarily unavailable.');
+        }
+        return JSON.parse(text) as SuggestResponse;
+      },
+      locRetryOptions(ctx, 'lc-linked-data-suggest'),
+    );
 
-    const text = await response.text();
-    if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
-      throw serviceUnavailable('LC Linked Data returned HTML — temporarily unavailable.', { url });
-    }
-
-    const data = JSON.parse(text) as SuggestResponse;
     if (!Array.isArray(data) || data.length < 4) {
-      return [];
+      return { subjects: [], matchCount: 0, poolCapReached: false };
     }
 
     const [, labels, counts, uris] = data;
-    const results: LcSubjectHeading[] = [];
+    const matches: LcSubjectHeading[] = [];
     for (let i = 0; i < labels.length; i++) {
       const label = labels[i];
       const uri = uris[i];
@@ -73,13 +110,19 @@ export class LcLinkedDataService {
       if (!uri.startsWith(`${SUBJECTS_SCHEME}/`)) continue;
       const countStr = counts[i];
       const count = countStr ? parseInt(countStr, 10) : undefined;
-      results.push({
+      matches.push({
         label,
         uri,
         ...(count !== undefined && !Number.isNaN(count) && { count }),
       });
     }
-    return results.slice(0, limit);
+
+    return {
+      subjects: matches.slice(0, limit),
+      matchCount: matches.length,
+      // Endpoint returned its cap → matching headings may exist beyond what it will surface.
+      poolCapReached: labels.length >= SUGGEST_MAX_COUNT,
+    };
   }
 }
 

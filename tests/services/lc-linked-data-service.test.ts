@@ -12,6 +12,7 @@ import {
   getLcLinkedDataService,
   initLcLinkedDataService,
   LcLinkedDataService,
+  SUGGEST_MAX_COUNT,
 } from '@/services/lc-linked-data/lc-linked-data-service.js';
 
 function mockFetch(body: string, status = 200) {
@@ -67,7 +68,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     );
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
-    const results = await svc.searchSubjects('world war', 10, ctx);
+    const { subjects: results } = await svc.searchSubjects('world war', 10, ctx);
 
     expect(results).toHaveLength(1);
     expect(results[0].label).toBe('World War, 1939-1945');
@@ -90,7 +91,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     );
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
-    const results = await svc.searchSubjects('aerial', 10, ctx);
+    const { subjects: results } = await svc.searchSubjects('aerial', 10, ctx);
     expect(results[0].count).toBeUndefined();
   });
 
@@ -108,7 +109,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     );
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
-    const results = await svc.searchSubjects('photo', 10, ctx);
+    const { subjects: results } = await svc.searchSubjects('photo', 10, ctx);
     expect(results[0].count).toBeUndefined();
   });
 
@@ -116,7 +117,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     vi.stubGlobal('fetch', mockFetch(JSON.stringify(['query', [], []])));
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
-    const results = await svc.searchSubjects('short', 10, ctx);
+    const { subjects: results } = await svc.searchSubjects('short', 10, ctx);
     expect(results).toHaveLength(0);
   });
 
@@ -138,7 +139,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     );
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
-    const results = await svc.searchSubjects('test', 10, ctx);
+    const { subjects: results } = await svc.searchSubjects('test', 10, ctx);
     // Entry with empty label should be skipped
     expect(results.every((r) => r.label !== '')).toBe(true);
   });
@@ -172,7 +173,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     );
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
-    const results = await svc.searchSubjects('aerial photography', 10, ctx);
+    const { subjects: results } = await svc.searchSubjects('aerial photography', 10, ctx);
 
     expect(results).toHaveLength(2);
     expect(results.every((r) => r.uri.startsWith('http://id.loc.gov/authorities/subjects/'))).toBe(
@@ -202,11 +203,11 @@ describe('LcLinkedDataService.searchSubjects', () => {
     );
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
-    const results = await svc.searchSubjects('world war', 3, ctx);
+    const { subjects: results } = await svc.searchSubjects('world war', 3, ctx);
     expect(results).toHaveLength(0);
   });
 
-  it('over-fetches beyond limit so filtering does not undershoot, then slices to limit', async () => {
+  it('requests the full candidate cap regardless of limit, then slices to limit', async () => {
     const fetchSpy = mockFetch(
       makeSuggest(
         Array.from({ length: 12 }, (_, i) => ({
@@ -218,13 +219,61 @@ describe('LcLinkedDataService.searchSubjects', () => {
     vi.stubGlobal('fetch', fetchSpy);
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
-    const results = await svc.searchSubjects('test', 5, ctx);
+    const { subjects, matchCount } = await svc.searchSubjects('test', 5, ctx);
 
-    // Requests more than `limit` from the endpoint to survive namespace filtering...
+    // Request size is decoupled from `limit` — always the endpoint's 50-candidate cap — so a
+    // heading ranked deep in the pool is fetched, not missed by a limit-scaled window (issue #25).
     const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
-    expect(calledUrl).toContain('count=15');
-    // ...but returns only the requested number of real subject headings.
-    expect(results).toHaveLength(5);
+    expect(calledUrl).toContain('count=50');
+    // Sliced to the requested limit; matchCount reflects the full filtered pool.
+    expect(subjects).toHaveLength(5);
+    expect(matchCount).toBe(12);
+  });
+
+  it('surfaces a valid heading ranked below a small limit — no false empty (issue #25)', async () => {
+    // Mirrors the live `civil war`, limit:2 repro — six name-authority records rank ahead of the one
+    // real LCSH heading. The old limit-scaled fetch (count=6) surfaced the heading only against a
+    // mock; the cap-sized request (count=50) reaches it against the real endpoint's ranked pool.
+    const entries = [
+      ...Array.from({ length: 6 }, (_, i) => ({
+        label: `Civil war name authority ${i}`,
+        uri: `http://id.loc.gov/authorities/names/no${i}`,
+      })),
+      {
+        label: 'Civil War Campaign Medal',
+        uri: 'http://id.loc.gov/authorities/subjects/sh90004165',
+        count: '3',
+      },
+    ];
+    const fetchSpy = mockFetch(makeSuggest(entries));
+    vi.stubGlobal('fetch', fetchSpy);
+    const ctx = createMockContext();
+    const svc = getLcLinkedDataService();
+    const { subjects, matchCount, poolCapReached } = await svc.searchSubjects('civil war', 2, ctx);
+
+    expect((fetchSpy.mock.calls[0][0] as string) ?? '').toContain('count=50');
+    expect(subjects).toHaveLength(1);
+    expect(subjects[0].uri).toBe('http://id.loc.gov/authorities/subjects/sh90004165');
+    expect(matchCount).toBe(1);
+    // Seven candidates in the pool (< 50 cap) — the heading is genuinely present, not cut off.
+    expect(poolCapReached).toBe(false);
+  });
+
+  it('reports poolCapReached when the endpoint returns its full cap of non-subject records', async () => {
+    // 50 name-authority records, zero real headings — the candidate cap was hit, so a heading may
+    // rank beyond it; distinct from a topic with no LCSH coverage at all.
+    const entries = Array.from({ length: SUGGEST_MAX_COUNT }, (_, i) => ({
+      label: `Name authority ${i}`,
+      uri: `http://id.loc.gov/authorities/names/no${i}`,
+    }));
+    vi.stubGlobal('fetch', mockFetch(makeSuggest(entries)));
+    const ctx = createMockContext();
+    const svc = getLcLinkedDataService();
+    const { subjects, matchCount, poolCapReached } = await svc.searchSubjects('world war', 3, ctx);
+
+    expect(subjects).toHaveLength(0);
+    expect(matchCount).toBe(0);
+    expect(poolCapReached).toBe(true);
   });
 
   it('throws ServiceUnavailable on non-OK HTTP status', async () => {
@@ -285,7 +334,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     );
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
-    const results = await svc.searchSubjects('war', 10, ctx);
+    const { subjects: results } = await svc.searchSubjects('war', 10, ctx);
 
     const resultStr = JSON.stringify(results);
     expect(resultStr).not.toContain(secretAgent);

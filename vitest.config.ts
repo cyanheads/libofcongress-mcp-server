@@ -16,6 +16,12 @@ export default mergeConfig(
   defineConfig({
     resolve: { alias },
     test: {
+      // Neutralize LOC request pacing across every suite. Injected here — before any
+      // test module loads — so it lands ahead of getServerConfig()'s module-level `??=`
+      // cache seed. A per-test `process.env.LOC_REQUEST_DELAY_MS = '0'` runs too late:
+      // the first initLocApiService() call already populated the cache at the 3100ms
+      // default, and `??=` discards the override. `unit` inherits this via `extends: true`.
+      env: { LOC_REQUEST_DELAY_MS: '0' },
       projects: [
         {
           extends: true,

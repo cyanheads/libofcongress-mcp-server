@@ -110,9 +110,9 @@ describe('locSearchSubjects', () => {
     expect(result.subjects[0].count).toBeUndefined();
   });
 
-  it('over-fetches limit*3 from the endpoint and slices results back to the requested limit', async () => {
-    // The tool over-fetches (bounded at 50) so namespace filtering doesn't undershoot, then
-    // trims to `limit` — so `count` in the request is limit*3, not limit.
+  it('requests the full candidate cap regardless of limit and slices results to the requested limit', async () => {
+    // The tool requests the endpoint's 50-candidate cap (not limit*3) so namespace filtering can
+    // reach a heading ranked deep in the pool, then trims to `limit` (issue #25).
     const fetchSpy = mockFetch(
       makeSuggestResponse(
         Array.from({ length: 15 }, (_, i) => ({
@@ -127,7 +127,7 @@ describe('locSearchSubjects', () => {
     const result = await locSearchSubjects.handler(input, ctx);
 
     const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
-    expect(calledUrl).toContain('count=15');
+    expect(calledUrl).toContain('count=50');
     expect(result.subjects).toHaveLength(5);
   });
 
@@ -143,16 +143,83 @@ describe('locSearchSubjects', () => {
     expect(calledUrl).not.toContain('count=100');
   });
 
-  it('throws ServiceUnavailable on non-OK HTTP status', async () => {
+  it('discloses ranking exhaustion — not no-coverage — when the cap is all non-subjects (issue #25)', async () => {
+    // 50 name-authority records, zero real headings: the empty-result notice must explain the
+    // candidate-pool ranking exhaustion (recoverable via a more specific query), not the generic
+    // "no coverage / try broader terms" message.
+    const entries = Array.from({ length: 50 }, (_, i) => ({
+      label: `Name authority ${i}`,
+      uri: `http://id.loc.gov/authorities/names/no${i}`,
+    }));
+    vi.stubGlobal('fetch', mockFetch(makeSuggestResponse(entries)));
+    const ctx = createMockContext();
+    const input = locSearchSubjects.input.parse({ query: 'world war', limit: 3 });
+    const result = await locSearchSubjects.handler(input, ctx);
+
+    expect(result.subjects).toHaveLength(0);
+    const enrichment = getEnrichment(ctx);
+    expect(String(enrichment.notice)).toContain('candidate pool');
+    expect(String(enrichment.notice)).not.toContain('Try broader or different terms');
+  });
+
+  it('under-fills below limit and discloses the pool-cap recovery path via notice (issue #25)', async () => {
+    // 50 candidates, only 1 a real heading, limit 5: returns the 1 heading with a notice that more
+    // may exist beyond the pool cap — the deterministic recovery disclosure, not a truncation.
+    const entries = [
+      {
+        label: 'Civil War Campaign Medal',
+        uri: 'http://id.loc.gov/authorities/subjects/sh90004165',
+        count: '3',
+      },
+      ...Array.from({ length: 49 }, (_, i) => ({
+        label: `Name authority ${i}`,
+        uri: `http://id.loc.gov/authorities/names/no${i}`,
+      })),
+    ];
+    vi.stubGlobal('fetch', mockFetch(makeSuggestResponse(entries)));
+    const ctx = createMockContext();
+    const input = locSearchSubjects.input.parse({ query: 'civil war', limit: 5 });
+    const result = await locSearchSubjects.handler(input, ctx);
+
+    expect(result.subjects).toHaveLength(1);
+    expect(result.total).toBe(1);
+    const enrichment = getEnrichment(ctx);
+    expect(String(enrichment.notice)).toContain('fewer than the requested 5');
+    expect(enrichment.truncated).toBeUndefined();
+  });
+
+  it('fires the truncated enrichment when in-pool matches exceed the requested limit', async () => {
+    const entries = Array.from({ length: 10 }, (_, i) => ({
+      label: `Subject ${i}`,
+      uri: `http://id.loc.gov/authorities/subjects/sh${i}`,
+    }));
+    vi.stubGlobal('fetch', mockFetch(makeSuggestResponse(entries)));
+    const ctx = createMockContext();
+    const input = locSearchSubjects.input.parse({ query: 'music', limit: 3 });
+    const result = await locSearchSubjects.handler(input, ctx);
+
+    expect(result.subjects).toHaveLength(3);
+    const enrichment = getEnrichment(ctx);
+    expect(enrichment.truncated).toBe(true);
+    expect(enrichment.cap).toBe(3);
+  });
+
+  it('throws ServiceUnavailable on non-OK HTTP status, carrying no internal request URL', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(new Response('Server Error', { status: 503 })),
     );
     const ctx = createMockContext({ errors: locSearchSubjects.errors });
-    const input = locSearchSubjects.input.parse({ query: 'music' });
-    await expect(locSearchSubjects.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.ServiceUnavailable,
-    });
+    const input = locSearchSubjects.input.parse({ query: 'confidential-term' });
+    const err = await locSearchSubjects.handler(input, ctx).catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: JsonRpcErrorCode.ServiceUnavailable });
+    // The suggest URL embeds the caller's query — it must not surface in error data or message.
+    const data = (err as { data?: Record<string, unknown> }).data ?? {};
+    expect(data).not.toHaveProperty('url');
+    expect(JSON.stringify(data)).not.toContain('id.loc.gov');
+    expect(JSON.stringify(data)).not.toContain('confidential-term');
+    expect((err as Error).message).not.toContain('id.loc.gov');
   });
 
   it('throws ServiceUnavailable when HTML is returned (outage)', async () => {
