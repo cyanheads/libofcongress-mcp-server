@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.14](changelog/0.2.x/0.2.14.md) — 2026-07-16
+
+libofcongress_get_item exposes eight previously-discarded metadata fields and renders all resource_links/related_items without truncation; the item resource reads multi-segment newspaper IDs; the internal LOC request URL is no longer attached to error data
+
 ## [0.2.13](changelog/0.2.x/0.2.13.md) — 2026-07-15
 
 Add collection_slug to libofcongress_search for collection-scoped search; fix browse_collections returning slugs that do not match LOC routes and discarding upstream item counts

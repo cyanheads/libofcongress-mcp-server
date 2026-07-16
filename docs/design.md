@@ -7,7 +7,7 @@
 | Name | Description | Key Inputs | Annotations | Errors |
 |:-----|:------------|:-----------|:------------|:-------|
 | `libofcongress_search` | Search LOC digital collections by keyword with format, date, subject, and collection filters. Returns item summaries with titles, dates, descriptions, and LOC IDs for follow-up retrieval. | `query`, `format`, `date_start`, `date_end`, `subject`, `location`, `collection_slug`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `incompatible_filters` (ValidationError), `collection_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
-| `libofcongress_get_item` | Retrieve full metadata for a specific LOC item by ID — contributors, subjects, rights, resource links, and related items. | `item_id` | `readOnlyHint: true`, `openWorldHint: true` | `item_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
+| `libofcongress_get_item` | Retrieve full metadata for a specific LOC item by ID — contributors, subjects, summary, languages, locations, rights, call number, formats, access restrictions, resource links, and related items. | `item_id` | `readOnlyHint: true`, `openWorldHint: true` | `item_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
 | `libofcongress_search_newspapers` | Search historical newspaper pages (Chronicling America corpus) with full-text OCR content. Returns matching pages with article snippets and publication details. Accepts keyword, date range, state, and newspaper title filters. | `query`, `date_start`, `date_end`, `state`, `newspaper_title`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
 | `libofcongress_get_newspaper_page` | Retrieve the full OCR text of a specific newspaper page. Pass the `url` field from a `libofcongress_search_newspapers` result — two hops total: search, then this tool. Returns `ocr_available: false` when the page has no digitized text. | `page_url` | `readOnlyHint: true`, `openWorldHint: true` | `page_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
 | `libofcongress_search_subjects` | Search LC Subject Headings (LCSH) by keyword — the controlled vocabulary used to categorize LOC items. Returns subject labels and their URIs, which can be used as filters in `libofcongress_search`. | `query`, `limit` | `readOnlyHint: true`, `openWorldHint: true` | — |
@@ -17,7 +17,7 @@
 
 | URI Template | Description | Pagination |
 |:-------------|:------------|:-----------|
-| `libofcongress://item/{item_id}` | LOC item metadata by ID — stable URI for injecting item context. | None (single item) |
+| `libofcongress://item/{+item_id}` | LOC item metadata by ID — stable URI for injecting item context. Reserved expansion (`+`) so multi-segment newspaper IDs keep their slashes; the handler decodes the captured value once, so percent-encoded slashes resolve too. | None (single item) |
 
 ### Prompts
 
@@ -79,7 +79,7 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 7. `libofcongress_get_newspaper_page` tool — full OCR text via resource endpoint
 8. `libofcongress_search_subjects` tool — LCSH autocomplete and lookup
 9. `libofcongress_browse_collections` tool — collection listing
-10. `libofcongress://item/{item_id}` resource
+10. `libofcongress://item/{+item_id}` resource
 
 ---
 
@@ -115,12 +115,14 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 
 ### `libofcongress_get_item`
 
-**Description:** Retrieve the full metadata record for a specific LOC digital item. Returns contributors, subjects, rights information, physical description, notes, related items, and links to digital resources. Use after `libofcongress_search` to get complete details on a result.
+**Description:** Retrieve the full metadata record for a specific LOC digital item. Returns contributors, subjects, summary, languages, locations, rights information, physical description, call number, formats, access restrictions, notes, related items, and links to digital resources. Use after `libofcongress_search` to get complete details on a result.
 
 **Input:**
 - `item_id: string` — LOC item ID from a search result's `id` field (e.g., `"loc.pnp.ppmsc.02404"` or a numeric ID like `"2009632251"`). Do not include URL path segments — pass the bare ID only.
 
-**Output:** Full item record including `item_id`, `title`, `date`, `contributors`, `subject_headings`, `notes`, `rights_information`, `physical_description`, `resource_links` (digital file URLs), and `related_items` (array of IDs for follow-up). `resource_links` contains URLs to downloadable digital files (TIFF, JPEG, PDF) for items with digital surrogates.
+**Output:** Full item record including `item_id`, `title`, `date`, `contributors`, `subject_headings`, `notes`, `summary`, `rights_information`, `physical_description`, `call_number`, `languages`, `locations`, `former_ids`, `original_formats`, `online_formats`, `access_restricted`, `resource_links` (digital file URLs), and `related_items` (array of IDs for follow-up). `resource_links` contains URLs to downloadable digital files (TIFF, JPEG, PDF) for items with digital surrogates. The curated metadata comes from the same upstream response as the rest of the record — no extra request.
+
+**Response parity:** `format()` renders `resource_links` and `related_items` in full. Both surfaces carry the same values, so a `content[]`-only client can reach every entry `structuredContent` holds. A dense item (LOC's densest observed: 342 `resource_links`) therefore renders a long `content[]` block by design.
 
 **Errors:**
 - `item_not_found` (NotFound) — no item exists for the given ID. Recovery: verify the ID from `libofcongress_search` results; IDs are not guessable. Use `libofcongress_search` to find a valid ID.

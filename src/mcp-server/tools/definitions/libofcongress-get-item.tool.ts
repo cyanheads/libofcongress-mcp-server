@@ -10,7 +10,7 @@ import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 export const locGetItem = tool('libofcongress_get_item', {
   title: 'Get LOC Item',
   description:
-    'Retrieve the full metadata record for a specific LOC digital item. Returns contributors, subjects, rights information, physical description, notes, related items, and links to digital resources (TIFF, JPEG, PDF) for items with digital surrogates. Use after libofcongress_search on a result whose is_item is true. Pass the result id verbatim — it may be a simple ID or a slash-separated newspaper path; do not prepend the loc.gov URL. Non-item results (is_item: false) — collections, exhibits, guides, newspaper pages — have no item record and cannot be retrieved here.',
+    'Retrieve the full metadata record for a specific LOC digital item. Returns contributors, subjects, summary, languages, locations, rights information, physical description, call number, original and online formats, access restrictions, former catalog IDs, notes, related items, and links to digital resources (TIFF, JPEG, PDF) for items with digital surrogates. Use after libofcongress_search on a result whose is_item is true. Pass the result id verbatim — it may be a simple ID or a slash-separated newspaper path; do not prepend the loc.gov URL. Non-item results (is_item: false) — collections, exhibits, guides, newspaper pages — have no item record and cannot be retrieved here.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     item_id: z
@@ -31,6 +31,10 @@ export const locGetItem = tool('libofcongress_get_item', {
       .describe('Names of contributors, creators, or photographers.'),
     subject_headings: z.array(z.string()).describe('LCSH subject headings assigned to this item.'),
     notes: z.array(z.string()).describe('Descriptive notes and annotations from catalogers.'),
+    summary: z
+      .string()
+      .optional()
+      .describe("Cataloger's abstract of the item's subject and historical context."),
     rights_information: z
       .string()
       .optional()
@@ -39,6 +43,27 @@ export const locGetItem = tool('libofcongress_get_item', {
       .string()
       .optional()
       .describe('Physical or technical description of the original item.'),
+    call_number: z
+      .string()
+      .optional()
+      .describe('LOC call number — the shelf location for requesting the physical original.'),
+    languages: z.array(z.string()).describe('Languages of the item (e.g., "english").'),
+    locations: z
+      .array(z.string())
+      .describe('Places the item depicts or originates from (e.g., "united states").'),
+    former_ids: z
+      .array(z.string())
+      .describe('Superseded catalog identifiers or URLs this item was previously known by.'),
+    original_formats: z
+      .array(z.string())
+      .describe('Material types of the original (e.g., "photo, print, drawing").'),
+    online_formats: z
+      .array(z.string())
+      .describe('Formats the digitized surrogate is available in (e.g., "image").'),
+    access_restricted: z
+      .boolean()
+      .optional()
+      .describe('True when LOC restricts access to the original. Absent when upstream omits it.'),
     resource_links: z
       .array(z.string())
       .describe(
@@ -93,23 +118,33 @@ export const locGetItem = tool('libofcongress_get_item', {
       lines.push(`**Contributors:** ${result.contributors.join(', ')}`);
     if (result.subject_headings.length > 0)
       lines.push(`**Subjects:** ${result.subject_headings.join(', ')}`);
+    if (result.languages.length > 0) lines.push(`**Languages:** ${result.languages.join(', ')}`);
+    if (result.locations.length > 0) lines.push(`**Locations:** ${result.locations.join(', ')}`);
+    if (result.summary) lines.push(`**Summary:** ${result.summary}`);
     if (result.physical_description)
       lines.push(`**Physical description:** ${result.physical_description}`);
+    if (result.original_formats.length > 0)
+      lines.push(`**Original format:** ${result.original_formats.join(', ')}`);
+    if (result.online_formats.length > 0)
+      lines.push(`**Online format:** ${result.online_formats.join(', ')}`);
+    if (result.call_number) lines.push(`**Call number:** ${result.call_number}`);
+    if (result.access_restricted !== undefined)
+      lines.push(`**Access restricted:** ${result.access_restricted ? 'yes' : 'no'}`);
     if (result.rights_information) lines.push(`**Rights:** ${result.rights_information}`);
+    if (result.former_ids.length > 0) lines.push(`**Former IDs:** ${result.former_ids.join(', ')}`);
     if (result.notes.length > 0) {
       lines.push('**Notes:**');
       for (const note of result.notes) lines.push(`- ${note}`);
     }
+    // Both lists render in full: a content[]-only client (Claude Desktop) sees nothing but
+    // content[], so any entry omitted here is unreachable for it while structuredContent
+    // clients get the whole array. An overflow count discloses the gap without closing it.
     if (result.resource_links.length > 0) {
       lines.push(`**Digital resources (${result.resource_links.length}):**`);
-      for (const link of result.resource_links.slice(0, 5)) lines.push(`- ${link}`);
-      if (result.resource_links.length > 5)
-        lines.push(`- … and ${result.resource_links.length - 5} more`);
+      for (const link of result.resource_links) lines.push(`- ${link}`);
     }
     if (result.related_items.length > 0) {
-      lines.push(`**Related items:** ${result.related_items.slice(0, 5).join(', ')}`);
-      if (result.related_items.length > 5)
-        lines.push(`- … and ${result.related_items.length - 5} more`);
+      lines.push(`**Related items:** ${result.related_items.join(', ')}`);
     }
     lines.push(`**URL:** ${result.url}`);
     return [{ type: 'text', text: lines.join('\n') }];

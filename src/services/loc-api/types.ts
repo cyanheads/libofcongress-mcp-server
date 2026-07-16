@@ -83,7 +83,8 @@ export type RawLocItemResponse = {
     url?: string;
     other_title?: string[];
     number_former_id?: string[];
-    call_number?: string[];
+    /** Scalar on some records, array on others — normalize with extractFirstString. */
+    call_number?: string | string[];
     type?: string[];
     format?: string[];
     original_format?: string[];
@@ -139,8 +140,18 @@ export type LocItemDetail = {
   contributors: string[];
   subject_headings: string[];
   notes: string[];
+  summary?: string;
   rights_information?: string;
   physical_description?: string;
+  call_number?: string;
+  languages: string[];
+  locations: string[];
+  /** Superseded catalog identifiers, from the raw singular `number_former_id` key. */
+  former_ids: string[];
+  original_formats: string[];
+  online_formats: string[];
+  /** Whether LOC restricts access to the original. Absent when upstream omits it. */
+  access_restricted?: boolean;
   resource_links: string[];
   related_items: string[];
   url: string;

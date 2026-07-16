@@ -415,6 +415,36 @@ describe('LocApiService.search', () => {
       svc.search({ query: 'test', collectionSlug: 'no-such-collection-xyz9', page: 1 }, ctx),
     ).rejects.toMatchObject({ code: JsonRpcErrorCode.NotFound });
   });
+
+  it('NotFound from an upstream 404 carries no internal request URL', async () => {
+    // The search path's query string echoes the caller's own search terms back in the URL.
+    vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const err = await svc
+      .search({ query: 'secret terms', collectionSlug: 'no-such-collection-xyz9', page: 1 }, ctx)
+      .catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: JsonRpcErrorCode.NotFound });
+    const data = (err as { data?: Record<string, unknown> }).data ?? {};
+    expect(data).not.toHaveProperty('url');
+    expect(JSON.stringify(data)).not.toContain('secret');
+    expect(JSON.stringify(data)).not.toContain('www.loc.gov');
+    expect((err as Error).message).not.toContain('www.loc.gov');
+  });
+
+  it('ServiceUnavailable from an HTML body carries no internal request URL', async () => {
+    vi.stubGlobal('fetch', mockFetch('<!DOCTYPE html><html><body>Rate limited</body></html>'));
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const err = await svc.search({ query: 'secret terms', page: 1 }, ctx).catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: JsonRpcErrorCode.ServiceUnavailable });
+    const data = (err as { data?: Record<string, unknown> }).data ?? {};
+    expect(data).not.toHaveProperty('url');
+    expect(JSON.stringify(data)).not.toContain('secret');
+    expect((err as Error).message).not.toContain('www.loc.gov');
+  });
 });
 
 describe('LocApiService.getItem', () => {
@@ -659,6 +689,164 @@ describe('LocApiService.getItem', () => {
     const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
     expect(calledUrl).toContain('/item/2009632251/');
     expect(calledUrl).not.toContain('%2F');
+  });
+
+  it('normalizes the curated metadata fields from a dense upstream record', async () => {
+    // Field shapes mirror live item 2005680380: summary and call_number arrive as plain
+    // strings, the rest as arrays, and the former-id key is singular (number_former_id).
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: {
+            title: 'Political cartoon',
+            url: 'https://www.loc.gov/item/2005680380/',
+            summary: 'A political cartoon commenting on the 1884 election.',
+            language: ['english'],
+            location: ['united states'],
+            call_number: 'Unprocessed in PR 13 CN 2001:055-4 [item] [P&P]',
+            number_former_id: ['http://www.loc.gov/item/13903333'],
+            original_format: ['photo, print, drawing'],
+            online_format: ['image'],
+            access_restricted: true,
+          },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.getItem('2005680380', ctx);
+
+    expect(result.summary).toBe('A political cartoon commenting on the 1884 election.');
+    expect(result.languages).toEqual(['english']);
+    expect(result.locations).toEqual(['united states']);
+    expect(result.call_number).toBe('Unprocessed in PR 13 CN 2001:055-4 [item] [P&P]');
+    expect(result.former_ids).toEqual(['http://www.loc.gov/item/13903333']);
+    expect(result.original_formats).toEqual(['photo, print, drawing']);
+    expect(result.online_formats).toEqual(['image']);
+    expect(result.access_restricted).toBe(true);
+  });
+
+  it('omits the curated fields entirely on a sparse upstream record', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: { title: 'Sparse', url: 'https://www.loc.gov/item/sparse/' },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.getItem('sparse', ctx);
+
+    expect(result.languages).toEqual([]);
+    expect(result.locations).toEqual([]);
+    expect(result.former_ids).toEqual([]);
+    expect(result.original_formats).toEqual([]);
+    expect(result.online_formats).toEqual([]);
+    expect(result.summary).toBeUndefined();
+    expect(result.call_number).toBeUndefined();
+    expect(result.access_restricted).toBeUndefined();
+    expect(result).not.toHaveProperty('access_restricted');
+  });
+
+  it('extracts call_number when upstream sends it as an array', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: {
+            title: 'Array call number',
+            url: 'https://www.loc.gov/item/arr-call/',
+            call_number: ['LOT 1234', 'Alternate shelf mark'],
+          },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.getItem('arr-call', ctx);
+    expect(result.call_number).toBe('LOT 1234');
+  });
+
+  it('keeps access_restricted when upstream reports false', async () => {
+    // A truthiness guard would drop this; an unrestricted item is a fact, not a gap.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: {
+            title: 'Open item',
+            url: 'https://www.loc.gov/item/open/',
+            access_restricted: false,
+          },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.getItem('open', ctx);
+    expect(result.access_restricted).toBe(false);
+  });
+
+  it('joins a multi-entry summary array instead of dropping the tail', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: {
+            title: 'Two-part summary',
+            url: 'https://www.loc.gov/item/summary-arr/',
+            summary: ['First paragraph.', 'Second paragraph.'],
+          },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const result = await svc.getItem('summary-arr', ctx);
+    expect(result.summary).toContain('First paragraph.');
+    expect(result.summary).toContain('Second paragraph.');
+  });
+
+  it('NotFound from an upstream 404 carries no internal request URL', async () => {
+    // fetchJson's 404 throw fires before getItem's own item-missing check, and the resource
+    // has no rewrite layer — whatever data is attached here reaches the client verbatim.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })));
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const err = await svc.getItem('TOTALLY_FAKE_ID', ctx).catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: JsonRpcErrorCode.NotFound });
+    const data = (err as { data?: Record<string, unknown> }).data ?? {};
+    expect(data).not.toHaveProperty('url');
+    expect(JSON.stringify(data)).not.toContain('fo=json');
+    expect(JSON.stringify(data)).not.toContain('www.loc.gov');
+    expect((err as Error).message).not.toContain('www.loc.gov');
+  });
+
+  it('ServiceUnavailable from an HTML body carries no internal request URL', async () => {
+    vi.stubGlobal('fetch', mockFetch('<!DOCTYPE html><html><body>Rate limited</body></html>'));
+    const ctx = createMockContext();
+    const svc = getLocApiService();
+    const err = await svc.getItem('2009632251', ctx).catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: JsonRpcErrorCode.ServiceUnavailable });
+    const data = (err as { data?: Record<string, unknown> }).data ?? {};
+    expect(data).not.toHaveProperty('url');
+    expect(JSON.stringify(data)).not.toContain('fo=json');
+    expect((err as Error).message).not.toContain('www.loc.gov');
   });
 });
 

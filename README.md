@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.13-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.14-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -34,7 +34,7 @@ Six tools covering the Library of Congress digital holdings — general search w
 | Tool | Description |
 |:-----|:------------|
 | `libofcongress_search` | Search LOC digital collections by keyword with optional format, date range, subject heading, geographic location, and collection filters. Returns item summaries with IDs for follow-up retrieval. |
-| `libofcongress_get_item` | Retrieve full metadata for a specific LOC item — contributors, subjects, rights, physical description, resource links (TIFF/JPEG/PDF), and related items. |
+| `libofcongress_get_item` | Retrieve full metadata for a specific LOC item — contributors, subjects, summary, languages, locations, rights, physical description, call number, formats, access restrictions, resource links (TIFF/JPEG/PDF), and related items. |
 | `libofcongress_search_newspapers` | Search historical newspaper pages in the Chronicling America corpus. Returns pages with OCR text excerpts (~500 chars), publication title, date, state, and the URL needed for `libofcongress_get_newspaper_page`. |
 | `libofcongress_get_newspaper_page` | Retrieve the full OCR text of a specific newspaper page. Pass the `url` field from a `libofcongress_search_newspapers` result. Returns `ocr_available: false` when the page has no digitized text. |
 | `libofcongress_search_subjects` | Search Library of Congress Subject Headings (LCSH) by keyword. Returns controlled-vocabulary labels and URIs — use the label as the `subject` filter in `libofcongress_search`. |
@@ -60,10 +60,13 @@ Search the LOC digital collections with full-text keyword matching and facet fil
 Retrieve the full metadata record for a specific LOC digital item.
 
 - Returns contributors, LCSH subject headings, rights information, physical/technical description, and cataloger notes
+- Also returns `summary`, `languages`, `locations`, `call_number` (shelf location for requesting the physical original), `former_ids`, `original_formats`, `online_formats`, and `access_restricted` — all sourced from the same upstream response, no extra request
 - `resource_links` contains URLs to downloadable digital files (TIFF, JPEG, PDF) for items with digital surrogates
 - `related_items` lists IDs of related LOC items for follow-up retrieval
+- `resource_links` and `related_items` render in full in both `structuredContent` and `content[]` — no truncation, so `content[]`-only clients see every value
 - Deduplicates resource links from nested `files[]` arrays
 - Accepts multi-segment item IDs verbatim (e.g. newspaper pages `sn95047246/1935-09-05/ed-1`); returned `url` is always an absolute `https://` URL
+- Fields absent upstream are omitted rather than filled — a sparse record stays sparse
 
 ---
 
@@ -114,9 +117,11 @@ List and browse LOC curated digital collections.
 
 | Type | Name | Description |
 |:-----|:-----|:------------|
-| Resource | `libofcongress://item/{item_id}` | LOC digital item metadata by ID. Stable URI for injecting item context into agent conversations. Returns the same full record as `libofcongress_get_item`. |
+| Resource | `libofcongress://item/{+item_id}` | LOC digital item metadata by ID. Stable URI for injecting item context into agent conversations. Returns the same full record as `libofcongress_get_item`. |
 
 All resource data is also reachable via `libofcongress_get_item`. Use `libofcongress_search` to discover item IDs first.
+
+Write the item ID with its slashes intact — `libofcongress://item/sn95047246/1935-09-05/ed-1` is the canonical form for a multi-segment newspaper ID. Percent-encoded slashes (`%2F`) also resolve.
 
 ## Features
 
@@ -298,7 +303,7 @@ The Dockerfile defaults to HTTP transport and logs to `/var/log/libofcongress-mc
 | `src/index.ts` | `createApp()` entry point — registers tools, resource, and initializes services. |
 | `src/config` | Server-specific environment variable parsing (`LOC_USER_AGENT`, `LOC_REQUEST_DELAY_MS`). |
 | `src/mcp-server/tools` | Tool definitions (`*.tool.ts`) — six LOC tools. |
-| `src/mcp-server/resources` | Resource definitions — `libofcongress://item/{item_id}`. |
+| `src/mcp-server/resources` | Resource definitions — `libofcongress://item/{+item_id}`. |
 | `src/services/loc-api` | `LocApiService` wrapping `www.loc.gov` — search, item fetch, newspaper page, collection browser. |
 | `src/services/lc-linked-data` | `LcLinkedDataService` wrapping `id.loc.gov` — LCSH subject heading suggest. |
 | `tests/` | Unit and integration tests mirroring `src/`. |

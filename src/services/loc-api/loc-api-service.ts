@@ -190,16 +190,24 @@ export class LocApiService {
     return response;
   }
 
+  /**
+   * Fetch and parse a LOC JSON endpoint.
+   *
+   * Neither failure path attaches the request `url` to its error data — it embeds the
+   * internal endpoint and query string, and callers already hold the caller-facing
+   * identifier (item ID, page URL) worth reporting. The resource path in particular has
+   * no catch block to rewrite the payload, so anything attached here reaches the client
+   * verbatim. The URL stays in the debug log above.
+   */
   private async fetchJson<T>(url: string, ctx: Context): Promise<T> {
     const response = await this.fetch(url, ctx);
     if (response.status === 404) {
-      throw notFound('LOC resource not found', { url });
+      throw notFound('LOC resource not found');
     }
     const text = await response.text();
     if (HTML_RESPONSE_RE.test(text)) {
       throw serviceUnavailable(
         'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
-        { url },
       );
     }
     return JSON.parse(text) as T;
@@ -209,11 +217,14 @@ export class LocApiService {
    * Fetch a LOC search endpoint, treating HTTP 400 and 520 as out-of-range page responses
    * (LOC returns these for page numbers beyond the result set).
    * Returns null when the page is out of range.
+   *
+   * Withholds the request `url` from error data for the same reason as `fetchJson` above —
+   * here the query string carries the caller's own search terms.
    */
   private async fetchSearchJson<T>(url: string, ctx: Context): Promise<T | null> {
     const response = await this.fetch(url, ctx, { allowStatus: [400, 520] });
     if (response.status === 404) {
-      throw notFound('LOC resource not found', { url });
+      throw notFound('LOC resource not found');
     }
     // LOC returns 400 or 520 for out-of-range page numbers — treat as empty
     if (response.status === 400 || response.status === 520) {
@@ -224,7 +235,6 @@ export class LocApiService {
     if (HTML_RESPONSE_RE.test(text)) {
       throw serviceUnavailable(
         'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
-        { url },
       );
     }
     return JSON.parse(text) as T;
@@ -304,6 +314,7 @@ export class LocApiService {
     }
     const title = extractFirstString(item.title) ?? 'Untitled';
     const physDesc = extractFirstString(item.physical_description ?? item.medium);
+    const callNumber = extractFirstString(item.call_number);
 
     const resourceLinks: string[] = [];
     for (const resource of data.resources ?? []) {
@@ -326,6 +337,9 @@ export class LocApiService {
 
     const rawRights = item.rights_information ?? item.rights;
     const rights = Array.isArray(rawRights) ? rawRights.join(' ') : rawRights;
+    // Summary is prose; joining keeps a multi-paragraph record whole where taking the
+    // first entry would silently drop the rest.
+    const summary = Array.isArray(item.summary) ? item.summary.join(' ') : item.summary;
 
     return {
       item_id: itemId,
@@ -334,8 +348,20 @@ export class LocApiService {
       contributors: extractStringArray(item.contributor),
       subject_headings: extractStringArray(item.subject),
       notes: extractStringArray(item.notes),
+      ...(summary && { summary }),
       ...(rights && { rights_information: rights }),
       ...(physDesc && { physical_description: physDesc }),
+      ...(callNumber && { call_number: callNumber }),
+      languages: extractStringArray(item.language),
+      locations: extractStringArray(item.location),
+      former_ids: extractStringArray(item.number_former_id),
+      original_formats: extractStringArray(item.original_format),
+      online_formats: extractStringArray(item.online_format),
+      // typeof-guarded so a genuine access_restricted: false survives — an unrestricted
+      // item is a fact, not a missing value.
+      ...(typeof item.access_restricted === 'boolean' && {
+        access_restricted: item.access_restricted,
+      }),
       resource_links: [...new Set(resourceLinks)],
       related_items: [...new Set(relatedItems)],
       // Normalize protocol-relative urls (//lccn.loc.gov/...) to https:, matching

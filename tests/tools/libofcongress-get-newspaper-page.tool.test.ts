@@ -149,6 +149,37 @@ describe('locGetNewspaperPage', () => {
     });
   });
 
+  it('NotFound data carries the caller-facing page URL, not the internal request URL', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })));
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
+    const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
+    const err = await locGetNewspaperPage.handler(input, ctx).catch((e: unknown) => e);
+
+    const data = (err as { data?: Record<string, unknown> }).data ?? {};
+    expect(data).not.toHaveProperty('url');
+    // The caller's own URL is fine to echo; the service's `?fo=json&at=resource` build is not.
+    expect(JSON.stringify(data)).not.toContain('fo=json');
+    expect(data.pageUrl).toBe(PAGE_URL);
+  });
+
+  it('ServiceUnavailable from an HTML body does not leak the internal request URL', async () => {
+    // The catch block remaps only NotFound and RateLimited, so this bubbles unchanged —
+    // it only stays clean if the service never attaches the URL in the first place.
+    vi.stubGlobal(
+      'fetch',
+      mockFetchSequence({ body: '<!DOCTYPE html><html><body>Rate limited</body></html>' }),
+    );
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
+    const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
+    const err = await locGetNewspaperPage.handler(input, ctx).catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: JsonRpcErrorCode.ServiceUnavailable });
+    const data = (err as { data?: Record<string, unknown> }).data ?? {};
+    expect(data).not.toHaveProperty('url');
+    expect(JSON.stringify(data)).not.toContain('fo=json');
+    expect((err as Error).message).not.toContain('www.loc.gov');
+  });
+
   it('appends ?fo=json when URL has no existing query', async () => {
     const fetchSpy = mockFetchSequence({
       body: makeResourceResponse({ fulltext_file: undefined }),
