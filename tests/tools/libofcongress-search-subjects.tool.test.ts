@@ -62,15 +62,15 @@ describe('locSearchSubjects', () => {
         ]),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchSubjects.errors });
     const input = locSearchSubjects.input.parse({ query: 'world war' });
     const result = await locSearchSubjects.handler(input, ctx);
 
     expect(result.subjects).toHaveLength(2);
     expect(result.total).toBe(2);
-    expect(result.subjects[0].label).toBe('World War, 1939-1945');
-    expect(result.subjects[0].uri).toBe('http://id.loc.gov/authorities/subjects/sh85148273');
-    expect(result.subjects[0].count).toBe(1500);
+    expect(result.subjects[0]!.label).toBe('World War, 1939-1945');
+    expect(result.subjects[0]!.uri).toBe('http://id.loc.gov/authorities/subjects/sh85148273');
+    expect(result.subjects[0]!.count).toBe(1500);
     // Enrichment echoes query for both structuredContent and content[] clients
     const enrichment = getEnrichment(ctx);
     expect(enrichment.effectiveQuery).toBe('world war');
@@ -78,7 +78,7 @@ describe('locSearchSubjects', () => {
 
   it('populates enrichment.notice and returns empty subjects when no results', async () => {
     vi.stubGlobal('fetch', mockFetch(makeSuggestResponse([])));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchSubjects.errors });
     const input = locSearchSubjects.input.parse({ query: 'xyzzy_no_match' });
     const result = await locSearchSubjects.handler(input, ctx);
 
@@ -103,11 +103,11 @@ describe('locSearchSubjects', () => {
         ]),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchSubjects.errors });
     const input = locSearchSubjects.input.parse({ query: 'aerial photo' });
     const result = await locSearchSubjects.handler(input, ctx);
 
-    expect(result.subjects[0].count).toBeUndefined();
+    expect(result.subjects[0]!.count).toBeUndefined();
   });
 
   it('requests the full candidate cap regardless of limit and slices results to the requested limit', async () => {
@@ -122,11 +122,11 @@ describe('locSearchSubjects', () => {
       ),
     );
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchSubjects.errors });
     const input = locSearchSubjects.input.parse({ query: 'music', limit: 5 });
     const result = await locSearchSubjects.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('count=50');
     expect(result.subjects).toHaveLength(5);
   });
@@ -134,11 +134,11 @@ describe('locSearchSubjects', () => {
   it('caps the count param at 50 for the suggest endpoint', async () => {
     const fetchSpy = mockFetch(makeSuggestResponse([]));
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchSubjects.errors });
     const input = locSearchSubjects.input.parse({ query: 'music', limit: 50 });
     await locSearchSubjects.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('count=50');
     expect(calledUrl).not.toContain('count=100');
   });
@@ -152,7 +152,7 @@ describe('locSearchSubjects', () => {
       uri: `http://id.loc.gov/authorities/names/no${i}`,
     }));
     vi.stubGlobal('fetch', mockFetch(makeSuggestResponse(entries)));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchSubjects.errors });
     const input = locSearchSubjects.input.parse({ query: 'world war', limit: 3 });
     const result = await locSearchSubjects.handler(input, ctx);
 
@@ -177,7 +177,7 @@ describe('locSearchSubjects', () => {
       })),
     ];
     vi.stubGlobal('fetch', mockFetch(makeSuggestResponse(entries)));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchSubjects.errors });
     const input = locSearchSubjects.input.parse({ query: 'civil war', limit: 5 });
     const result = await locSearchSubjects.handler(input, ctx);
 
@@ -194,7 +194,7 @@ describe('locSearchSubjects', () => {
       uri: `http://id.loc.gov/authorities/subjects/sh${i}`,
     }));
     vi.stubGlobal('fetch', mockFetch(makeSuggestResponse(entries)));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchSubjects.errors });
     const input = locSearchSubjects.input.parse({ query: 'music', limit: 3 });
     const result = await locSearchSubjects.handler(input, ctx);
 
@@ -211,7 +211,9 @@ describe('locSearchSubjects', () => {
     );
     const ctx = createMockContext({ errors: locSearchSubjects.errors });
     const input = locSearchSubjects.input.parse({ query: 'confidential-term' });
-    const err = await locSearchSubjects.handler(input, ctx).catch((e: unknown) => e);
+    const err = await Promise.resolve(locSearchSubjects.handler(input, ctx)).catch(
+      (e: unknown) => e,
+    );
 
     expect(err).toMatchObject({ code: JsonRpcErrorCode.ServiceUnavailable });
     // The suggest URL embeds the caller's query — it must not surface in error data or message.
@@ -227,7 +229,7 @@ describe('locSearchSubjects', () => {
       'fetch',
       mockFetch('<!DOCTYPE html><html><body>Service Unavailable</body></html>', 200),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchSubjects.errors });
     const input = locSearchSubjects.input.parse({ query: 'jazz' });
     await expect(locSearchSubjects.handler(input, ctx)).rejects.toThrow();
   });
@@ -244,7 +246,7 @@ describe('locSearchSubjects', () => {
       total: 1,
     });
     const blocks = locSearchSubjects.format!(output);
-    expect(blocks[0].type).toBe('text');
+    expect(blocks[0]!.type).toBe('text');
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('World War, 1939-1945');
     expect(text).toContain('http://id.loc.gov/authorities/subjects/sh85148273');

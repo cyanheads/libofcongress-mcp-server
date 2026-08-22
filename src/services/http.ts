@@ -7,7 +7,7 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import type { RequestContextLike, RetryOptions } from '@cyanheads/mcp-ts-core/utils';
+import type { RetryOptions } from '@cyanheads/mcp-ts-core/utils';
 
 /** Per-request timeout ceiling (ms) for every LOC upstream call. */
 export const LOC_TIMEOUT_MS = 30_000;
@@ -35,9 +35,7 @@ export function isTransientNetworkFault(error: unknown): boolean {
 export function locRetryOptions(ctx: Context, operation: string): RetryOptions {
   return {
     operation,
-    // Handler `Context` lacks the open index signature of `RequestContext`; the framework's
-    // sanctioned cast to the closed `RequestContextLike` projection lets it pass for log correlation.
-    context: ctx as unknown as RequestContextLike,
+    context: ctx,
     signal: ctx.signal,
     isTransient: isTransientNetworkFault,
     baseDelayMs: RETRY_BASE_DELAY_MS,

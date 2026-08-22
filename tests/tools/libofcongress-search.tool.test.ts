@@ -59,13 +59,13 @@ describe('locSearch', () => {
 
   it('returns items and pagination for a basic keyword search', async () => {
     vi.stubGlobal('fetch', mockFetch(makeSearchResponse()));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'civil war photos' });
     const result = await locSearch.handler(input, ctx);
 
     expect(result.items).toHaveLength(1);
-    expect(result.items[0].id).toBe('2009632251');
-    expect(result.items[0].title).toBe('Test Photo');
+    expect(result.items[0]!.id).toBe('2009632251');
+    expect(result.items[0]!.title).toBe('Test Photo');
     expect(result.total).toBe(1);
     expect(result.page).toBe(1);
     expect(result.has_next).toBe(false);
@@ -82,7 +82,7 @@ describe('locSearch', () => {
         makeSearchResponse({ results: [], pagination: { total: 0, perpage: 25, pages: 0 } }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'xyzzy_no_match_expected' });
     const result = await locSearch.handler(input, ctx);
 
@@ -105,7 +105,7 @@ describe('locSearch', () => {
         makeSearchResponse({ results: [], pagination: { total: 1, perpage: 25, pages: 0 } }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'zzzz_no_such_item_abcdef' });
     const result = await locSearch.handler(input, ctx);
 
@@ -118,29 +118,29 @@ describe('locSearch', () => {
   it('applies format filter — passes format slug in the URL', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'maps', format: 'map' });
     await locSearch.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/maps/');
   });
 
   it('applies date range filter in querystring', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'war', date_start: 1920, date_end: 1945 });
     await locSearch.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('dates=1920%2F1945');
   });
 
   it('applies subject and location facets in querystring', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({
       query: 'photos',
       subject: 'World War, 1939-1945',
@@ -148,7 +148,7 @@ describe('locSearch', () => {
     });
     await locSearch.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('fa=');
     expect(calledUrl).toContain('subject%3AWorld');
     expect(calledUrl).toContain('location%3Aoklahoma');
@@ -157,25 +157,25 @@ describe('locSearch', () => {
   it('strips empty subject/location strings (form-client payload)', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'photos', subject: '', location: '' });
     await locSearch.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).not.toContain('fa=');
   });
 
   it('applies collection_slug — routes the search through the collection endpoint', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({
       query: 'correspondence',
       collection_slug: 'aaron-copland',
     });
     await locSearch.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/collections/aaron-copland/');
     expect(calledUrl).not.toContain('/search/');
   });
@@ -183,11 +183,11 @@ describe('locSearch', () => {
   it('strips an empty collection_slug string (form-client payload)', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'photos', collection_slug: '   ' });
     await locSearch.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/search/');
     expect(calledUrl).not.toContain('/collections/');
     expect(getEnrichment(ctx).effectiveCollectionSlug).toBeUndefined();
@@ -195,7 +195,7 @@ describe('locSearch', () => {
 
   it('echoes the applied collection scope in enrichment', async () => {
     vi.stubGlobal('fetch', mockFetch(makeSearchResponse()));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({
       query: 'correspondence',
       collection_slug: '  aaron-copland  ',
@@ -212,7 +212,7 @@ describe('locSearch', () => {
         makeSearchResponse({ results: [], pagination: { total: 0, perpage: 25, pages: 0 } }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({
       query: 'zzzz_no_match',
       collection_slug: 'aaron-copland',
@@ -233,7 +233,7 @@ describe('locSearch', () => {
       collection_slug: 'aaron-copland',
     });
 
-    const err = await locSearch.handler(input, ctx).catch((e: unknown) => e);
+    const err = await Promise.resolve(locSearch.handler(input, ctx)).catch((e: unknown) => e);
     expect(err).toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
       data: { reason: 'incompatible_filters' },
@@ -253,7 +253,7 @@ describe('locSearch', () => {
       collection_slug: 'no-such-collection-xyz9',
     });
 
-    const err = await locSearch.handler(input, ctx).catch((e: unknown) => e);
+    const err = await Promise.resolve(locSearch.handler(input, ctx)).catch((e: unknown) => e);
     expect(err).toMatchObject({
       code: JsonRpcErrorCode.NotFound,
       data: { reason: 'collection_not_found', collectionSlug: 'no-such-collection-xyz9' },
@@ -266,7 +266,7 @@ describe('locSearch', () => {
     const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'letters', collection_slug: 'nope-xyz9' });
 
-    const err = (await locSearch.handler(input, ctx).catch((e: unknown) => e)) as {
+    const err = (await Promise.resolve(locSearch.handler(input, ctx)).catch((e: unknown) => e)) as {
       message: string;
       data?: Record<string, unknown>;
     };
@@ -281,7 +281,7 @@ describe('locSearch', () => {
     const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'letters' });
 
-    const err = (await locSearch.handler(input, ctx).catch((e: unknown) => e)) as {
+    const err = (await Promise.resolve(locSearch.handler(input, ctx)).catch((e: unknown) => e)) as {
       data?: Record<string, unknown>;
     };
     expect(err.data?.reason).not.toBe('collection_not_found');
@@ -296,7 +296,7 @@ describe('locSearch', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'test', page: 1 });
     const result = await locSearch.handler(input, ctx);
     expect(result.has_next).toBe(true);
@@ -305,7 +305,7 @@ describe('locSearch', () => {
 
   it('throws on HTML response (rate-limited proxy page)', async () => {
     vi.stubGlobal('fetch', mockFetch('<!DOCTYPE html><html><body>Error</body></html>', 200));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'test' });
     await expect(locSearch.handler(input, ctx)).rejects.toThrow();
   });
@@ -329,7 +329,7 @@ describe('locSearch', () => {
     });
     const blocks = locSearch.format!(output);
     expect(blocks).toHaveLength(1);
-    expect(blocks[0].type).toBe('text');
+    expect(blocks[0]!.type).toBe('text');
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('loc.pnp.ppmsc.02404');
     expect(text).toContain('Sample Photo');
@@ -373,7 +373,7 @@ describe('locSearch', () => {
   });
 
   it('rejects inverted date range with ValidationError', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'history', date_start: 1950, date_end: 1920 });
     await expect(locSearch.handler(input, ctx)).rejects.toSatisfy(
       (e: unknown) => (e as { code?: number }).code === JsonRpcErrorCode.ValidationError,
@@ -398,13 +398,13 @@ describe('locSearch', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'test', page: 999 });
     const result = await locSearch.handler(input, ctx);
 
     // The served item is returned, not thrown away.
     expect(result.items).toHaveLength(1);
-    expect(result.items[0].id).toBe('2009632251');
+    expect(result.items[0]!.id).toBe('2009632251');
     // Pagination stays consistent: page never exceeds pages.
     expect(result.page).toBe(999);
     expect(result.pages).toBeGreaterThanOrEqual(result.page);
@@ -430,7 +430,7 @@ describe('locSearch', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'civil rights', limit: 100, page: 250 });
     const result = await locSearch.handler(input, ctx);
 
@@ -445,7 +445,7 @@ describe('locSearch', () => {
 
   it('flags a page past the ~100k ceiling with partition guidance, not just "smaller page" (#33 Bug A)', async () => {
     vi.stubGlobal('fetch', mockFetch('', 400)); // LOC 400s a page past the retrieval ceiling
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'civil rights', limit: 100, page: 1500 });
     const result = await locSearch.handler(input, ctx);
 
@@ -457,7 +457,7 @@ describe('locSearch', () => {
 
   it('returns empty result when LOC API returns HTTP 400 (out-of-range page)', async () => {
     vi.stubGlobal('fetch', mockFetch('', 400));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'test', page: 99999 });
     const result = await locSearch.handler(input, ctx);
 
@@ -467,7 +467,7 @@ describe('locSearch', () => {
 
   it('reports a generic out-of-range page (400 within the ceiling) without ceiling language', async () => {
     vi.stubGlobal('fetch', mockFetch('', 400));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'niche query', limit: 25, page: 8 });
     const result = await locSearch.handler(input, ctx);
 
@@ -507,13 +507,13 @@ describe('locSearch', () => {
   it('query with injection chars is handled without URL structure breakage', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({
       query: "'; DROP TABLE items; SELECT * FROM items WHERE '1'='1",
     });
     await locSearch.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     // URL must remain parseable and not contain raw SQL injection
     expect(() => new URL(calledUrl)).not.toThrow();
     expect(calledUrl).toContain('fo=json');
@@ -599,13 +599,13 @@ describe('locSearch', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearch.errors });
     const input = locSearch.input.parse({ query: 'civil war' });
     const result = await locSearch.handler(input, ctx);
-    expect(result.items[0].is_item).toBe(false);
-    expect(result.items[0].id).toBe('collections/civil-war/about-this-collection');
-    expect(result.items[1].is_item).toBe(true);
-    expect(result.items[1].id).toBe('2009632251');
+    expect(result.items[0]!.is_item).toBe(false);
+    expect(result.items[0]!.id).toBe('collections/civil-war/about-this-collection');
+    expect(result.items[1]!.is_item).toBe(true);
+    expect(result.items[1]!.id).toBe('2009632251');
   });
 
   it('format() flags collection landing pages as non-get_item targets', () => {

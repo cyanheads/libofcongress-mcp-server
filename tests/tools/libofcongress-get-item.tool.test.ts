@@ -57,7 +57,7 @@ describe('locGetItem', () => {
 
   it('returns full item metadata for a valid ID', async () => {
     vi.stubGlobal('fetch', mockFetch(makeItemResponse()));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetItem.errors });
     const input = locGetItem.input.parse({ item_id: '2009632251' });
     const result = await locGetItem.handler(input, ctx);
 
@@ -88,7 +88,7 @@ describe('locGetItem', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetItem.errors });
     const input = locGetItem.input.parse({ item_id: 'min-id' });
     const result = await locGetItem.handler(input, ctx);
 
@@ -126,7 +126,7 @@ describe('locGetItem', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetItem.errors });
     const input = locGetItem.input.parse({ item_id: '2005680380' });
     const result = await locGetItem.handler(input, ctx);
 
@@ -146,7 +146,7 @@ describe('locGetItem', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })));
     const ctx = createMockContext({ errors: locGetItem.errors });
     const input = locGetItem.input.parse({ item_id: 'TOTALLY_FAKE_ID' });
-    const err = await locGetItem.handler(input, ctx).catch((e: unknown) => e);
+    const err = await Promise.resolve(locGetItem.handler(input, ctx)).catch((e: unknown) => e);
 
     const data = (err as { data?: Record<string, unknown> }).data ?? {};
     expect(data).not.toHaveProperty('url');
@@ -161,7 +161,7 @@ describe('locGetItem', () => {
     vi.stubGlobal('fetch', mockFetch('<!DOCTYPE html><html><body>Rate limited</body></html>'));
     const ctx = createMockContext({ errors: locGetItem.errors });
     const input = locGetItem.input.parse({ item_id: '2009632251' });
-    const err = await locGetItem.handler(input, ctx).catch((e: unknown) => e);
+    const err = await Promise.resolve(locGetItem.handler(input, ctx)).catch((e: unknown) => e);
 
     expect(err).toMatchObject({ code: JsonRpcErrorCode.ServiceUnavailable });
     const data = (err as { data?: Record<string, unknown> }).data ?? {};
@@ -201,7 +201,7 @@ describe('locGetItem', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetItem.errors });
     const input = locGetItem.input.parse({ item_id: 'dup' });
     const result = await locGetItem.handler(input, ctx);
     const unique = new Set(result.resource_links);
@@ -226,7 +226,7 @@ describe('locGetItem', () => {
       url: 'https://www.loc.gov/item/loc.pnp.ppmsc.02404/',
     });
     const blocks = locGetItem.format!(output);
-    expect(blocks[0].type).toBe('text');
+    expect(blocks[0]!.type).toBe('text');
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('loc.pnp.ppmsc.02404');
     expect(text).toContain('Portrait of Abraham Lincoln');
@@ -405,7 +405,7 @@ describe('locGetItem', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetItem.errors });
     const input = locGetItem.input.parse({ item_id: '2009632251' });
     const result = await locGetItem.handler(input, ctx);
     expect(result.url).toBe('https://lccn.loc.gov/2009632251');
@@ -424,12 +424,12 @@ describe('locGetItem', () => {
       }),
     );
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetItem.errors });
     const input = locGetItem.input.parse({ item_id: 'sn95047246/1935-09-05/ed-1' });
     const result = await locGetItem.handler(input, ctx);
     expect(result.item_id).toBe('sn95047246/1935-09-05/ed-1');
     expect(result.title).toBe('The Evening Star');
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/item/sn95047246/1935-09-05/ed-1/');
     expect(calledUrl).not.toContain('%2F');
   });

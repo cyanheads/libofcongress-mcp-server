@@ -66,14 +66,14 @@ describe('locBrowseCollections', () => {
 
   it('returns collections when called without a query', async () => {
     vi.stubGlobal('fetch', mockFetch(makeCollectionsResponse()));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({});
     const result = await locBrowseCollections.handler(input, ctx);
 
     expect(result.collections).toHaveLength(2);
-    expect(result.collections[0].slug).toBe('aaron-copland');
-    expect(result.collections[0].title).toBe('Aaron Copland Collection');
-    expect(result.collections[0].url).toContain('aaron-copland');
+    expect(result.collections[0]!.slug).toBe('aaron-copland');
+    expect(result.collections[0]!.title).toBe('Aaron Copland Collection');
+    expect(result.collections[0]!.url).toContain('aaron-copland');
     expect(result.total).toBe(2);
     // Enrichment echoes total for both structuredContent and content[] clients
     const enrichment = getEnrichment(ctx);
@@ -82,7 +82,7 @@ describe('locBrowseCollections', () => {
 
   it('extracts the route slug, not a title-derived one, from every collection URL', async () => {
     vi.stubGlobal('fetch', mockFetch(makeCollectionsResponse()));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({});
     const result = await locBrowseCollections.handler(input, ctx);
 
@@ -96,18 +96,18 @@ describe('locBrowseCollections', () => {
 
   it('populates item_count from the upstream count through the full handler path', async () => {
     vi.stubGlobal('fetch', mockFetch(makeCollectionsResponse()));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({});
     const result = await locBrowseCollections.handler(input, ctx);
 
     // 982 is the collection-level count; 941 is the nested item.total on the same result
-    expect(result.collections[0].item_count).toBe(982);
-    expect(result.collections[1].item_count).toBe(2100);
+    expect(result.collections[0]!.item_count).toBe(982);
+    expect(result.collections[1]!.item_count).toBe(2100);
   });
 
   it('renders item_count from a live-shaped upstream payload in format()', async () => {
     vi.stubGlobal('fetch', mockFetch(makeCollectionsResponse()));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({});
     const result = await locBrowseCollections.handler(input, ctx);
 
@@ -120,22 +120,22 @@ describe('locBrowseCollections', () => {
   it('sends keyword query param when query is provided', async () => {
     const fetchSpy = mockFetch(makeCollectionsResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({ query: 'civil war' });
     await locBrowseCollections.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('civil');
   });
 
   it('omits q param when query is empty string (form-client payload)', async () => {
     const fetchSpy = mockFetch(makeCollectionsResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({ query: '' });
     await locBrowseCollections.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).not.toContain('&q=');
   });
 
@@ -149,7 +149,7 @@ describe('locBrowseCollections', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({ query: 'xyzzy_no_match' });
     const result = await locBrowseCollections.handler(input, ctx);
 
@@ -172,7 +172,7 @@ describe('locBrowseCollections', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({
       query: 'zzzz_no_such_collection_abcdef',
       limit: 2,
@@ -190,7 +190,7 @@ describe('locBrowseCollections', () => {
       'fetch',
       mockFetch(makeCollectionsResponse({ pagination: { total: 50, perpage: 25, pages: 2 } })),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({ page: 1 });
     const result = await locBrowseCollections.handler(input, ctx);
     expect(result.has_next).toBe(true);
@@ -198,7 +198,7 @@ describe('locBrowseCollections', () => {
 
   it('throws ServiceUnavailable on HTML response', async () => {
     vi.stubGlobal('fetch', mockFetch('<!DOCTYPE html><html><body>Blocked</body></html>', 200));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({});
     await expect(locBrowseCollections.handler(input, ctx)).rejects.toThrow();
   });
@@ -220,7 +220,7 @@ describe('locBrowseCollections', () => {
       has_next: false,
     });
     const blocks = locBrowseCollections.format!(output);
-    expect(blocks[0].type).toBe('text');
+    expect(blocks[0]!.type).toBe('text');
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('civil-war-glass-negatives');
     expect(text).toContain('Civil War Glass Negatives');
@@ -265,7 +265,7 @@ describe('locBrowseCollections', () => {
 
   it('returns empty result with enrichment.notice when out-of-range page (page > 1, pages === 0)', async () => {
     vi.stubGlobal('fetch', mockFetch('', 400));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({ page: 5 });
     const result = await locBrowseCollections.handler(input, ctx);
 
@@ -292,12 +292,12 @@ describe('locBrowseCollections', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({ page: 10 });
     const result = await locBrowseCollections.handler(input, ctx);
 
     expect(result.collections).toHaveLength(1);
-    expect(result.collections[0].slug).toBe('some-col');
+    expect(result.collections[0]!.slug).toBe('some-col');
     expect(result.page).toBe(10);
     expect(result.pages).toBeGreaterThanOrEqual(result.page);
     expect(getEnrichment(ctx).notice).toBeUndefined();
@@ -313,7 +313,7 @@ describe('locBrowseCollections', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const result = await locBrowseCollections.handler(locBrowseCollections.input.parse({}), ctx);
 
     expect(result.total).toBe(583);
@@ -330,7 +330,7 @@ describe('locBrowseCollections', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locBrowseCollections.errors });
     const input = locBrowseCollections.input.parse({});
     const result = await locBrowseCollections.handler(input, ctx);
 

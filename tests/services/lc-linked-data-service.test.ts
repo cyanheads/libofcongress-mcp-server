@@ -71,9 +71,9 @@ describe('LcLinkedDataService.searchSubjects', () => {
     const { subjects: results } = await svc.searchSubjects('world war', 10, ctx);
 
     expect(results).toHaveLength(1);
-    expect(results[0].label).toBe('World War, 1939-1945');
-    expect(results[0].uri).toBe('http://id.loc.gov/authorities/subjects/sh85148273');
-    expect(results[0].count).toBe(1500);
+    expect(results[0]!.label).toBe('World War, 1939-1945');
+    expect(results[0]!.uri).toBe('http://id.loc.gov/authorities/subjects/sh85148273');
+    expect(results[0]!.count).toBe(1500);
   });
 
   it('omits count when count string is empty', async () => {
@@ -92,7 +92,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
     const { subjects: results } = await svc.searchSubjects('aerial', 10, ctx);
-    expect(results[0].count).toBeUndefined();
+    expect(results[0]!.count).toBeUndefined();
   });
 
   it('omits count when count string is non-numeric', async () => {
@@ -110,7 +110,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
     const { subjects: results } = await svc.searchSubjects('photo', 10, ctx);
-    expect(results[0].count).toBeUndefined();
+    expect(results[0]!.count).toBeUndefined();
   });
 
   it('returns empty array when suggest response has fewer than 4 elements', async () => {
@@ -223,7 +223,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
 
     // Request size is decoupled from `limit` — always the endpoint's 50-candidate cap — so a
     // heading ranked deep in the pool is fetched, not missed by a limit-scaled window (issue #25).
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('count=50');
     // Sliced to the requested limit; matchCount reflects the full filtered pool.
     expect(subjects).toHaveLength(5);
@@ -251,9 +251,9 @@ describe('LcLinkedDataService.searchSubjects', () => {
     const svc = getLcLinkedDataService();
     const { subjects, matchCount, poolCapReached } = await svc.searchSubjects('civil war', 2, ctx);
 
-    expect((fetchSpy.mock.calls[0][0] as string) ?? '').toContain('count=50');
+    expect((fetchSpy.mock.calls[0]![0] as string) ?? '').toContain('count=50');
     expect(subjects).toHaveLength(1);
-    expect(subjects[0].uri).toBe('http://id.loc.gov/authorities/subjects/sh90004165');
+    expect(subjects[0]!.uri).toBe('http://id.loc.gov/authorities/subjects/sh90004165');
     expect(matchCount).toBe(1);
     // Seven candidates in the pool (< 50 cap) — the heading is genuinely present, not cut off.
     expect(poolCapReached).toBe(false);
@@ -300,7 +300,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     const ctx = createMockContext();
     const svc = getLcLinkedDataService();
     await svc.searchSubjects('jazz', 200, ctx); // limit of 200 exceeds cap
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('count=50');
     expect(calledUrl).not.toContain('count=200');
   });
@@ -312,7 +312,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
     const svc = getLcLinkedDataService();
     const injection = '<script>alert(1)</script>';
     await svc.searchSubjects(injection, 10, ctx);
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     // Raw angle brackets must not appear unencoded
     expect(calledUrl).not.toContain('<script>');
   });

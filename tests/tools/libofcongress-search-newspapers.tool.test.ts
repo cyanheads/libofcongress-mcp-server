@@ -55,15 +55,15 @@ describe('locSearchNewspapers', () => {
 
   it('returns newspaper pages for a basic keyword search', async () => {
     vi.stubGlobal('fetch', mockFetch(makeNewspaperSearchResponse()));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({ query: 'train wreck' });
     const result = await locSearchNewspapers.handler(input, ctx);
 
     expect(result.items).toHaveLength(1);
-    expect(result.items[0].url).toBe(
+    expect(result.items[0]!.url).toBe(
       'https://www.loc.gov/resource/sn84026749/1900-01-01/ed-1/?sp=1',
     );
-    expect(result.items[0].date).toBe('1900-01-01');
+    expect(result.items[0]!.date).toBe('1900-01-01');
     expect(result.total).toBe(1);
     expect(result.has_next).toBe(false);
     // Enrichment echoes query and total for both structuredContent and content[] clients
@@ -82,7 +82,7 @@ describe('locSearchNewspapers', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({
       query: 'xyzzy_nope',
       state: 'oklahoma',
@@ -110,7 +110,7 @@ describe('locSearchNewspapers', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({ query: 'zzzz_no_such_page_abcdef' });
     const result = await locSearchNewspapers.handler(input, ctx);
 
@@ -123,43 +123,43 @@ describe('locSearchNewspapers', () => {
   it('hits the /newspapers/ endpoint', async () => {
     const fetchSpy = mockFetch(makeNewspaperSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({ query: 'election' });
     await locSearchNewspapers.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/newspapers/');
   });
 
   it('applies state filter as a location facet', async () => {
     const fetchSpy = mockFetch(makeNewspaperSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({ query: 'flood', state: 'texas' });
     await locSearchNewspapers.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('location%3Atexas');
   });
 
   it('applies newspaper_title filter as partof_title facet', async () => {
     const fetchSpy = mockFetch(makeNewspaperSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({
       query: 'congress',
       newspaper_title: 'New York Times',
     });
     await locSearchNewspapers.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('partof_title');
   });
 
   it('strips empty state/newspaper_title (form-client payload)', async () => {
     const fetchSpy = mockFetch(makeNewspaperSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({
       query: 'fire',
       state: '',
@@ -167,14 +167,14 @@ describe('locSearchNewspapers', () => {
     });
     await locSearchNewspapers.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).not.toContain('fa=');
   });
 
   it('applies date range filter', async () => {
     const fetchSpy = mockFetch(makeNewspaperSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({
       query: 'prohibition',
       date_start: 1920,
@@ -182,7 +182,7 @@ describe('locSearchNewspapers', () => {
     });
     await locSearchNewspapers.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('dates=1920%2F1933');
   });
 
@@ -204,7 +204,7 @@ describe('locSearchNewspapers', () => {
       has_next: false,
     });
     const blocks = locSearchNewspapers.format!(output);
-    expect(blocks[0].type).toBe('text');
+    expect(blocks[0]!.type).toBe('text');
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('The Daily Oklahoman');
     expect(text).toContain('1900-01-01');
@@ -256,19 +256,19 @@ describe('locSearchNewspapers', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({ query: 'election' });
     const result = await locSearchNewspapers.handler(input, ctx);
 
-    expect(result.items[0].newspaper_title).toContain('evening world');
-    expect(result.items[0].newspaper_title).not.toBe('united states');
+    expect(result.items[0]!.newspaper_title).toContain('evening world');
+    expect(result.items[0]!.newspaper_title).not.toBe('united states');
     // state should come from location_state, not location[0]
-    expect(result.items[0].state).toContain('new york');
-    expect(result.items[0].state).not.toBe('united states');
+    expect(result.items[0]!.state).toContain('new york');
+    expect(result.items[0]!.state).not.toBe('united states');
   });
 
   it('rejects inverted date range with ValidationError', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({
       query: 'election',
       date_start: 1930,
@@ -299,7 +299,7 @@ describe('locSearchNewspapers', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({ query: 'election', page: 10 });
     const result = await locSearchNewspapers.handler(input, ctx);
 
@@ -325,7 +325,7 @@ describe('locSearchNewspapers', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({ query: 'the', limit: 100, page: 250 });
     const result = await locSearchNewspapers.handler(input, ctx);
 
@@ -346,7 +346,7 @@ describe('locSearchNewspapers', () => {
         }),
       ),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({
       query: 'blizzard',
       date_start: 1888,
@@ -386,11 +386,11 @@ describe('locSearchNewspapers', () => {
   it('query with unicode characters passes through correctly', async () => {
     const fetchSpy = mockFetch(makeNewspaperSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locSearchNewspapers.errors });
     const input = locSearchNewspapers.input.parse({ query: 'café société' });
     await locSearchNewspapers.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(() => new URL(calledUrl)).not.toThrow();
   });
 

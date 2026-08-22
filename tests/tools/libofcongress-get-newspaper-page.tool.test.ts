@@ -65,7 +65,7 @@ describe('locGetNewspaperPage', () => {
 
   it('returns page metadata and OCR text when fulltext_file is present', async () => {
     vi.stubGlobal('fetch', mockFetchSequence({ body: makeResourceResponse() }, { body: OCR_JSON }));
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
     const result = await locGetNewspaperPage.handler(input, ctx);
 
@@ -93,7 +93,7 @@ describe('locGetNewspaperPage', () => {
         }),
       }),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({
       page_url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/?sp=12&q=titanic',
     });
@@ -110,7 +110,7 @@ describe('locGetNewspaperPage', () => {
         body: makeResourceResponse({ fulltext_file: undefined }),
       }),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
     const result = await locGetNewspaperPage.handler(input, ctx);
 
@@ -124,7 +124,7 @@ describe('locGetNewspaperPage', () => {
       'fetch',
       mockFetchSequence({ body: makeResourceResponse() }, { body: 'Service error', status: 503 }),
     );
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
     const result = await locGetNewspaperPage.handler(input, ctx);
 
@@ -161,7 +161,9 @@ describe('locGetNewspaperPage', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })));
     const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
-    const err = await locGetNewspaperPage.handler(input, ctx).catch((e: unknown) => e);
+    const err = await Promise.resolve(locGetNewspaperPage.handler(input, ctx)).catch(
+      (e: unknown) => e,
+    );
 
     const data = (err as { data?: Record<string, unknown> }).data ?? {};
     expect(data).not.toHaveProperty('url');
@@ -179,7 +181,9 @@ describe('locGetNewspaperPage', () => {
     );
     const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
-    const err = await locGetNewspaperPage.handler(input, ctx).catch((e: unknown) => e);
+    const err = await Promise.resolve(locGetNewspaperPage.handler(input, ctx)).catch(
+      (e: unknown) => e,
+    );
 
     expect(err).toMatchObject({ code: JsonRpcErrorCode.ServiceUnavailable });
     const data = (err as { data?: Record<string, unknown> }).data ?? {};
@@ -194,11 +198,11 @@ describe('locGetNewspaperPage', () => {
     });
     vi.stubGlobal('fetch', fetchSpy);
     const bareUrl = 'https://www.loc.gov/resource/sn84026749/1900-01-01/ed-1/';
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: bareUrl });
     await locGetNewspaperPage.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('fo=json');
   });
 
@@ -214,7 +218,7 @@ describe('locGetNewspaperPage', () => {
       ocr_available: true,
     });
     const blocks = locGetNewspaperPage.format!(output);
-    expect(blocks[0].type).toBe('text');
+    expect(blocks[0]!.type).toBe('text');
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('The Daily Oklahoman');
     expect(text).toContain(PAGE_URL);
@@ -239,7 +243,7 @@ describe('locGetNewspaperPage', () => {
   it('rejects non-LOC page_url with ValidationError before any fetch', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: 'https://example.com/not-loc' });
     await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
@@ -250,7 +254,7 @@ describe('locGetNewspaperPage', () => {
   it('rejects malformed page_url with ValidationError before any fetch', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: 'not-a-url-at-all' });
     await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
@@ -264,11 +268,11 @@ describe('locGetNewspaperPage', () => {
     });
     vi.stubGlobal('fetch', fetchSpy);
     const urlWithQ = 'https://www.loc.gov/resource/sn84026749/1900-01-01/ed-1/?sp=1&q=election';
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: urlWithQ });
     await locGetNewspaperPage.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).not.toContain('q=election');
     expect(calledUrl).toContain('sp=1');
   });
@@ -276,11 +280,11 @@ describe('locGetNewspaperPage', () => {
   it('uses fulltext_file directly as OCR fetch URL (no double-encoding)', async () => {
     const fetchSpy = mockFetchSequence({ body: makeResourceResponse() }, { body: OCR_JSON });
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
     await locGetNewspaperPage.handler(input, ctx);
 
-    const ocrFetchUrl = (fetchSpy.mock.calls[1][0] as string) ?? '';
+    const ocrFetchUrl = (fetchSpy.mock.calls[1]![0] as string) ?? '';
     // Should fetch the fulltext_file URL directly (tile.loc.gov)
     expect(ocrFetchUrl).toContain('tile.loc.gov');
     // Should NOT be double-encoded (the old bug wrapped the full URL in a segment= param)
@@ -293,13 +297,13 @@ describe('locGetNewspaperPage', () => {
       'fetch',
       mockFetchSequence({ body: makeResourceResponse() }, { body: 'err', status: 503 }),
     );
-    let ctx = createMockContext();
+    let ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     await locGetNewspaperPage.handler(locGetNewspaperPage.input.parse({ page_url: PAGE_URL }), ctx);
     expect(getEnrichment(ctx).notice).toBeDefined();
 
     // OCR text present → no notice; the text speaks for itself.
     vi.stubGlobal('fetch', mockFetchSequence({ body: makeResourceResponse() }, { body: OCR_JSON }));
-    ctx = createMockContext();
+    ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     await locGetNewspaperPage.handler(locGetNewspaperPage.input.parse({ page_url: PAGE_URL }), ctx);
     expect(getEnrichment(ctx).notice).toBeUndefined();
 
@@ -309,7 +313,7 @@ describe('locGetNewspaperPage', () => {
       'fetch',
       mockFetchSequence({ body: makeResourceResponse({ fulltext_file: undefined }) }),
     );
-    ctx = createMockContext();
+    ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     await locGetNewspaperPage.handler(locGetNewspaperPage.input.parse({ page_url: PAGE_URL }), ctx);
     expect(getEnrichment(ctx).notice).toBeUndefined();
   });
@@ -331,7 +335,7 @@ describe('locGetNewspaperPage', () => {
   it('security: SSRF attempt via non-LOC host is rejected with ValidationError', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({
       page_url: 'https://evil.example.com/steal-data',
     });
@@ -345,7 +349,7 @@ describe('locGetNewspaperPage', () => {
   it('security: URL with path traversal attempt is rejected before fetch', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({
       page_url: 'https://www.loc.gov/../../etc/passwd',
     });
@@ -389,11 +393,11 @@ describe('locGetNewspaperPage', () => {
     });
     vi.stubGlobal('fetch', fetchSpy);
     const urlWithSp = PAGE_URL; // Already has ?sp=1
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({ page_url: urlWithSp });
     await locGetNewspaperPage.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('sp=1');
     expect(calledUrl).toContain('fo=json');
     // Should not have double question marks

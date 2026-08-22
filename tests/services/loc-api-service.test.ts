@@ -80,7 +80,7 @@ describe('LocApiService.search', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.search({ query: 'test', page: 1 }, ctx);
-    expect(result.items[0].url).toMatch(/^https:/);
+    expect(result.items[0]!.url).toMatch(/^https:/);
   });
 
   it('extracts item id from full URL when id field is a URL', async () => {
@@ -103,8 +103,8 @@ describe('LocApiService.search', () => {
     const svc = getLocApiService();
     const result = await svc.search({ query: 'civil war', page: 1 }, ctx);
     // Should extract '2009632251', not the full URL
-    expect(result.items[0].id).toBe('2009632251');
-    expect(result.items[0].id).not.toContain('https://');
+    expect(result.items[0]!.id).toBe('2009632251');
+    expect(result.items[0]!.id).not.toContain('https://');
   });
 
   it('falls back to url field when id is absent from search result', async () => {
@@ -126,7 +126,7 @@ describe('LocApiService.search', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.search({ query: 'test', page: 1 }, ctx);
-    expect(result.items[0].id).toBe('fallback-id');
+    expect(result.items[0]!.id).toBe('fallback-id');
   });
 
   it('coerces array title to first string', async () => {
@@ -148,7 +148,7 @@ describe('LocApiService.search', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.search({ query: 'test', page: 1 }, ctx);
-    expect(result.items[0].title).toBe('First Title');
+    expect(result.items[0]!.title).toBe('First Title');
   });
 
   it('uses Untitled when title is absent from search result', async () => {
@@ -170,7 +170,7 @@ describe('LocApiService.search', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.search({ query: 'test', page: 1 }, ctx);
-    expect(result.items[0].title).toBe('Untitled');
+    expect(result.items[0]!.title).toBe('Untitled');
   });
 
   it('reads pagination from nested content envelope when top-level is absent', async () => {
@@ -315,8 +315,8 @@ describe('LocApiService.search', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.search({ query: 'test', page: 1 }, ctx);
-    expect(result.items[0].description).toContain('Part one.');
-    expect(result.items[0].description).toContain('Part two.');
+    expect(result.items[0]!.description).toContain('Part one.');
+    expect(result.items[0]!.description).toContain('Part two.');
   });
 
   it('injection string in query is percent-encoded in the request URL', async () => {
@@ -327,7 +327,7 @@ describe('LocApiService.search', () => {
     const injection = "'; DROP TABLE items; --";
     await svc.search({ query: injection, page: 1 }, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     // Injection chars must be percent-encoded, not raw
     expect(calledUrl).not.toContain("'; DROP TABLE");
     expect(calledUrl).toContain('fo=json');
@@ -386,7 +386,10 @@ describe('LocApiService.search', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.search({ query: 'civil war', page: 1 }, ctx);
-    const [collection, exhibit, newspaperPage, item] = result.items;
+    const collection = result.items[0]!;
+    const exhibit = result.items[1]!;
+    const newspaperPage = result.items[2]!;
+    const item = result.items[3]!;
     expect(collection.is_item).toBe(false);
     expect(collection.id).toBe('collections/civil-war/about-this-collection');
     expect(exhibit.is_item).toBe(false);
@@ -416,8 +419,8 @@ describe('LocApiService.search', () => {
     const svc = getLocApiService();
     const result = await svc.search({ query: 'newspaper', page: 1 }, ctx);
     // Full path retained — not truncated to the last segment, no leading item/ prefix
-    expect(result.items[0].id).toBe('sn95047246/1935-09-05/ed-1');
-    expect(result.items[0].is_item).toBe(true);
+    expect(result.items[0]!.id).toBe('sn95047246/1935-09-05/ed-1');
+    expect(result.items[0]!.is_item).toBe(true);
   });
 
   it('routes a collection-scoped search through the collection endpoint', async () => {
@@ -443,13 +446,13 @@ describe('LocApiService.search', () => {
       ctx,
     );
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/collections/aaron-copland/');
     expect(calledUrl).not.toContain('/search/');
     expect(calledUrl).toContain('q=correspondence');
     // Normalizes through the existing path — no parallel parser for the collection envelope
-    expect(result.items[0].id).toBe('2023781133');
-    expect(result.items[0].is_item).toBe(true);
+    expect(result.items[0]!.id).toBe('2023781133');
+    expect(result.items[0]!.is_item).toBe(true);
     expect(result.pagination.total).toBe(232);
   });
 
@@ -460,7 +463,7 @@ describe('LocApiService.search', () => {
     const svc = getLocApiService();
     await svc.search({ query: 'test', collectionSlug: '../../item/2009632251', page: 1 }, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/collections/');
     expect(calledUrl).not.toContain('/collections/../');
     expect(new URL(calledUrl).pathname).toBe('/collections/..%2F..%2Fitem%2F2009632251/');
@@ -724,7 +727,7 @@ describe('LocApiService.getItem', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.getItem('sn95047246/1935-09-05/ed-1', ctx);
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     // Slashes stay literal (not %2F), so LOC can route the deep item path
     expect(calledUrl).toContain('/item/sn95047246/1935-09-05/ed-1/');
     expect(calledUrl).not.toContain('%2F');
@@ -743,7 +746,7 @@ describe('LocApiService.getItem', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     await svc.getItem('2009632251', ctx);
-    const calledUrl = (fetchSpy.mock.calls[0][0] as string) ?? '';
+    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/item/2009632251/');
     expect(calledUrl).not.toContain('%2F');
   });
@@ -938,8 +941,8 @@ describe('LocApiService.searchNewspapers', () => {
     const svc = getLocApiService();
     const result = await svc.searchNewspapers({ query: 'test', page: 1 }, ctx);
     // location_state takes precedence over location[0]
-    expect(result.items[0].state).toContain('new york');
-    expect(result.items[0].state).not.toBe('united states');
+    expect(result.items[0]!.state).toContain('new york');
+    expect(result.items[0]!.state).not.toBe('united states');
   });
 
   it('uses partof_title for newspaper_title, not subject', async () => {
@@ -962,8 +965,8 @@ describe('LocApiService.searchNewspapers', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.searchNewspapers({ query: 'test', page: 1 }, ctx);
-    expect(result.items[0].newspaper_title).toContain('evening world');
-    expect(result.items[0].newspaper_title).not.toBe('united states');
+    expect(result.items[0]!.newspaper_title).toContain('evening world');
+    expect(result.items[0]!.newspaper_title).not.toBe('united states');
   });
 
   it('falls back to last partof entry when partof_title is absent', async () => {
@@ -986,7 +989,7 @@ describe('LocApiService.searchNewspapers', () => {
     const svc = getLocApiService();
     const result = await svc.searchNewspapers({ query: 'test', page: 1 }, ctx);
     // Should use last partof entry
-    expect(result.items[0].newspaper_title).toContain('daily herald');
+    expect(result.items[0]!.newspaper_title).toContain('daily herald');
   });
 
   it('truncates description to 500 chars from 3 description array entries', async () => {
@@ -1010,8 +1013,8 @@ describe('LocApiService.searchNewspapers', () => {
     const svc = getLocApiService();
     const result = await svc.searchNewspapers({ query: 'test', page: 1 }, ctx);
     // Truncated at 500 chars
-    expect(result.items[0].description).toBeDefined();
-    expect(result.items[0].description!.length).toBeLessThanOrEqual(500);
+    expect(result.items[0]!.description).toBeDefined();
+    expect(result.items[0]!.description!.length).toBeLessThanOrEqual(500);
   });
 });
 
@@ -1046,7 +1049,7 @@ describe('LocApiService.browseCollections', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.browseCollections({ page: 1 }, ctx);
-    expect(result.items[0].slug).toBe('aaron-copland');
+    expect(result.items[0]!.slug).toBe('aaron-copland');
   });
 
   it('extracts slug from a bare collection URL with no subpath', async () => {
@@ -1067,7 +1070,7 @@ describe('LocApiService.browseCollections', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.browseCollections({ page: 1 }, ctx);
-    expect(result.items[0].slug).toBe('civil-war-glass-negatives');
+    expect(result.items[0]!.slug).toBe('civil-war-glass-negatives');
   });
 
   it('maps the upstream collection count to item_count', async () => {
@@ -1089,7 +1092,7 @@ describe('LocApiService.browseCollections', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.browseCollections({ page: 1 }, ctx);
-    expect(result.items[0].item_count).toBe(57);
+    expect(result.items[0]!.item_count).toBe(57);
   });
 
   it('reads item_count from the top-level count, not the nested item.total', async () => {
@@ -1114,7 +1117,7 @@ describe('LocApiService.browseCollections', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.browseCollections({ page: 1 }, ctx);
-    expect(result.items[0].item_count).toBe(57);
+    expect(result.items[0]!.item_count).toBe(57);
   });
 
   it('keeps item_count when the upstream count is 0', async () => {
@@ -1137,7 +1140,7 @@ describe('LocApiService.browseCollections', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.browseCollections({ page: 1 }, ctx);
-    expect(result.items[0].item_count).toBe(0);
+    expect(result.items[0]!.item_count).toBe(0);
   });
 
   it('omits item_count when the upstream count is absent (sparse payload)', async () => {
@@ -1158,7 +1161,7 @@ describe('LocApiService.browseCollections', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.browseCollections({ page: 1 }, ctx);
-    expect(result.items[0].item_count).toBeUndefined();
+    expect(result.items[0]!.item_count).toBeUndefined();
   });
 
   it('ignores the results display range when pagination omits total', async () => {
@@ -1204,7 +1207,7 @@ describe('LocApiService.browseCollections', () => {
     const ctx = createMockContext();
     const svc = getLocApiService();
     const result = await svc.browseCollections({ page: 1 }, ctx);
-    expect(result.items[0].slug).toBe('my-collection');
+    expect(result.items[0]!.slug).toBe('my-collection');
   });
 });
 
