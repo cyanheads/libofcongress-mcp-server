@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.17](changelog/0.2.x/0.2.17.md) — 2026-08-22
+
+Add MCP 2026-07-28 compatibility with strict tool arguments, and make stateless HTTP mode explicit across runtime and packaging surfaces
+
 ## [0.2.16](changelog/0.2.x/0.2.16.md) — 2026-07-16
 
 Honest search pagination: total now reports matching items not pages, pages/has_next stop at LOC's ~100,000-item retrieval ceiling with partition guidance, and the guard that discarded valid deep-page results is removed across all three search tools; content/structuredContent parity closed in search and get_newspaper_page

@@ -3,7 +3,8 @@
     "command": "npx",
     "args": ["-y", "@cyanheads/libofcongress-mcp-server"],
     "env": {
-      "MCP_TRANSPORT_TYPE": "stdio"
+      "MCP_TRANSPORT_TYPE": "stdio",
+      "MCP_SESSION_MODE": "stateless"
     }
   }
 }
