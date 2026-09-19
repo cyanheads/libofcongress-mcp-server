@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.18](changelog/0.2.x/0.2.18.md) — 2026-09-19
+
+Add a public hosted endpoint, declare stateless session mode explicitly, and pick up mcp-ts-core 0.13.5's argument-rejection envelope, error-text reason suffix, and session-mode well-known metadata
+
 ## [0.2.17](changelog/0.2.x/0.2.17.md) — 2026-08-22
 
 Add MCP 2026-07-28 compatibility with strict tool arguments, and make stateless HTTP mode explicit across runtime and packaging surfaces

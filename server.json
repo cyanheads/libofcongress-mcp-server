@@ -6,7 +6,7 @@
     "url": "https://github.com/cyanheads/libofcongress-mcp-server",
     "source": "github"
   },
-  "version": "0.2.17",
+  "version": "0.2.18",
   "remotes": [
     {
       "type": "streamable-http",
@@ -19,7 +19,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/libofcongress-mcp-server",
       "runtimeHint": "bun",
-      "version": "0.2.17",
+      "version": "0.2.18",
       "packageArguments": [
         {
           "type": "positional",
@@ -36,7 +36,7 @@
           "description": "User-Agent header sent with LOC API requests. LOC recommends a descriptive value for polite access.",
           "format": "string",
           "isRequired": false,
-          "default": "libofcongress-mcp-server/0.2.17"
+          "default": "libofcongress-mcp-server/0.2.18"
         },
         {
           "name": "LOC_REQUEST_DELAY_MS",
@@ -69,7 +69,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/libofcongress-mcp-server",
       "runtimeHint": "bun",
-      "version": "0.2.17",
+      "version": "0.2.18",
       "packageArguments": [
         {
           "type": "positional",
@@ -86,7 +86,7 @@
           "description": "User-Agent header sent with LOC API requests. LOC recommends a descriptive value for polite access.",
           "format": "string",
           "isRequired": false,
-          "default": "libofcongress-mcp-server/0.2.17"
+          "default": "libofcongress-mcp-server/0.2.18"
         },
         {
           "name": "LOC_REQUEST_DELAY_MS",
