@@ -18,6 +18,7 @@ import { initLocApiService } from './services/loc-api/loc-api-service.js';
 await createApp({
   name: 'libofcongress-mcp-server',
   title: 'libofcongress-mcp-server',
+  sessionMode: 'stateless',
   tools: [
     locSearch,
     locGetItem,

@@ -7,6 +7,12 @@
     "source": "github"
   },
   "version": "0.2.17",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://libofcongress.caseyjhand.com/mcp"
+    }
+  ],
   "packages": [
     {
       "registryType": "npm",
