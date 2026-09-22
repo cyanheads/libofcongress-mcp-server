@@ -24,12 +24,15 @@ function mockFetch(body: string, status = 200) {
   );
 }
 
-/** Minimal well-formed 4-tuple suggest response */
-function makeSuggest(entries: Array<{ label: string; uri: string; count?: string }>) {
+/**
+ * Minimal well-formed 4-tuple suggest response: [query, labels[], descriptions[], uris[]].
+ * The third array is a per-suggestion description string ("1 result") — defaulted to the live form.
+ */
+function makeSuggest(entries: Array<{ label: string; uri: string; description?: string }>) {
   return JSON.stringify([
     'query',
     entries.map((e) => e.label),
-    entries.map((e) => e.count ?? ''),
+    entries.map((e) => e.description ?? '1 result'),
     entries.map((e) => e.uri),
   ]);
 }
@@ -61,7 +64,6 @@ describe('LcLinkedDataService.searchSubjects', () => {
           {
             label: 'World War, 1939-1945',
             uri: 'http://id.loc.gov/authorities/subjects/sh85148273',
-            count: '1500',
           },
         ]),
       ),
@@ -70,47 +72,39 @@ describe('LcLinkedDataService.searchSubjects', () => {
     const svc = getLcLinkedDataService();
     const { subjects: results } = await svc.searchSubjects('world war', 10, ctx);
 
-    expect(results).toHaveLength(1);
-    expect(results[0]!.label).toBe('World War, 1939-1945');
-    expect(results[0]!.uri).toBe('http://id.loc.gov/authorities/subjects/sh85148273');
-    expect(results[0]!.count).toBe(1500);
+    expect(results).toEqual([
+      { label: 'World War, 1939-1945', uri: 'http://id.loc.gov/authorities/subjects/sh85148273' },
+    ]);
   });
 
-  it('omits count when count string is empty', async () => {
+  it('carries no count from the description column, which tallies authority records (#41)', async () => {
+    // Live `aerial photography` descriptions: "1 result", "2 results" — a count of matching
+    // authority records, not of LOC items. Nothing numeric may leak into the heading record.
     vi.stubGlobal(
       'fetch',
       mockFetch(
         makeSuggest([
           {
+            label: 'Aerial photography in agriculture',
+            uri: 'http://id.loc.gov/authorities/subjects/sh85001254',
+            description: '1 result',
+          },
+          {
             label: 'Photography, Aerial',
             uri: 'http://id.loc.gov/authorities/subjects/sh85101360',
-            count: '',
+            description: '2 results',
           },
         ]),
       ),
     );
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects: results } = await svc.searchSubjects('aerial', 10, ctx);
-    expect(results[0]!.count).toBeUndefined();
-  });
-
-  it('omits count when count string is non-numeric', async () => {
-    vi.stubGlobal(
-      'fetch',
-      mockFetch(
-        JSON.stringify([
-          'query',
-          ['Photography'],
-          ['not-a-number'],
-          ['http://id.loc.gov/authorities/subjects/sh85101360'],
-        ]),
-      ),
+    const { subjects } = await getLcLinkedDataService().searchSubjects(
+      'aerial photography',
+      10,
+      createMockContext(),
     );
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects: results } = await svc.searchSubjects('photo', 10, ctx);
-    expect(results[0]!.count).toBeUndefined();
+
+    expect(subjects).toHaveLength(2);
+    for (const s of subjects) expect(Object.keys(s).sort()).toEqual(['label', 'uri']);
   });
 
   it('returns empty array when suggest response has fewer than 4 elements', async () => {
@@ -162,7 +156,7 @@ describe('LcLinkedDataService.searchSubjects', () => {
           {
             label: 'Photography, Aerial',
             uri: 'http://id.loc.gov/authorities/subjects/sh85101360',
-            count: '900',
+            description: '2 results',
           },
           {
             label: 'Aerial photography',
@@ -242,7 +236,6 @@ describe('LcLinkedDataService.searchSubjects', () => {
       {
         label: 'Civil War Campaign Medal',
         uri: 'http://id.loc.gov/authorities/subjects/sh90004165',
-        count: '3',
       },
     ];
     const fetchSpy = mockFetch(makeSuggest(entries));
@@ -327,7 +320,6 @@ describe('LcLinkedDataService.searchSubjects', () => {
           {
             label: 'World War, 1939-1945',
             uri: 'http://id.loc.gov/authorities/subjects/sh85148273',
-            count: '500',
           },
         ]),
       ),

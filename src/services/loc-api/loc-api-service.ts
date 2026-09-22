@@ -18,7 +18,9 @@ import type {
   LocNewspaperPageDetail,
   LocPagination,
   RawLocItemResponse,
+  RawLocNewspaperPageResponse,
   RawLocPagination,
+  RawLocRelatedItem,
   RawLocSearchResponse,
   RawLocSearchResult,
 } from './types.js';
@@ -28,7 +30,7 @@ const LOC_BASE = 'https://www.loc.gov';
 /**
  * LOC serves search results only through roughly the first 100,000 matches. A deeper page
  * 302-redirects to an error page that terminates as HTTP 400 (absorbed by
- * {@link LocApiService.fetchSearchJson}'s `allowStatus`), so pages past this depth are
+ * {@link LocApiService.fetchSearchPage}'s `allowStatus`), so pages past this depth are
  * unretrievable regardless of the reported total — pagination must not advertise them.
  */
 const RETRIEVAL_CEILING = 100_000;
@@ -41,6 +43,38 @@ function maxRetrievablePage(perPage: number): number {
 /** True when a page lies entirely beyond LOC's ~100k-item retrieval ceiling (LOC will 400 it). */
 function isBeyondRetrievalCeiling(page: number, perPage: number): boolean {
   return page > maxRetrievablePage(perPage);
+}
+
+/**
+ * The status LOC answered a search page it would not serve with — see
+ * {@link LocApiService.fetchSearchPage}. 404: the result set ends before the page. 400: the
+ * terminal status of the retrieval-ceiling redirect. 520: an older out-of-range answer.
+ */
+type OutOfRangeStatus = 400 | 404 | 520;
+
+/**
+ * The empty result for a page LOC would not serve. `pages: 0` is the sentinel handlers key their
+ * out-of-range notice on; `ceilingReached` separates "asked past the ~100k retrieval ceiling"
+ * (recovery: partition by facet) from an overshoot (recovery: page within the reported count).
+ * A 404 is always an overshoot — LOC is saying the results ran out, so facet-partition advice
+ * would be wrong even for a page number past the ceiling.
+ */
+function outOfRangePage(
+  page: number,
+  perPage: number,
+  status: OutOfRangeStatus,
+): { items: never[]; pagination: LocPagination } {
+  return {
+    items: [],
+    pagination: {
+      total: 0,
+      page,
+      perPage,
+      pages: 0,
+      hasNext: false,
+      ceilingReached: status !== 404 && isBeyondRetrievalCeiling(page, perPage),
+    },
+  };
 }
 
 /** Matches an HTML response body — indicates rate-limiting or a maintenance page. */
@@ -88,9 +122,17 @@ function extractStringArray(value: string | string[] | undefined): string[] {
   return [value];
 }
 
+/**
+ * A related-record reference as one string: a string entry as-is, an object entry by `id`, then
+ * `url`, then `title`. Undefined when the entry carries none of them.
+ */
+function relatedItemRef(rel: RawLocRelatedItem): string | undefined {
+  return (typeof rel === 'string' ? rel : rel.id || rel.url || rel.title) || undefined;
+}
+
 function extractId(result: RawLocSearchResult): string {
   // LOC IDs come as full URLs like https://www.loc.gov/item/2009632251/
-  // or as short strings like loc.pnp.ppmsc.02404. Item paths can be multi-segment
+  // or as short strings like 2005691065. Item paths can be multi-segment
   // (newspaper pages: /item/sn95047246/1935-09-05/ed-1/) — capture the whole path
   // after /item/, preserving internal slashes so getItem can rebuild the URL.
   const rawId = result.id ?? result.url ?? '';
@@ -172,16 +214,22 @@ export class LocApiService {
     this.requestDelayMs = serverConfig.requestDelayMs;
   }
 
+  /**
+   * Both rate-limit throws carry the most specific recovery the server can give — how long the
+   * block has left — in `data.recovery.hint`. Handlers forward this `data` over their contract's
+   * static hint, which can only say "about an hour".
+   */
   private checkRateLimit(): void {
     if (rateLimitBlockedUntil > Date.now()) {
       const minutesLeft = Math.ceil((rateLimitBlockedUntil - Date.now()) / 60_000);
+      const blockedUntil = new Date(rateLimitBlockedUntil).toISOString();
       throw rateLimited(
-        `LOC API rate limit exceeded. Requests are blocked for approximately ${minutesLeft} more minute(s). Reduce request frequency to stay under 20 req/min.`,
+        `LOC API rate limit exceeded; requests are blocked for approximately ${minutesLeft} more minute(s).`,
         {
           reason: 'rate_limit_exceeded',
-          blockedUntil: new Date(rateLimitBlockedUntil).toISOString(),
+          blockedUntil,
           recovery: {
-            hint: 'Wait for the block to expire before retrying. Reduce the number of API calls per minute.',
+            hint: `Wait about ${minutesLeft} more minute(s), until ${blockedUntil}, before retrying. Then keep requests under 20 per minute.`,
           },
         },
       );
@@ -203,12 +251,14 @@ export class LocApiService {
     );
     if (response.status === 429) {
       rateLimitBlockedUntil = Date.now() + 60 * 60 * 1000;
+      const blockedUntil = new Date(rateLimitBlockedUntil).toISOString();
       throw rateLimited(
-        'LOC API rate limit exceeded. Requests are blocked for approximately 1 hour. Reduce request frequency to stay under 20 req/min.',
+        'LOC API rate limit exceeded; requests are blocked for approximately 1 hour.',
         {
           reason: 'rate_limit_exceeded',
+          blockedUntil,
           recovery: {
-            hint: 'Wait at least 1 hour before retrying. Reduce request frequency to stay under 20 req/min.',
+            hint: `Wait at least 1 hour, until ${blockedUntil}, before retrying. Then keep requests under 20 per minute.`,
           },
         },
       );
@@ -262,24 +312,36 @@ export class LocApiService {
   }
 
   /**
-   * Fetch a LOC search endpoint, treating HTTP 400 and 520 as out-of-range page responses
-   * (LOC returns these for page numbers beyond the result set).
-   * Returns null when the page is out of range.
+   * Fetch page `page` of a LOC search endpoint and normalize each result with `normalize`,
+   * returning {@link outOfRangePage} for a page LOC will not serve:
+   *
+   * - **404 on page > 1** — every search-family endpoint answers a page past the end of its
+   *   result set with 404. Page 1 of an existing endpoint is never out of range (an empty
+   *   result set is a 200), so a 404 there still throws NotFound — for a `/collections/{slug}/`
+   *   search it is the only signal that the slug does not exist.
+   * - **400 or 520** — the retrieval-ceiling redirect terminates as 400; 520 is an older
+   *   out-of-range answer.
    *
    * Withholds the request `url` from error data for the same reason as `fetchJson` above —
    * here the query string carries the caller's own search terms.
    */
-  private fetchSearchJson<T>(url: string, ctx: Context): Promise<T | null> {
-    return withRetry(
-      async () => {
+  private async fetchSearchPage<T>(
+    url: string,
+    page: number,
+    limit: number,
+    ctx: Context,
+    normalize: (result: RawLocSearchResult) => T,
+  ): Promise<{ items: T[]; pagination: LocPagination }> {
+    const res = await withRetry(
+      async (): Promise<{ data: RawLocSearchResponse } | { outOfRange: OutOfRangeStatus }> => {
         const response = await this.fetch(url, ctx, { allowStatus: [400, 520] });
-        if (response.status === 404) {
+        const { status } = response;
+        if (status === 404 && page === 1) {
           throw notFound('LOC resource not found');
         }
-        // LOC returns 400 or 520 for out-of-range page numbers — treat as empty
-        if (response.status === 400 || response.status === 520) {
-          ctx.log.debug('LOC search returned out-of-range page', { status: response.status, url });
-          return null;
+        if (status === 404 || status === 400 || status === 520) {
+          ctx.log.debug('LOC search returned out-of-range page', { status, url });
+          return { outOfRange: status };
         }
         const text = await response.text();
         if (HTML_RESPONSE_RE.test(text)) {
@@ -287,10 +349,15 @@ export class LocApiService {
             'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
           );
         }
-        return JSON.parse(text) as T;
+        return { data: JSON.parse(text) as RawLocSearchResponse };
       },
       locRetryOptions(ctx, 'loc-api-search-json'),
     );
+    if ('outOfRange' in res) return outOfRangePage(page, limit, res.outOfRange);
+    const { data } = res;
+    const items = (data.results ?? data.content?.results ?? []).map(normalize);
+    const rawPagination = data.pagination ?? data.content?.pagination;
+    return { items, pagination: normalizePagination(rawPagination, page, limit, items.length) };
   }
 
   /**
@@ -299,9 +366,10 @@ export class LocApiService {
    * `collectionSlug` scopes the search to one curated collection via its own endpoint, which
    * accepts the same query string and returns the same envelope as /search/. It selects a base
    * path, so it cannot combine with `format` — callers pick one (the search tool rejects the
-   * pair up front). An unrecognized slug 404s, surfacing as NotFound from fetchSearchJson.
+   * pair up front). An unrecognized slug 404s, surfacing as NotFound from fetchSearchPage on
+   * page 1; on a later page the same 404 reads as out of range (see fetchSearchPage).
    */
-  async search(
+  search(
     params: {
       query: string;
       format?: string;
@@ -337,28 +405,7 @@ export class LocApiService {
     if (params.location) fa.push(`location:${params.location}`);
     if (fa.length > 0) qs.set('fa', fa.join('|'));
 
-    const url = `${endpoint}?${qs}`;
-    const data = await this.fetchSearchJson<RawLocSearchResponse>(url, ctx);
-    if (data === null) {
-      // LOC returned 400/520 — page is out of range. pages: 0 is the sentinel handlers key their
-      // distinct out-of-range message on; ceilingReached separates "asked past the ~100k retrieval
-      // ceiling" (recovery: partition by facet) from a genuine overshoot (recovery: smaller page).
-      return {
-        items: [],
-        pagination: {
-          total: 0,
-          page,
-          perPage: limit,
-          pages: 0,
-          hasNext: false,
-          ceilingReached: isBeyondRetrievalCeiling(page, limit),
-        },
-      };
-    }
-    const rawResults = data.results ?? data.content?.results ?? [];
-    const rawPagination = data.pagination ?? data.content?.pagination;
-    const items = rawResults.map(normalizeSearchResult);
-    return { items, pagination: normalizePagination(rawPagination, page, limit, items.length) };
+    return this.fetchSearchPage(`${endpoint}?${qs}`, page, limit, ctx, normalizeSearchResult);
   }
 
   /** Get full metadata for a single LOC item */
@@ -389,12 +436,11 @@ export class LocApiService {
       }
     }
 
-    const relatedItems: string[] = [];
-    for (const rel of data.related_items ?? []) {
-      if (rel.id) relatedItems.push(rel.id);
-      else if (rel.url) relatedItems.push(rel.url);
-    }
-    relatedItems.push(...(item.related_items ?? []));
+    // Top-level related_items are always objects; item.related_items mixes plain strings with
+    // { title, url } objects — both normalize through the same id → url → title preference.
+    const relatedItems = [...(data.related_items ?? []), ...(item.related_items ?? [])].flatMap(
+      (rel) => relatedItemRef(rel) ?? [],
+    );
 
     const rawRights = item.rights_information ?? item.rights;
     const rights = Array.isArray(rawRights) ? rawRights.join(' ') : rawRights;
@@ -406,7 +452,7 @@ export class LocApiService {
       item_id: itemId,
       title,
       ...(item.date && { date: item.date }),
-      contributors: extractStringArray(item.contributor),
+      contributors: extractStringArray(item.contributor_names),
       subject_headings: extractStringArray(item.subject),
       notes: extractStringArray(item.notes),
       ...(summary && { summary }),
@@ -432,7 +478,7 @@ export class LocApiService {
   }
 
   /** Search historical newspaper pages via the /newspapers/ endpoint */
-  async searchNewspapers(
+  searchNewspapers(
     params: {
       query: string;
       dateStart?: number;
@@ -460,48 +506,26 @@ export class LocApiService {
     if (fa.length > 0) qs.set('fa', fa.join('|'));
 
     const url = `${LOC_BASE}/newspapers/?${qs}`;
-    const data = await this.fetchSearchJson<RawLocSearchResponse>(url, ctx);
-    if (data === null) {
-      return {
-        items: [],
-        pagination: {
-          total: 0,
-          page,
-          perPage: limit,
-          pages: 0,
-          hasNext: false,
-          ceilingReached: isBeyondRetrievalCeiling(page, limit),
-        },
-      };
-    }
-    const rawResults = data.results ?? data.content?.results ?? [];
-    const rawPagination = data.pagination ?? data.content?.pagination;
-
-    const items: LocNewspaperPage[] = rawResults.map((r) => {
-      const descArr = Array.isArray(r.description)
-        ? r.description
-        : r.description
-          ? [r.description]
-          : [];
-      const description = descArr.slice(0, 3).join(' ').substring(0, 500);
+    return this.fetchSearchPage(url, page, limit, ctx, (r): LocNewspaperPage => {
+      const description = extractStringArray(r.description).slice(0, 3).join(' ').substring(0, 500);
       // partof_title holds the canonical publication title for Chronicling America pages.
       // Fall back to last entry of partof if partof_title absent.
       const rawTitle =
         extractFirstString(r.partof_title) ??
         (Array.isArray(r.partof) ? r.partof[r.partof.length - 1] : r.partof);
-      // location_state is the US state; location[0] is often a city or "united states".
-      const rawState = extractFirstString(r.location_state) ?? extractFirstString(r.location);
+      // location_state is multi-valued (a title indexed against its circulation area lists every
+      // state), so no single entry is the place of publication — carry the whole facet. location
+      // never stands in: it mixes cities, counties, and "united states".
+      const states = extractStringArray(r.location_state);
       return {
         url: r.url ?? '',
         title: extractFirstString(r.title) ?? 'Untitled',
         ...(description && { description }),
         ...(r.date && { date: r.date }),
-        ...(rawState && { state: rawState }),
+        ...(states.length > 0 && { states }),
         ...(rawTitle && { newspaper_title: rawTitle }),
       };
     });
-
-    return { items, pagination: normalizePagination(rawPagination, page, limit, items.length) };
   }
 
   /** Retrieve full OCR text for a specific newspaper page via its resource URL */
@@ -512,46 +536,38 @@ export class LocApiService {
     parsed.searchParams.delete('q');
     const cleanUrl = parsed.toString();
 
+    // One request, two projections: `resource` carries the page's OCR pointer and the issue's
+    // page count; `item` carries the issue's publication metadata (title, states, place, edition,
+    // date). `resource` alone has none of the metadata.
     const resourceUrl = cleanUrl.includes('?')
-      ? `${cleanUrl}&fo=json&at=resource`
-      : `${cleanUrl}?fo=json&at=resource`;
+      ? `${cleanUrl}&fo=json&at=item,resource`
+      : `${cleanUrl}?fo=json&at=item,resource`;
 
-    const resourceData = await this.fetchJson<{
-      resource?: {
-        url?: string;
-        title?: string;
-        date_issued?: string;
-        note?: string[];
-        part_of?: string;
-        sequence?: number;
-        fulltext_file?: string;
-      };
-    }>(resourceUrl, ctx);
+    const data = await this.fetchJson<RawLocNewspaperPageResponse>(resourceUrl, ctx);
 
-    const res = resourceData.resource;
+    const res = data.resource;
     if (!res) {
       throw notFound(`LOC newspaper page not found: ${pageUrl}`, { pageUrl });
     }
+    // A sparse or missing item block degrades to the URL-derived fallbacks, never an error.
+    const item = data.item ?? {};
 
-    const title = res.title;
-    const dateIssued = res.date_issued;
-    const sequence = res.sequence;
+    // The display-cased newspaper_title reads best; partof_title (lowercased, with place and run)
+    // stands in when it is absent.
+    const title = extractFirstString(item.newspaper_title) ?? extractFirstString(item.partof_title);
+    const states = extractStringArray(item.location_state);
+    const placeOfPublication = extractFirstString(item.place_of_publication);
+    const edition = extractFirstString(item.number_edition);
+    const segmentCount = typeof res.segment_count === 'number' ? res.segment_count : undefined;
 
-    // The ?fo=json&at=resource endpoint structurally omits date_issued/sequence, but both are
-    // encoded in the page URL: the date is the path segment after the LCCN, the sequence is the
-    // `sp` param. Derive them as fallbacks so a real upstream value still wins if LOC adds one.
+    // Neither block carries the page's sequence, and a sparse item block can lack date_issued, but
+    // both are encoded in the page URL: the date is the path segment after the LCCN, the sequence
+    // is the `sp` param.
     const urlDate = parsed.pathname.split('/').find((seg) => /^\d{4}-\d{2}-\d{2}$/.test(seg));
+    const date = item.date_issued || urlDate;
     const spParam = parsed.searchParams.get('sp');
-    const urlSequence =
+    const sequence =
       spParam && /^\d+$/.test(spParam) && Number(spParam) > 0 ? Number(spParam) : undefined;
-
-    // part_of is like "Oklahoma newspapers" — extract the state name if present
-    let state: string | undefined;
-    const partOf = res.part_of;
-    if (partOf) {
-      const stateMatch = partOf.match(/^([A-Za-z ]+)\s+newspapers?/i);
-      if (stateMatch?.[1]) state = stateMatch[1].trim();
-    }
 
     let ocrText = '';
     let ocrAvailable = false;
@@ -590,23 +606,22 @@ export class LocApiService {
       }
     }
 
-    const date = dateIssued ?? urlDate;
-    const seq = sequence ?? urlSequence;
-
     return {
       page_url: pageUrl,
       ...(title && { newspaper_title: title }),
       ...(date && { date }),
-      ...(state && { state }),
-      ...(res.part_of && { edition: res.part_of }),
-      ...(seq !== undefined && { sequence: seq }),
+      ...(states.length > 0 && { states }),
+      ...(placeOfPublication && { place_of_publication: placeOfPublication }),
+      ...(edition && { edition }),
+      ...(sequence !== undefined && { sequence }),
+      ...(segmentCount !== undefined && { segment_count: segmentCount }),
       ocr_text: ocrText,
       ocr_available: ocrAvailable,
     };
   }
 
   /** Browse LOC curated digital collections */
-  async browseCollections(
+  browseCollections(
     params: {
       query?: string;
       limit?: number;
@@ -622,24 +637,7 @@ export class LocApiService {
     if (params.query) qs.set('q', params.query);
 
     const url = `${LOC_BASE}/collections/?${qs}`;
-    const data = await this.fetchSearchJson<RawLocSearchResponse>(url, ctx);
-    if (data === null) {
-      return {
-        items: [],
-        pagination: {
-          total: 0,
-          page,
-          perPage: limit,
-          pages: 0,
-          hasNext: false,
-          ceilingReached: isBeyondRetrievalCeiling(page, limit),
-        },
-      };
-    }
-    const rawResults = data.results ?? data.content?.results ?? [];
-    const rawPagination = data.pagination ?? data.content?.pagination;
-
-    const items: LocCollection[] = rawResults.map((r) => {
+    return this.fetchSearchPage(url, page, limit, ctx, (r): LocCollection => {
       const title = extractFirstString(r.title) ?? 'Untitled';
       const description = Array.isArray(r.description) ? r.description.join(' ') : r.description;
       const itemUrl = r.url ?? '';
@@ -660,8 +658,6 @@ export class LocApiService {
         url: itemUrl,
       };
     });
-
-    return { items, pagination: normalizePagination(rawPagination, page, limit, items.length) };
   }
 }
 

@@ -7,5 +7,4 @@
 export type LcSubjectHeading = {
   label: string;
   uri: string;
-  count?: number;
 };

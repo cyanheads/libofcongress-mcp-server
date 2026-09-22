@@ -13,6 +13,7 @@ import {
   initLocApiService,
   LocApiService,
 } from '@/services/loc-api/loc-api-service.js';
+import type { LocPagination } from '@/services/loc-api/types.js';
 
 function mockFetch(body: string, status = 200) {
   return vi.fn().mockResolvedValue(
@@ -648,6 +649,128 @@ describe('LocApiService.getItem', () => {
     expect(result.related_items.some((r) => r.includes('related-item-c'))).toBe(true);
   });
 
+  it('normalizes object-form item.related_items entries with the id ?? url ?? title preference (#39)', async () => {
+    // item.related_items mixes plain strings with LOC's { title, url } objects — the object
+    // entry below is afc9999005.10348's live value. Every entry must reach the output as a string.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: {
+            title: 'Dust bowl recording',
+            url: 'https://www.loc.gov/item/afc9999005.10348/',
+            related_items: [
+              'legacy-string-id',
+              {
+                title: 'Alan Lomax Collection of Woody Guthrie Recordings (AFC 1940/007)',
+                url: 'https://lccn.loc.gov/2009655315',
+              },
+              {
+                id: 'http://www.loc.gov/item/afcwwgbib000002/',
+                url: 'https://www.loc.gov/item/afcwwgbib000002/',
+                title: 'Letter from Woody Guthrie to Alan Lomax',
+              },
+              { title: 'A related record known only by title' },
+              {},
+            ],
+          },
+          resources: [],
+          related_items: [
+            { id: 'http://lccn.loc.gov/2002522665', url: '//lccn.loc.gov/2002522665' },
+            { title: 'Top-level title-only entry' },
+          ],
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const result = await getLocApiService().getItem('afc9999005.10348', ctx);
+
+    expect(result.related_items).toEqual([
+      'http://lccn.loc.gov/2002522665',
+      'Top-level title-only entry',
+      'legacy-string-id',
+      'https://lccn.loc.gov/2009655315',
+      'http://www.loc.gov/item/afcwwgbib000002/',
+      'A related record known only by title',
+    ]);
+  });
+
+  it('reads contributors from item.contributor_names, the key LOC actually sends (#47)', async () => {
+    // Live mgw1b.721 shape: contributor_names carries the names with roles; contributors holds
+    // the same people as { name: facet-url } objects without roles; there is no `contributor`.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: {
+            title: 'George Washington Papers, Series 1',
+            url: 'https://www.loc.gov/item/mgw1b.721/',
+            contributor_names: ['Washington, George, 1732-1799 (Author)'],
+            contributors: [
+              {
+                'washington, george':
+                  'https://www.loc.gov/search/?fa=contributor:washington,+george&fo=json',
+              },
+            ],
+          },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const ctx = createMockContext();
+    const result = await getLocApiService().getItem('mgw1b.721', ctx);
+
+    expect(result.contributors).toEqual(['Washington, George, 1732-1799 (Author)']);
+  });
+
+  it('keeps every contributor_names entry in LOC order', async () => {
+    // Live afc9999005.10348 shape: one person can appear twice under different roles.
+    const names = [
+      'Lomax, Alan (1915-2002) (Recordist)',
+      'Lomax, Alan (1915-2002) (Speaker)',
+      'Guthrie, Woody (1912-1967) (Performer)',
+      'Lyttleton, Elizabeth (Recordist)',
+    ];
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: {
+            title: 'Recording',
+            url: 'https://www.loc.gov/item/x/',
+            contributor_names: names,
+          },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const result = await getLocApiService().getItem('x', createMockContext());
+
+    expect(result.contributors).toEqual(names);
+  });
+
+  it('returns no contributors when contributor_names is absent, even if contributors objects are present', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: {
+            title: 'Objects only',
+            url: 'https://www.loc.gov/item/y/',
+            contributors: [{ 'doe, jane': 'https://www.loc.gov/search/?fa=contributor:doe' }],
+          },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const result = await getLocApiService().getItem('y', createMockContext());
+
+    expect(result.contributors).toEqual([]);
+  });
+
   it('deduplicates resource_links when url and image point to the same resource', async () => {
     vi.stubGlobal(
       'fetch',
@@ -920,29 +1043,49 @@ describe('LocApiService.searchNewspapers', () => {
     vi.restoreAllMocks();
   });
 
-  it('uses location_state for state, not location[0]', async () => {
+  it('maps the whole location_state facet to states, in LOC order (#43)', async () => {
+    // Live shapes from a `lindbergh flight` 1927 search: a multi-state title, a single-state
+    // title, a record with no location_state (location alone must not stand in), and an empty facet.
     vi.stubGlobal(
       'fetch',
       mockFetch(
         JSON.stringify({
           results: [
             {
-              url: 'https://www.loc.gov/resource/sn000/1910/ed-1/?sp=1',
-              title: 'Test Page',
-              location: ['new york', 'united states'],
-              location_state: ['new york (state)'],
+              url: 'https://www.loc.gov/resource/sn87065702/1927-06-16/ed-1/?sp=10',
+              title: 'Image 10 of Southern Christian advocate (Charleston, S.C.), June 16, 1927',
+              location: ['georgia', 'charleston', 'united states', 'south carolina'],
+              location_state: ['georgia', 'south carolina'],
+            },
+            {
+              url: 'https://www.loc.gov/resource/sn86063730/1927-07-18/ed-1/?sp=4',
+              title: 'Image 4 of Brownsville herald (Brownsville, Tex.), July 18, 1927',
+              location: ['harlingen', 'united states', 'brownsville', 'texas'],
+              location_state: ['texas'],
+            },
+            {
+              url: 'https://www.loc.gov/resource/sn000/1910-01-01/ed-1/?sp=1',
+              title: 'No state facet',
+              location: ['united states'],
+            },
+            {
+              url: 'https://www.loc.gov/resource/sn001/1910-01-01/ed-1/?sp=1',
+              title: 'Empty state facet',
+              location_state: [],
             },
           ],
-          pagination: { total: 1, perpage: 25, pages: 1 },
+          pagination: { total: 4, perpage: 25, pages: 1 },
         }),
       ),
     );
     const ctx = createMockContext();
-    const svc = getLocApiService();
-    const result = await svc.searchNewspapers({ query: 'test', page: 1 }, ctx);
-    // location_state takes precedence over location[0]
-    expect(result.items[0]!.state).toContain('new york');
-    expect(result.items[0]!.state).not.toBe('united states');
+    const result = await getLocApiService().searchNewspapers({ query: 'test', page: 1 }, ctx);
+
+    expect(result.items[0]!.states).toEqual(['georgia', 'south carolina']);
+    expect(result.items[1]!.states).toEqual(['texas']);
+    expect(result.items[2]).not.toHaveProperty('states');
+    expect(result.items[3]).not.toHaveProperty('states');
+    for (const item of result.items) expect(item).not.toHaveProperty('state');
   });
 
   it('uses partof_title for newspaper_title, not subject', async () => {
@@ -1256,25 +1399,105 @@ describe('LocApiService.getNewspaperPage', () => {
     expect(result.ocr_text).toContain('Hair Falling');
   });
 
-  it('prefers upstream date_issued/sequence over URL-derived values when present', async () => {
-    const resourceBody = JSON.stringify({
-      resource: {
-        url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/',
-        date_issued: '1899-12-31',
-        sequence: 5,
-      },
-    });
-    vi.stubGlobal('fetch', mockFetch(resourceBody));
-    const ctx = createMockContext();
-    const svc = getLocApiService();
-    const result = await svc.getNewspaperPage(
-      'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/?sp=12',
-      ctx,
+  it('requests the item and resource projections together in one call (#42)', async () => {
+    const fetchSpy = mockFetch(
+      JSON.stringify({ resource: { url: 'https://www.loc.gov/resource/sn000/1900-01-01/ed-1/' } }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    await getLocApiService().getNewspaperPage(
+      'https://www.loc.gov/resource/sn000/1900-01-01/ed-1/?sp=2',
+      createMockContext(),
     );
 
-    // Upstream values win over the URL's 1912-04-18 / sp=12.
-    expect(result.date).toBe('1899-12-31');
-    expect(result.sequence).toBe(5);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const calledUrl = new URL(fetchSpy.mock.calls[0]![0] as string);
+    expect(calledUrl.searchParams.get('at')).toBe('item,resource');
+    expect(calledUrl.searchParams.get('sp')).toBe('2');
+  });
+
+  it('reads publication metadata from the item block and segment_count from the resource (#42)', async () => {
+    // Live shape of https://www.loc.gov/resource/sn87065702/1927-06-16/ed-1/?sp=10&fo=json&at=item,resource
+    const body = JSON.stringify({
+      item: {
+        title: 'Southern Christian advocate (Charleston, S.C.), June 16, 1927',
+        newspaper_title: ['Southern Christian advocate'],
+        partof_title: ['southern christian advocate (charleston, s.c.) 1837-1948'],
+        location_state: ['georgia', 'south carolina'],
+        place_of_publication: 'Charleston, S.C.',
+        number_edition: ['1'],
+        date_issued: '1927-06-16',
+      },
+      resource: {
+        segment_count: 16,
+        url: 'https://www.loc.gov/resource/sn87065702/1927-06-16/ed-1/',
+      },
+    });
+    vi.stubGlobal('fetch', mockFetch(body));
+    const result = await getLocApiService().getNewspaperPage(
+      'https://www.loc.gov/resource/sn87065702/1927-06-16/ed-1/?sp=10',
+      createMockContext(),
+    );
+
+    expect(result).toEqual({
+      page_url: 'https://www.loc.gov/resource/sn87065702/1927-06-16/ed-1/?sp=10',
+      newspaper_title: 'Southern Christian advocate',
+      date: '1927-06-16',
+      states: ['georgia', 'south carolina'],
+      place_of_publication: 'Charleston, S.C.',
+      edition: '1',
+      sequence: 10,
+      segment_count: 16,
+      ocr_text: '',
+      ocr_available: false,
+    });
+  });
+
+  it('falls back to partof_title for newspaper_title and prefers item.date_issued over the URL date', async () => {
+    const body = JSON.stringify({
+      item: {
+        partof_title: ['the milwaukee leader (milwaukee, wis.) 1911-1938'],
+        location_state: ['wisconsin'],
+        date_issued: '1927-06-14',
+      },
+      resource: { url: 'https://www.loc.gov/resource/sn83045293/1927-06-13/ed-1/' },
+    });
+    vi.stubGlobal('fetch', mockFetch(body));
+    const result = await getLocApiService().getNewspaperPage(
+      'https://www.loc.gov/resource/sn83045293/1927-06-13/ed-1/?sp=1',
+      createMockContext(),
+    );
+
+    expect(result.newspaper_title).toBe('the milwaukee leader (milwaukee, wis.) 1911-1938');
+    expect(result.states).toEqual(['wisconsin']);
+    expect(result.date).toBe('1927-06-14');
+    expect(result.sequence).toBe(1);
+  });
+
+  it.each([
+    { name: 'an empty item block', item: {} },
+    {
+      name: 'an item block with empty facets',
+      item: { newspaper_title: [], partof_title: [], location_state: [], number_edition: [] },
+    },
+    { name: 'no item block', item: undefined },
+  ])('degrades to the URL-derived fallbacks for $name (#42)', async ({ item }) => {
+    const body = JSON.stringify({
+      ...(item && { item }),
+      resource: { url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/' },
+    });
+    vi.stubGlobal('fetch', mockFetch(body));
+    const result = await getLocApiService().getNewspaperPage(
+      'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/?sp=12',
+      createMockContext(),
+    );
+
+    expect(result).toEqual({
+      page_url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/?sp=12',
+      date: '1912-04-18',
+      sequence: 12,
+      ocr_text: '',
+      ocr_available: false,
+    });
   });
 
   it('omits date and sequence when neither the resource nor the URL provides them', async () => {
@@ -1329,6 +1552,115 @@ describe('LocApiService.getNewspaperPage', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     expect(result.ocr_available).toBe(true);
     expect(result.ocr_text).toContain('Recovered OCR text');
+  });
+});
+
+/**
+ * LOC answers a page past the end of a result set with 404 on every search-family endpoint.
+ * These drive the real fetchSearchPage through each public search method with only `fetch`
+ * stubbed, so the status handling under test actually runs.
+ */
+describe('LocApiService out-of-range 404 (#40)', () => {
+  beforeEach(async () => {
+    const storage = await createInMemoryStorage();
+    initLocApiService(config, storage);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const notFoundBody = JSON.stringify({ exception: 'not found', status: 'not found' });
+
+  type SearchCall = (
+    svc: LocApiService,
+    ctx: ReturnType<typeof createMockContext>,
+    page: number,
+  ) => Promise<{ items: unknown[]; pagination: LocPagination }>;
+
+  const endpoints: { name: string; path: string; call: SearchCall }[] = [
+    {
+      name: 'bare search',
+      path: '/search/',
+      call: (svc, ctx, page) => svc.search({ query: 'zyzzyva', limit: 3, page }, ctx),
+    },
+    {
+      name: 'format search',
+      path: '/photos/',
+      call: (svc, ctx, page) =>
+        svc.search({ query: 'dust bowl', format: 'photo', limit: 3, page }, ctx),
+    },
+    {
+      name: 'collection search',
+      path: '/collections/baseball-cards/',
+      call: (svc, ctx, page) =>
+        svc.search({ query: 'cobb', collectionSlug: 'baseball-cards', limit: 3, page }, ctx),
+    },
+    {
+      name: 'newspaper search',
+      path: '/newspapers/',
+      call: (svc, ctx, page) => svc.searchNewspapers({ query: 'zyzzyva', limit: 3, page }, ctx),
+    },
+    {
+      name: 'collections browse',
+      path: '/collections/?',
+      call: (svc, ctx, page) => svc.browseCollections({ limit: 3, page }, ctx),
+    },
+  ];
+
+  describe.each(endpoints)('$name', ({ path, call }) => {
+    it.each([2, 900, 9999])(
+      'reads a 404 on page %i as an out-of-range page, in one request',
+      async (page) => {
+        const fetchSpy = mockFetch(notFoundBody, 404);
+        vi.stubGlobal('fetch', fetchSpy);
+        const result = await call(getLocApiService(), createMockContext(), page);
+
+        expect(result).toEqual({
+          items: [],
+          pagination: {
+            total: 0,
+            page,
+            perPage: 3,
+            pages: 0,
+            hasNext: false,
+            ceilingReached: false,
+          },
+        });
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        const calledUrl = String(fetchSpy.mock.calls[0]![0]);
+        expect(calledUrl).toContain(path);
+        expect(new URL(calledUrl).searchParams.get('sp')).toBe(String(page));
+      },
+    );
+
+    it('keeps a 404 on page 1 as NotFound', async () => {
+      const fetchSpy = mockFetch(notFoundBody, 404);
+      vi.stubGlobal('fetch', fetchSpy);
+      await expect(call(getLocApiService(), createMockContext(), 1)).rejects.toMatchObject({
+        code: JsonRpcErrorCode.NotFound,
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('reads a 404 past the retrieval ceiling as past-the-end, while a 400 there still flags the ceiling', async () => {
+    // 50,000 × 3 items is past the ~100k ceiling. A 404 says the result set ended first, so
+    // partition-by-facet guidance would be wrong; the 400 answer keeps its #33 meaning.
+    const svc = getLocApiService();
+    vi.stubGlobal('fetch', mockFetch(notFoundBody, 404));
+    const pastEnd = await svc.search(
+      { query: 'zyzzyva', limit: 3, page: 50_000 },
+      createMockContext(),
+    );
+    expect(pastEnd.pagination).toMatchObject({ pages: 0, ceilingReached: false });
+
+    vi.stubGlobal('fetch', mockFetch('', 400));
+    const ceiling = await svc.search(
+      { query: 'zyzzyva', limit: 3, page: 50_000 },
+      createMockContext(),
+    );
+    expect(ceiling.pagination).toMatchObject({ pages: 0, ceilingReached: true });
   });
 });
 
@@ -1400,5 +1732,25 @@ describe('LocApiService rate-limit state', () => {
     });
     // Retrying a 429 would deepen LOC's ~1-hour IP block — the predicate must never retry it.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a call made during the block before any request, with the time left in the hint', async () => {
+    // Runs after the 429 above, so the module-level block is live.
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const svc = getLocApiService();
+    const err = await svc.search({ query: 'test', page: 1 }, createMockContext()).then(
+      () => undefined,
+      (e: unknown) => e as { code?: number; data?: Record<string, unknown> },
+    );
+
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.RateLimited,
+      data: { reason: 'rate_limit_exceeded', blockedUntil: expect.any(String) },
+    });
+    const hint = String((err?.data?.recovery as { hint?: string } | undefined)?.hint);
+    expect(hint).toMatch(/60 more minute/);
+    expect(hint).toContain(String(err?.data?.blockedUntil));
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

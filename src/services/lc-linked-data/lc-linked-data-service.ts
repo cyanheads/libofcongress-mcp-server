@@ -24,8 +24,9 @@ const SUBJECTS_SCHEME = 'http://id.loc.gov/authorities/subjects';
 export const SUGGEST_MAX_COUNT = 50;
 
 /**
- * Response shape from the id.loc.gov suggest endpoint:
- * [query, labels[], counts[], uris[]]
+ * Response shape from the id.loc.gov suggest endpoint: [query, labels[], descriptions[], uris[]].
+ * Each description is a string like "1 result" — a tally of matching authority records, not of
+ * LOC items carrying the heading — so it is not read.
  */
 type SuggestResponse = [string, string[], string[], string[]];
 
@@ -99,7 +100,7 @@ export class LcLinkedDataService {
       return { subjects: [], matchCount: 0, poolCapReached: false };
     }
 
-    const [, labels, counts, uris] = data;
+    const [, labels, , uris] = data;
     const matches: LcSubjectHeading[] = [];
     for (let i = 0; i < labels.length; i++) {
       const label = labels[i];
@@ -108,13 +109,7 @@ export class LcLinkedDataService {
       // Keep only true LCSH subject headings. Name-authority and childrensSubjects labels are
       // not valid input for the `fa=subject:<value>` filter these results feed downstream.
       if (!uri.startsWith(`${SUBJECTS_SCHEME}/`)) continue;
-      const countStr = counts[i];
-      const count = countStr ? parseInt(countStr, 10) : undefined;
-      matches.push({
-        label,
-        uri,
-        ...(count !== undefined && !Number.isNaN(count) && { count }),
-      });
+      matches.push({ label, uri });
     }
 
     return {

@@ -15,7 +15,10 @@ export type RawLocSearchResult = {
   subject?: string[];
   contributor?: string[];
   location?: string[];
-  /** State-level location facet (e.g. "new york (state)") — more precise than location[] for newspapers */
+  /**
+   * State-level location facet (e.g. ["georgia", "south carolina"]) — more precise than
+   * location[] for newspapers. Multi-valued: a title indexed against several states lists each.
+   */
   location_state?: string[];
   language?: string[];
   /** Canonical publication title for Chronicling America results (e.g. "The Evening World") */
@@ -69,6 +72,12 @@ export type RawLocSearchResponse = {
   };
 };
 
+/**
+ * A related-record reference. LOC sends plain strings on some records and `{ title, url }`
+ * (sometimes with `id`) objects on others — normalize with `relatedItemRef`.
+ */
+export type RawLocRelatedItem = string | { id?: string; url?: string; title?: string };
+
 /** Raw LOC item detail response */
 export type RawLocItemResponse = {
   item?: {
@@ -76,7 +85,8 @@ export type RawLocItemResponse = {
     title?: string | string[];
     date?: string;
     created_published?: string | string[];
-    contributor?: string[];
+    /** Contributor names with roles (e.g. "Washington, George, 1732-1799 (Author)"). */
+    contributor_names?: string[];
     subject?: string[];
     notes?: string[];
     rights?: string | string[];
@@ -86,7 +96,7 @@ export type RawLocItemResponse = {
     summary?: string | string[];
     language?: string[];
     location?: string[];
-    related_items?: string[];
+    related_items?: RawLocRelatedItem[];
     url?: string;
     other_title?: string[];
     number_former_id?: string[];
@@ -107,11 +117,33 @@ export type RawLocItemResponse = {
       Array<{ url?: string; mimeType?: string; size?: number; levels?: number; info?: string }>
     >;
   }>;
-  related_items?: Array<{
-    id?: string;
-    title?: string;
+  related_items?: Array<Exclude<RawLocRelatedItem, string>>;
+};
+
+/**
+ * Raw LOC newspaper page response under `?fo=json&at=item,resource`. `item` carries the issue's
+ * publication metadata; `resource` carries the page-level pointers. Neither block carries the
+ * page's sequence, and `resource` carries no date — both are derived from the page URL.
+ */
+export type RawLocNewspaperPageResponse = {
+  item?: {
+    /** Display-cased title (e.g. ["Southern Christian advocate"]). */
+    newspaper_title?: string[];
+    /** Lowercased title with place and run (e.g. ["southern christian advocate (charleston, s.c.) 1837-1948"]). */
+    partof_title?: string[];
+    location_state?: string[];
+    /** Scalar on the records observed (e.g. "Charleston, S.C."). */
+    place_of_publication?: string | string[];
+    /** Edition number of the issue (e.g. ["1"]). */
+    number_edition?: string[];
+    date_issued?: string;
+  };
+  resource?: {
     url?: string;
-  }>;
+    fulltext_file?: string;
+    /** Number of pages (segments) in the issue. */
+    segment_count?: number;
+  };
 };
 
 /** Normalized item summary returned from search */
@@ -176,7 +208,8 @@ export type LocNewspaperPage = {
   title: string;
   description?: string;
   date?: string;
-  state?: string;
+  /** Every state in LOC's location_state facet, in LOC order. Absent when LOC sends none. */
+  states?: string[];
   newspaper_title?: string;
 };
 
@@ -185,9 +218,13 @@ export type LocNewspaperPageDetail = {
   page_url: string;
   newspaper_title?: string;
   date?: string;
-  state?: string;
+  /** Every state in LOC's location_state facet, in LOC order. Absent when LOC sends none. */
+  states?: string[];
+  place_of_publication?: string;
   edition?: string;
   sequence?: number;
+  /** Number of pages in the issue. */
+  segment_count?: number;
   ocr_text: string;
   ocr_available: boolean;
 };
