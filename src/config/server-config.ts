@@ -9,7 +9,7 @@ import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 const ServerConfigSchema = z.object({
   userAgent: z
     .string()
-    .default('libofcongress-mcp-server/0.2.18')
+    .default('libofcongress-mcp-server/0.3.0')
     .describe(
       'User-Agent header sent with LOC API requests. LOC recommends a descriptive value for polite access.',
     ),

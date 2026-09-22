@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-09-22 · ⚠️ Breaking
+
+Return newspaper states as a list, forward every declared recovery hint, and normalize LOC metadata (contributors, related items, out-of-range pages); breaking: states[] replaces state on two tools, and search_subjects drops count
+
 ## [0.2.18](changelog/0.2.x/0.2.18.md) — 2026-09-19
 
 Add a public hosted endpoint, declare stateless session mode explicitly, and pick up mcp-ts-core 0.13.5's argument-rejection envelope, error-text reason suffix, and session-mode well-known metadata
