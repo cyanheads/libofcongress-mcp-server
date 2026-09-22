@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, McpError, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 export const locSearch = tool('libofcongress_search', {
@@ -133,6 +133,14 @@ export const locSearch = tool('libofcongress_search', {
 
   errors: [
     {
+      reason: 'invalid_date_range',
+      code: JsonRpcErrorCode.ValidationError,
+      retryable: false,
+      when: 'date_start is later than date_end.',
+      recovery:
+        'Swap date_start and date_end so the start year comes first, or omit one of them to leave that side of the range open.',
+    },
+    {
       reason: 'incompatible_filters',
       code: JsonRpcErrorCode.ValidationError,
       retryable: false,
@@ -143,7 +151,7 @@ export const locSearch = tool('libofcongress_search', {
     {
       reason: 'collection_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: 'collection_slug does not resolve to a LOC collection.',
+      when: 'collection_slug does not resolve to a LOC collection. Reported on page 1; a later page gets the out-of-range notice, since LOC answers both cases the same way there.',
       recovery:
         'Call libofcongress_browse_collections and pass a slug exactly as returned; slugs are not derivable from the collection title.',
     },
@@ -174,9 +182,15 @@ export const locSearch = tool('libofcongress_search', {
       input.date_end !== undefined &&
       input.date_start > input.date_end
     ) {
-      throw validationError(
-        `date_start (${input.date_start}) must be ≤ date_end (${input.date_end}). Reverse the values to form a valid date range.`,
-        { field: 'date_start', date_start: input.date_start, date_end: input.date_end },
+      throw ctx.fail(
+        'invalid_date_range',
+        `date_start (${input.date_start}) is later than date_end (${input.date_end}).`,
+        {
+          field: 'date_start',
+          date_start: input.date_start,
+          date_end: input.date_end,
+          ...ctx.recoveryFor('invalid_date_range'),
+        },
       );
     }
 
@@ -186,8 +200,13 @@ export const locSearch = tool('libofcongress_search', {
     if (input.format !== undefined && collectionSlug !== undefined) {
       throw ctx.fail(
         'incompatible_filters',
-        `format ("${input.format}") and collection_slug ("${collectionSlug}") cannot be combined — each scopes the search to a different LOC endpoint. Omit format to search within the collection and filter on each result's format field, or omit collection_slug to search that format across all of LOC.`,
-        { field: 'collection_slug', format: input.format, collectionSlug },
+        `format ("${input.format}") and collection_slug ("${collectionSlug}") cannot be combined — each scopes the search to a different LOC endpoint.`,
+        {
+          field: 'collection_slug',
+          format: input.format,
+          collectionSlug,
+          ...ctx.recoveryFor('incompatible_filters'),
+        },
       );
     }
 
@@ -210,11 +229,17 @@ export const locSearch = tool('libofcongress_search', {
       );
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
-        throw ctx.fail('rate_limit_exceeded', err.message);
+        // The service's data carries the time left on the block; it overrides the contract's
+        // static "about an hour" hint, which stays as the fallback.
+        throw ctx.fail('rate_limit_exceeded', err.message, {
+          ...ctx.recoveryFor('rate_limit_exceeded'),
+          ...err.data,
+        });
       }
-      // LOC 404s an unrecognized collection slug. Only the collection path can 404 here, and
-      // re-throwing as a typed failure keeps the internal request URL the service attached out
-      // of the wire — an agent needs the slug it got wrong, not our endpoint.
+      // LOC 404s an unrecognized collection slug. The service reads a 404 as not-found only on
+      // page 1 (a later page's 404 is out of range), so this fires for a bad slug on page 1.
+      // Re-throwing as a typed failure keeps the internal request URL out of the wire — an agent
+      // needs the slug it got wrong, not our endpoint.
       if (
         collectionSlug !== undefined &&
         err instanceof McpError &&
@@ -223,7 +248,11 @@ export const locSearch = tool('libofcongress_search', {
         throw ctx.fail(
           'collection_not_found',
           `No LOC collection has the slug "${collectionSlug}".`,
-          { field: 'collection_slug', collectionSlug },
+          {
+            field: 'collection_slug',
+            collectionSlug,
+            ...ctx.recoveryFor('collection_not_found'),
+          },
         );
       }
       throw err;
@@ -239,24 +268,27 @@ export const locSearch = tool('libofcongress_search', {
     ctx.enrich.total(total);
 
     if (result.items.length === 0) {
-      // pages === 0 is the sentinel for a LOC 400 (out-of-range page request).
+      const scope =
+        (input.format ? ` with format "${input.format}"` : '') +
+        (collectionSlug ? ` in collection "${collectionSlug}"` : '') +
+        (input.date_start || input.date_end
+          ? ` in dates ${input.date_start ?? ''}–${input.date_end ?? ''}`
+          : '');
+      // pages === 0 is the service's sentinel for a page LOC would not serve (404, 400, or 520).
       if (pages === 0 && page > 1) {
         ctx.enrich.notice(
           ceilingReached
-            ? `Page ${page} is past LOC's ~100,000-item retrieval ceiling for query "${input.query}" — LOC serves nothing deeper, regardless of the total match count. Narrow the search with a date range (date_start/date_end), subject, or location so the target items fall within the first 100,000 results.`
-            : `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
+            ? `Page ${page} is past LOC's ~100,000-item retrieval ceiling for query "${input.query}" — LOC serves nothing that deep, however few items match. Re-run with page 1 to see the real total and page count; if the target items lie past the first 100,000, narrow the search with a date range (date_start/date_end), subject, or location.`
+            : `Page ${page} is out of range for "${input.query}"${scope}. Re-run with page 1 to see the total match count and page count, then request a page within that range.` +
+                (collectionSlug
+                  ? ' Page 1 also checks the slug: an unknown collection fails there with collection_not_found.'
+                  : ''),
         );
         ctx.enrich.total(0);
         return { items: [], total: 0, page, pages: 0, has_next: false };
       }
       ctx.enrich.notice(
-        `No items matched "${input.query}"` +
-          (input.format ? ` with format "${input.format}"` : '') +
-          (collectionSlug ? ` in collection "${collectionSlug}"` : '') +
-          (input.date_start || input.date_end
-            ? ` in dates ${input.date_start ?? ''}–${input.date_end ?? ''}`
-            : '') +
-          '. Try broadening the query, widening the date range, or running libofcongress_search_subjects to find the exact subject heading.',
+        `No items matched "${input.query}"${scope}. Try broadening the query, widening the date range, or running libofcongress_search_subjects to find the exact subject heading.`,
       );
       ctx.enrich.total(0);
       return { items: [], total: 0, page, pages: 0, has_next: false };

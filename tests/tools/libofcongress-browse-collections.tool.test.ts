@@ -9,10 +9,12 @@ import {
   createInMemoryStorage,
   createMockContext,
   getEnrichment,
+  runToolContract,
 } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locBrowseCollections } from '@/mcp-server/tools/definitions/libofcongress-browse-collections.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
+import { contentText, structured, wireError } from '../helpers/tool-result.js';
 
 /**
  * Live-shaped LOC /collections/ payload: results point at an /about-this-collection/ subpage,
@@ -349,16 +351,53 @@ describe('locBrowseCollections', () => {
     expect(() => locBrowseCollections.input.parse({ page: 0 })).toThrow();
   });
 
+  it.each([
+    { args: { limit: 3, page: 9999 }, mentions: ['Page 9999'] },
+    { args: { query: 'baseball', limit: 3, page: 40 }, mentions: ['Page 40', '"baseball"'] },
+  ])(
+    'returns the out-of-range notice, not an error, for a 404 on page $args.page (#40)',
+    async ({ args, mentions }) => {
+      const fetchSpy = mockFetch(JSON.stringify({ exception: 'not found' }), 404);
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await runToolContract(locBrowseCollections, args);
+
+      expect(result.isError).toBeFalsy();
+      const sc = structured(result);
+      expect(sc).toMatchObject({
+        collections: [],
+        total: 0,
+        page: args.page,
+        pages: 0,
+        has_next: false,
+        totalCount: 0,
+      });
+      const notice = String(sc.notice);
+      for (const m of mentions) expect(notice).toContain(m);
+      expect(notice).toContain('page 1');
+      expect(contentText(result)).toContain(notice);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    },
+  );
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil
-  it('throws RateLimited on HTTP 429', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response('Too Many Requests', { status: 429 })),
-    );
-    const ctx = createMockContext({ errors: locBrowseCollections.errors });
-    const input = locBrowseCollections.input.parse({});
-    await expect(locBrowseCollections.handler(input, ctx)).rejects.toMatchObject({
+  it('forwards the most specific rate-limit hint on both surfaces: a fresh 429, then the running block (#44)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('Too Many Requests', { status: 429 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const fresh = await runToolContract(locBrowseCollections, {});
+    const freshError = wireError(fresh);
+    expect(freshError).toMatchObject({
       code: JsonRpcErrorCode.RateLimited,
+      data: { reason: 'rate_limit_exceeded', retryable: false },
     });
+    const freshHint = String(freshError.data?.recovery?.hint);
+    expect(freshHint).toMatch(/1 hour/);
+    expect(contentText(fresh)).toContain(`Recovery: ${freshHint}`);
+
+    const blocked = await runToolContract(locBrowseCollections, {});
+    const blockedHint = String(wireError(blocked).data?.recovery?.hint);
+    expect(blockedHint).toMatch(/60 more minute/);
+    expect(contentText(blocked)).toContain(`Recovery: ${blockedHint}`);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

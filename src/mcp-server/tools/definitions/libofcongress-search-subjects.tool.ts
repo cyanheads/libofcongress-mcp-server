@@ -43,16 +43,12 @@ export const locSearchSubjects = tool('libofcongress_search_subjects', {
             uri: z
               .string()
               .describe('Stable LOC URI identifying this subject heading in the authority file.'),
-            count: z
-              .number()
-              .optional()
-              .describe(
-                'Approximate number of LOC items carrying this heading. Omitted when unavailable.',
-              ),
           })
           .describe('A single LCSH subject heading record.'),
       )
-      .describe('LCSH subject headings matching the query, ordered by relevance.'),
+      .describe(
+        'LCSH subject headings matching the query, ordered by relevance. To see how many LOC items carry a heading, pass its label as the libofcongress_search subject filter and read total.',
+      ),
     total: z.number().describe('Number of subject headings returned.'),
   }),
 
@@ -130,7 +126,6 @@ export const locSearchSubjects = tool('libofcongress_search_subjects', {
     for (const s of result.subjects) {
       lines.push(`\n## ${s.label}`);
       lines.push(`**URI:** ${s.uri}`);
-      if (s.count !== undefined) lines.push(`**Items:** ${s.count}`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

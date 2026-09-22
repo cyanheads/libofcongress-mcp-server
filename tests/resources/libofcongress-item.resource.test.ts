@@ -11,13 +11,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locItemResource } from '@/mcp-server/resources/definitions/libofcongress-item.resource.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 import type { LocItemDetail } from '@/services/loc-api/types.js';
+import { contractRecovery } from '../helpers/tool-result.js';
 
 function makeItemResponse(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
     item: {
       title: 'Portrait of a senator',
       date: '1915',
-      contributor: ['Photographer, Unknown'],
+      contributor_names: ['Harris & Ewing (Photographer)'],
+      contributors: [
+        { 'harris & ewing': 'https://www.loc.gov/search/?fa=contributor:harris+%26+ewing&fo=json' },
+      ],
       subject: ['Legislators -- United States -- Portraits'],
       notes: ['From the Harris & Ewing collection.'],
       url: 'https://www.loc.gov/item/2016687584/',
@@ -115,7 +119,7 @@ describe('locItemResource', () => {
     expect(result.item_id).toBe('2016687584');
     expect(result.title).toBe('Portrait of a senator');
     expect(result.date).toBe('1915');
-    expect(result.contributors).toContain('Photographer, Unknown');
+    expect(result.contributors).toEqual(['Harris & Ewing (Photographer)']);
     expect(result.subject_headings).toContain('Legislators -- United States -- Portraits');
   });
 
@@ -172,6 +176,30 @@ describe('locItemResource', () => {
     expect(result.access_restricted).toBe(true);
   });
 
+  it('returns object-form item.related_items entries as strings, like the tool (#39)', async () => {
+    // afc9999005.10348's live item.related_items entry is a { title, url } object; the resource
+    // shares getItem() with the tool, so it must hand back the same string[] record.
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        makeItemResponse({
+          related_items: [
+            'string-related-id',
+            {
+              title: 'Alan Lomax Collection of Woody Guthrie Recordings (AFC 1940/007)',
+              url: 'https://lccn.loc.gov/2009655315',
+            },
+          ],
+        }),
+      ),
+    );
+    const ctx = createResourceContext({ uri: new URL('libofcongress://item/afc9999005.10348') });
+    const params = locItemResource.params!.parse({ item_id: 'afc9999005.10348' });
+    const result = await callItemResource(params, ctx);
+
+    expect(result.related_items).toEqual(['string-related-id', 'https://lccn.loc.gov/2009655315']);
+  });
+
   it('resolves a raw multi-segment id end-to-end from URI to request URL', async () => {
     const fetchSpy = mockFetch(
       makeItemResponse({
@@ -222,24 +250,6 @@ describe('locItemResource', () => {
     expect((fetchSpy.mock.calls[0]![0] as string) ?? '').toContain('/item/2016687584/');
   });
 
-  it('throws NotFound when item is absent from response envelope', async () => {
-    vi.stubGlobal('fetch', mockFetch(JSON.stringify({ resources: [], related_items: [] })));
-    const ctx = createResourceContext({ uri: new URL('libofcongress://item/nonexistent') });
-    const params = locItemResource.params!.parse({ item_id: 'nonexistent' });
-    await expect(callItemResource(params, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-    });
-  });
-
-  it('throws NotFound on HTTP 404', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })));
-    const ctx = createResourceContext({ uri: new URL('libofcongress://item/bad-id') });
-    const params = locItemResource.params!.parse({ item_id: 'bad-id' });
-    await expect(callItemResource(params, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-    });
-  });
-
   it('NotFound data carries the caller-facing id, never the internal request URL', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })));
     const ctx = createResourceContext({
@@ -271,7 +281,7 @@ describe('locItemResource', () => {
     expect((err as Error).message).not.toContain('www.loc.gov');
   });
 
-  it('handles sparse upstream payload — missing contributor, subject, notes', async () => {
+  it('handles sparse upstream payload — missing contributor_names, subject, notes', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(
@@ -279,7 +289,7 @@ describe('locItemResource', () => {
           item: {
             title: 'Sparse Item',
             url: 'https://www.loc.gov/item/sparse-id/',
-            // contributor, subject, notes all absent
+            // contributor_names, subject, notes all absent
           },
           resources: [],
           related_items: [],
@@ -332,17 +342,58 @@ describe('locItemResource', () => {
     expect(result.url.startsWith('//')).toBe(false);
   });
 
-  // Rate-limit test last — sets module-level rateLimitBlockedUntil
-  it('throws RateLimited on HTTP 429', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response('Too Many Requests', { status: 429 })),
-    );
-    const ctx = createResourceContext({ uri: new URL('libofcongress://item/2016687584') });
-    const params = locItemResource.params!.parse({ item_id: '2016687584' });
-    const err = await callItemResource(params, ctx).catch((e: unknown) => e);
+  it.each([
+    {
+      name: 'an upstream 404',
+      fetch: () => vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })),
+    },
+    {
+      name: 'a response with no item record',
+      fetch: () => mockFetch(JSON.stringify({ resources: [], related_items: [] })),
+    },
+  ])(
+    'names the failed id and forwards item_not_found recovery in the error data for $name (#44)',
+    async ({ fetch }) => {
+      vi.stubGlobal('fetch', fetch());
+      const ctx = createResourceContext({ uri: new URL('libofcongress://item/99999999999zzz') });
+      const params = locItemResource.params!.parse({ item_id: '99999999999zzz' });
 
-    expect(err).toMatchObject({ code: JsonRpcErrorCode.RateLimited });
-    expect((err as { data?: Record<string, unknown> }).data?.reason).toBe('rate_limit_exceeded');
+      // Resource errors reach the client as the JSON-RPC error envelope: code, message, data.
+      await expect(callItemResource(params, ctx)).rejects.toMatchObject({
+        code: JsonRpcErrorCode.NotFound,
+        message: expect.stringContaining('99999999999zzz'),
+        data: {
+          reason: 'item_not_found',
+          itemId: '99999999999zzz',
+          recovery: { hint: contractRecovery(locItemResource, 'item_not_found') },
+        },
+      });
+    },
+  );
+
+  // Rate-limit test last — sets module-level rateLimitBlockedUntil
+  it('forwards the most specific rate-limit hint in the error data: a fresh 429, then the running block (#44)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('Too Many Requests', { status: 429 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const params = locItemResource.params!.parse({ item_id: '2016687584' });
+    const uri = new URL('libofcongress://item/2016687584');
+
+    await expect(callItemResource(params, createResourceContext({ uri }))).rejects.toMatchObject({
+      code: JsonRpcErrorCode.RateLimited,
+      data: {
+        reason: 'rate_limit_exceeded',
+        retryable: false,
+        recovery: { hint: expect.stringMatching(/1 hour/) },
+      },
+    });
+    await expect(callItemResource(params, createResourceContext({ uri }))).rejects.toMatchObject({
+      code: JsonRpcErrorCode.RateLimited,
+      data: {
+        reason: 'rate_limit_exceeded',
+        blockedUntil: expect.any(String),
+        recovery: { hint: expect.stringMatching(/60 more minute/) },
+      },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

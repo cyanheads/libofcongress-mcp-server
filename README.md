@@ -55,7 +55,7 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 ### `libofcongress_search` <sub>tool</sub>
 
 - Filters: eight material formats (`photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`), inclusive year range (`date_start`/`date_end`), subject heading (use `libofcongress_search_subjects` for the exact LCSH spelling), and geographic location
-- `collection_slug` scopes the search to one curated collection (slug from `libofcongress_browse_collections`) — mutually exclusive with `format`; an unrecognized slug returns `collection_not_found`
+- `collection_slug` scopes the search to one curated collection (slug from `libofcongress_browse_collections`) — mutually exclusive with `format`; an unrecognized slug returns `collection_not_found` on page 1
 - Up to 100 results per page, capped at LOC's ~100,000-item retrieval ceiling — a notice discloses how to partition by date, subject, or location to reach the rest; real results on a page beyond the reported total are always returned, never discarded
 - Empty results carry a `notice` field with recovery hints, echoing the applied filters
 - Each result carries `is_item` — `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for non-item results (collections, exhibit/guide pages, newspaper pages), whose `url` should be opened instead
@@ -64,8 +64,8 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 ### `libofcongress_get_item` <sub>tool</sub>
 
-- Returns full metadata in one call: contributors, LCSH subject headings, cataloger notes, summary, languages, locations, rights information, physical description, call number, former IDs, original/online formats, and `access_restricted`
-- `resource_links` (deduplicated from nested upstream `files[]` arrays) carries downloadable digital file URLs (TIFF/JPEG/PDF); `related_items` lists related LOC item IDs — both render in full on `structuredContent` and `content[]`, never truncated
+- Returns full metadata in one call: contributors (with their roles, e.g. `Washington, George, 1732-1799 (Author)`), LCSH subject headings, cataloger notes, summary, languages, locations, rights information, physical description, call number, former IDs, original/online formats, and `access_restricted`
+- `resource_links` (deduplicated from nested upstream `files[]` arrays) carries downloadable digital file URLs (TIFF/JPEG/PDF); `related_items` lists related LOC record IDs or URLs, normalized to strings whichever form LOC sends — both render in full on `structuredContent` and `content[]`, never truncated
 - Accepts multi-segment item IDs verbatim (e.g. newspaper pages `sn95047246/1935-09-05/ed-1`); the returned `url` is always an absolute `https://` URL
 - Fields absent upstream are omitted rather than filled — a sparse record stays sparse
 
@@ -75,6 +75,7 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 - OCR text excerpts (~500 chars) returned inline for relevance assessment without a second hop
 - Filters: keyword, inclusive date range, US state (full name), and newspaper title (partial match)
+- Each result carries `states` — every state LOC indexes the title under, in LOC order; a title indexed against its circulation area lists several
 - Up to 100 results per page, capped at LOC's ~100,000-page retrieval ceiling — a notice discloses how to partition by date or state to reach the rest
 - Returns the `url` field needed by `libofcongress_get_newspaper_page` — do not construct these URLs manually
 - OCR quality varies by digitization batch and era; 19th-century and degraded materials may contain garbled text
@@ -84,7 +85,8 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 ### `libofcongress_get_newspaper_page` <sub>tool</sub>
 
-- Accepts the `url` field from a `libofcongress_search_newspapers` result — validates the URL prefix before any outbound request
+- Accepts the `url` field from a `libofcongress_search_newspapers` result — validates the URL prefix before any outbound request and rejects anything else as `invalid_page_url`
+- Returns the issue's publication metadata alongside the text — `newspaper_title`, `date`, `place_of_publication`, `states`, `edition`, the page's `sequence`, and the issue's page count (`segment_count`) — from the same single request; fields LOC doesn't send are omitted
 - Fetches JSON from the LOC text-services endpoint (`tile.loc.gov`) and reads plain text from the `full_text` field
 - `ocr_available: false` when the page has no digitized text (image-only batch) — a data property, not an error
 - When `ocr_available` is `true` but the text service returns nothing, a `notice` discloses the retrieval miss, distinct from a genuinely image-only page
@@ -95,7 +97,7 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 ### `libofcongress_search_subjects` <sub>tool</sub>
 
 - Returns standardized LCSH labels and stable LOC URIs; use the returned `label` verbatim in `libofcongress_search`'s `subject` filter — LCSH uses inverted forms ("Photography, Aerial", "World War, 1939-1945") that differ from natural language
-- Up to 50 results per call (default 10); `count` reports the approximate number of LOC items carrying a heading, when available
+- Up to 50 results per call (default 10); for how many LOC items carry a heading, run `libofcongress_search` with it as the `subject` filter and read `total`
 - Draws from the id.loc.gov suggest endpoint's full 50-candidate pool (not scaled to `limit`) and filters to true LCSH headings, so a heading ranked below name-authority records isn't reported as a false empty
 - When the ranked pool — rather than a lack of coverage — yields an empty or short result, the response discloses it with a recovery hint
 
@@ -122,10 +124,10 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): s
 
 Library of Congress-specific:
 
-- Module-level rate-limit enforcement: 20 req/min limit; 429 responses trigger a 1-hour block with a per-minute countdown in error messages
+- Module-level rate-limit enforcement: 20 req/min limit; 429 responses trigger a 1-hour block, and the error's recovery hint counts down the minutes left and names the time it lifts
 - Configurable pacing delay (default 3100ms, ~19 req/min) applied before every outbound LOC API request
 - HTML-response detection guards against silent rate-limit proxy pages that return 200 with HTML
-- Out-of-range page handling: LOC returns HTTP 400 or 520 for page numbers beyond the result set — treated as empty rather than an error
+- Out-of-range page handling: a page past the end of the results (HTTP 404 on any page after the first) or past the retrieval ceiling (HTTP 400) returns an empty result with a notice, not an error — both point back to page 1 for the real page count, and the ceiling notice also explains how to partition a search that matches more than LOC will page through
 - Transient-fault resilience: network drops and timeouts retry with backoff behind a 30s per-request timeout ceiling; the 429 rate-limit path is never retried, since a retry would deepen LOC's 1-hour block
 
 Agent-friendly output:

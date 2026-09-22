@@ -97,7 +97,7 @@ export const locItemResource = resource('libofcongress://item/{item_id}', {
   name: 'loc-item',
   description: 'LOC digital item metadata by ID. Stable URI for injecting item context into agent conversations.',
   mimeType: 'application/json',
-  params: z.object({ item_id: z.string().describe('LOC item ID (e.g., "loc.pnp.ppmsc.02404").') }),
+  params: z.object({ item_id: z.string().describe('LOC item ID (e.g., "2005691065").') }),
   handler(params, ctx) {
     ctx.log.debug('libofcongress://item resource', { item_id: params.item_id });
     const svc = getLocApiService();

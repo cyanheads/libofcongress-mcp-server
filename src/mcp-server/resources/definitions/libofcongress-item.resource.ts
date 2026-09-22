@@ -23,7 +23,7 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
     item_id: z
       .string()
       .describe(
-        'LOC item ID (e.g., "loc.pnp.ppmsc.02404" or "2009632251"). Same ID as in libofcongress_search result "id" field. Multi-segment newspaper IDs ("sn95047246/1935-09-05/ed-1") are supported — write the slashes literally rather than percent-encoding them.',
+        'LOC item ID (e.g., "2005691065" or "2009632251"). Same ID as in libofcongress_search result "id" field. Multi-segment newspaper IDs ("sn95047246/1935-09-05/ed-1") are supported — write the slashes literally rather than percent-encoding them.',
       ),
   }),
 
@@ -57,10 +57,18 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
       return await svc.getItem(itemId, ctx);
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
-        throw ctx.fail('item_not_found', err.message, { itemId });
+        throw ctx.fail('item_not_found', `No LOC item has the ID "${itemId}".`, {
+          itemId,
+          ...ctx.recoveryFor('item_not_found'),
+        });
       }
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
-        throw ctx.fail('rate_limit_exceeded', err.message);
+        // The service's data carries the time left on the block; it overrides the contract's
+        // static "about an hour" hint, which stays as the fallback.
+        throw ctx.fail('rate_limit_exceeded', err.message, {
+          ...ctx.recoveryFor('rate_limit_exceeded'),
+          ...err.data,
+        });
       }
       throw err;
     }

@@ -94,12 +94,13 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
 
   async handler(input, ctx) {
     ctx.log.info('libofcongress_browse_collections', { query: input.query, page: input.page });
+    const query = input.query?.trim();
     const svc = getLocApiService();
     let result: Awaited<ReturnType<typeof svc.browseCollections>>;
     try {
       result = await svc.browseCollections(
         {
-          ...(input.query?.trim() && { query: input.query.trim() }),
+          ...(query && { query }),
           limit: input.limit,
           page: input.page,
         },
@@ -107,7 +108,12 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
       );
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
-        throw ctx.fail('rate_limit_exceeded', err.message);
+        // The service's data carries the time left on the block; it overrides the contract's
+        // static "about an hour" hint, which stays as the fallback.
+        throw ctx.fail('rate_limit_exceeded', err.message, {
+          ...ctx.recoveryFor('rate_limit_exceeded'),
+          ...err.data,
+        });
       }
       throw err;
     }
@@ -120,16 +126,18 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
     ctx.enrich.total(total);
 
     if (result.items.length === 0) {
-      // Out-of-range page: service returned null (LOC 400) — pages is 0 here.
-      // Distinguish from a genuine empty result by checking page > 1.
+      // pages === 0 is the service's sentinel for a page LOC would not serve (404, 400, or 520);
+      // page > 1 separates it from a genuine empty result.
       if (page > 1 && pages === 0) {
-        ctx.enrich.notice(`Page ${page} is out of range. Try a smaller page number.`);
+        ctx.enrich.notice(
+          `Page ${page} is out of range for the collection list${query ? ` matching "${query}"` : ''}. Re-run with page 1 to see the total collection count and page count, then request a page within that range.`,
+        );
         ctx.enrich.total(0);
         return { collections: [], total: 0, page, pages: 0, has_next: false };
       }
       ctx.enrich.notice(
-        input.query
-          ? `No collections matched "${input.query}". Try a broader keyword or call without a query to list all LOC digital collections.`
+        query
+          ? `No collections matched "${query}". Try a broader keyword or call without a query to list all LOC digital collections.`
           : 'No collections found. The LOC collections endpoint may be temporarily unavailable.',
       );
       ctx.enrich.total(0);

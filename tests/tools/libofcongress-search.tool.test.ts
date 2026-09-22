@@ -9,10 +9,12 @@ import {
   createInMemoryStorage,
   createMockContext,
   getEnrichment,
+  runToolContract,
 } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locSearch } from '@/mcp-server/tools/definitions/libofcongress-search.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
+import { contentText, contractRecovery, structured, wireError } from '../helpers/tool-result.js';
 
 /** Minimal mock search response from the LOC JSON API */
 function makeSearchResponse(overrides: { results?: object[]; pagination?: object } = {}) {
@@ -240,25 +242,9 @@ describe('locSearch', () => {
     });
     // Rejected before any request — never silently pick one filter and search anyway
     expect(fetchSpy).not.toHaveBeenCalled();
-    // The message must name the way out, not just the conflict
+    // The message names both conflicting filters; the way out rides the recovery hint
     expect((err as Error).message).toContain('collection_slug');
     expect((err as Error).message).toContain('format');
-  });
-
-  it('surfaces an unrecognized collection_slug as collection_not_found', async () => {
-    vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({
-      query: 'letters',
-      collection_slug: 'no-such-collection-xyz9',
-    });
-
-    const err = await Promise.resolve(locSearch.handler(input, ctx)).catch((e: unknown) => e);
-    expect(err).toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-      data: { reason: 'collection_not_found', collectionSlug: 'no-such-collection-xyz9' },
-    });
-    expect((err as Error).message).toContain('no-such-collection-xyz9');
   });
 
   it('keeps the internal request URL out of a collection_not_found failure', async () => {
@@ -270,7 +256,7 @@ describe('locSearch', () => {
       message: string;
       data?: Record<string, unknown>;
     };
-    // The service attaches the built endpoint to its raw notFound; the tool must not relay it
+    // The built endpoint embeds the caller's query string; neither the service nor the tool may relay it
     expect(err.data).not.toHaveProperty('url');
     expect(JSON.stringify(err.data)).not.toContain('loc.gov');
     expect(err.message).not.toContain('loc.gov');
@@ -372,14 +358,6 @@ describe('locSearch', () => {
     expect(text).toContain('Sparse Item');
   });
 
-  it('rejects inverted date range with ValidationError', async () => {
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'history', date_start: 1950, date_end: 1920 });
-    await expect(locSearch.handler(input, ctx)).rejects.toSatisfy(
-      (e: unknown) => (e as { code?: number }).code === JsonRpcErrorCode.ValidationError,
-    );
-  });
-
   it('returns real items served on a page beyond the computed count instead of discarding them (#33 Bug B)', async () => {
     // A page past the computed page count can still carry real items — LOC's `total` under-reports
     // the retrievable depth. The old "contradictory pagination" guard discarded these; it must not.
@@ -441,28 +419,6 @@ describe('locSearch', () => {
     const enrichment = getEnrichment(ctx);
     expect(enrichment.totalCount).toBe(1779931);
     expect(String(enrichment.notice)).toMatch(/100,000|partition/);
-  });
-
-  it('flags a page past the ~100k ceiling with partition guidance, not just "smaller page" (#33 Bug A)', async () => {
-    vi.stubGlobal('fetch', mockFetch('', 400)); // LOC 400s a page past the retrieval ceiling
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'civil rights', limit: 100, page: 1500 });
-    const result = await locSearch.handler(input, ctx);
-
-    expect(result.items).toHaveLength(0);
-    const notice = String(getEnrichment(ctx).notice);
-    expect(notice).toMatch(/ceiling|100,000/);
-    expect(notice).toMatch(/partition|date range|subject|location/i);
-  });
-
-  it('returns empty result when LOC API returns HTTP 400 (out-of-range page)', async () => {
-    vi.stubGlobal('fetch', mockFetch('', 400));
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'test', page: 99999 });
-    const result = await locSearch.handler(input, ctx);
-
-    expect(result.items).toHaveLength(0);
-    expect(result.has_next).toBe(false);
   });
 
   it('reports a generic out-of-range page (400 within the ceiling) without ceiling language', async () => {
@@ -630,16 +586,182 @@ describe('locSearch', () => {
     expect(text).toContain('not a libofcongress_get_item target');
   });
 
-  // Rate-limit test last — sets module-level rateLimitBlockedUntil, must not bleed into other tests
-  it('throws RateLimited on HTTP 429', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response('Rate limited', { status: 429 })),
-    );
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'anything' });
-    await expect(locSearch.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.RateLimited,
+  it('pins the retrieval-ceiling notice on both surfaces for a 400 past ~100k items (#33)', async () => {
+    const fetchSpy = mockFetch('', 400);
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await runToolContract(locSearch, {
+      query: 'civil rights',
+      limit: 100,
+      page: 1500,
     });
+
+    expect(result.isError).toBeFalsy();
+    const sc = structured(result);
+    expect(sc).toMatchObject({ items: [], total: 0, page: 1500, pages: 0, has_next: false });
+    expect(sc.notice).toBe(
+      `Page 1500 is past LOC's ~100,000-item retrieval ceiling for query "civil rights" — LOC serves nothing that deep, however few items match. Re-run with page 1 to see the real total and page count; if the target items lie past the first 100,000, narrow the search with a date range (date_start/date_end), subject, or location.`,
+    );
+    expect(contentText(result)).toContain(String(sc.notice));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a 520 on page > 1 on the out-of-range path', async () => {
+    vi.stubGlobal('fetch', mockFetch('', 520));
+    const result = await runToolContract(locSearch, { query: 'niche query', page: 3 });
+
+    expect(result.isError).toBeFalsy();
+    const sc = structured(result);
+    expect(sc).toMatchObject({ items: [], total: 0, page: 3, pages: 0, has_next: false });
+    expect(String(sc.notice)).toContain('Page 3');
+    expect(String(sc.notice)).toContain('out of range');
+    expect(String(sc.notice)).not.toContain('ceiling');
+  });
+
+  it.each([
+    {
+      name: 'a valid collection',
+      args: { query: 'cobb', collection_slug: 'baseball-cards', limit: 3, page: 900 },
+      mentions: ['Page 900', '"cobb"', 'collection "baseball-cards"'],
+    },
+    {
+      name: 'a format-scoped search',
+      args: { query: 'dust bowl', format: 'photo' as const, limit: 3, page: 9999 },
+      mentions: ['Page 9999', '"dust bowl"', 'format "photo"'],
+    },
+    {
+      name: 'a bare search',
+      args: { query: 'zyzzyva', limit: 3, page: 2 },
+      mentions: ['Page 2', '"zyzzyva"'],
+    },
+  ])(
+    'returns the out-of-range notice, not an error, for a 404 on a later page of $name (#40)',
+    async ({ args, mentions }) => {
+      const fetchSpy = mockFetch(JSON.stringify({ exception: 'not found' }), 404);
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await runToolContract(locSearch, args);
+
+      expect(result.isError).toBeFalsy();
+      const sc = structured(result);
+      expect(sc).toMatchObject({
+        items: [],
+        total: 0,
+        page: args.page,
+        pages: 0,
+        has_next: false,
+        totalCount: 0,
+      });
+      const notice = String(sc.notice);
+      for (const m of mentions) expect(notice).toContain(m);
+      expect(notice).toContain('page 1');
+      expect(notice).not.toContain('ceiling');
+      expect(contentText(result)).toContain(notice);
+      // No extra request to tell a bad slug from a deep page.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('keeps collection_not_found for a 404 on page 1 and forwards its recovery on both surfaces (#40, #44)', async () => {
+    vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
+    const slug = 'zzz-not-a-real-collection-slug-123';
+    const result = await runToolContract(locSearch, { query: 'letters', collection_slug: slug });
+
+    const error = wireError(result);
+    const hint = contractRecovery(locSearch, 'collection_not_found');
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.NotFound,
+      data: {
+        reason: 'collection_not_found',
+        field: 'collection_slug',
+        collectionSlug: slug,
+        recovery: { hint },
+      },
+    });
+    expect(error.message).toContain(slug);
+    expect(contentText(result)).toContain(`Recovery: ${hint}`);
+  });
+
+  it('forwards incompatible_filters recovery on both surfaces without repeating it in the message (#44)', async () => {
+    const fetchSpy = mockFetch(makeSearchResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await runToolContract(locSearch, {
+      query: 'letters',
+      format: 'photo',
+      collection_slug: 'aaron-copland',
+    });
+
+    const error = wireError(result);
+    const hint = contractRecovery(locSearch, 'incompatible_filters');
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: {
+        reason: 'incompatible_filters',
+        retryable: false,
+        format: 'photo',
+        collectionSlug: 'aaron-copland',
+        recovery: { hint },
+      },
+    });
+    // The message names the conflict; the next step is stated once, by the recovery line.
+    expect(error.message).not.toMatch(/omit/i);
+    expect(contentText(result)).toContain(`Recovery: ${hint}`);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects an inverted date range as invalid_date_range, keeping its data and forwarding recovery (#45)', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await runToolContract(locSearch, {
+      query: 'test',
+      date_start: 1950,
+      date_end: 1900,
+    });
+
+    const error = wireError(result);
+    const hint = contractRecovery(locSearch, 'invalid_date_range');
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: {
+        reason: 'invalid_date_range',
+        field: 'date_start',
+        date_start: 1950,
+        date_end: 1900,
+        recovery: { hint },
+      },
+    });
+    expect(error.message).toContain('1950');
+    expect(error.message).toContain('1900');
+    const text = contentText(result);
+    expect(text).toContain(`Recovery: ${hint}`);
+    expect(text).toContain('reason invalid_date_range');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // Rate-limit test last — sets module-level rateLimitBlockedUntil, must not bleed into other tests
+  it('forwards the most specific rate-limit hint on both surfaces: a fresh 429, then the running block (#44)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('Rate limited', { status: 429 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const fresh = await runToolContract(locSearch, { query: 'anything' });
+    const freshError = wireError(fresh);
+    expect(freshError).toMatchObject({
+      code: JsonRpcErrorCode.RateLimited,
+      data: { reason: 'rate_limit_exceeded', retryable: false },
+    });
+    const freshHint = String(freshError.data?.recovery?.hint);
+    expect(freshHint).toMatch(/1 hour/);
+    expect(contentText(fresh)).toContain(`Recovery: ${freshHint}`);
+
+    // The block is live now: the next call fails before any request and says how long is left.
+    const blocked = await runToolContract(locSearch, { query: 'anything' });
+    const blockedError = wireError(blocked);
+    expect(blockedError).toMatchObject({
+      code: JsonRpcErrorCode.RateLimited,
+      data: { reason: 'rate_limit_exceeded', blockedUntil: expect.any(String) },
+    });
+    const blockedHint = String(blockedError.data?.recovery?.hint);
+    expect(blockedHint).toMatch(/60 more minute/);
+    expect(blockedHint).toContain(String(blockedError.data?.blockedUntil));
+    expect(contentText(blocked)).toContain(`Recovery: ${blockedHint}`);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

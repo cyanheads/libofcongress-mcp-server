@@ -4,13 +4,13 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, McpError, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
   title: 'Search Historical Newspapers',
   description:
-    'Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with OCR text excerpts (~500 characters), publication title, date, state, and the page URL needed for libofcongress_get_newspaper_page. Filters by keyword, date range, US state, and newspaper title. The OCR excerpts are sufficient for relevance assessment — call libofcongress_get_newspaper_page with the returned url field to read the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text.',
+    'Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with OCR text excerpts (~500 characters), publication title, date, the states LOC indexes the title under, and the page URL needed for libofcongress_get_newspaper_page. Filters by keyword, date range, US state, and newspaper title. The OCR excerpts are sufficient for relevance assessment — call libofcongress_get_newspaper_page with the returned url field to read the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -68,7 +68,12 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
               .optional()
               .describe('OCR text excerpt (~500 chars) for relevance assessment.'),
             date: z.string().optional().describe('Issue publication date.'),
-            state: z.string().optional().describe('State where the newspaper was published.'),
+            states: z
+              .array(z.string())
+              .optional()
+              .describe(
+                'Every US state LOC indexes this newspaper title under (e.g., ["georgia", "south carolina"]), in LOC order. A title indexed against its circulation area lists several, so no entry is necessarily the place of publication — libofcongress_get_newspaper_page returns place_of_publication. Absent when LOC lists no state.',
+              ),
             newspaper_title: z.string().optional().describe('Newspaper publication title.'),
           })
           .describe('A single newspaper page search result.'),
@@ -108,6 +113,14 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
 
   errors: [
     {
+      reason: 'invalid_date_range',
+      code: JsonRpcErrorCode.ValidationError,
+      retryable: false,
+      when: 'date_start is later than date_end.',
+      recovery:
+        'Swap date_start and date_end so the start year comes first, or omit one of them to leave that side of the range open.',
+    },
+    {
       reason: 'rate_limit_exceeded',
       code: JsonRpcErrorCode.RateLimited,
       retryable: false,
@@ -129,9 +142,15 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       input.date_end !== undefined &&
       input.date_start > input.date_end
     ) {
-      throw validationError(
-        `date_start (${input.date_start}) must be ≤ date_end (${input.date_end}). Reverse the values to form a valid date range.`,
-        { field: 'date_start', date_start: input.date_start, date_end: input.date_end },
+      throw ctx.fail(
+        'invalid_date_range',
+        `date_start (${input.date_start}) is later than date_end (${input.date_end}).`,
+        {
+          field: 'date_start',
+          date_start: input.date_start,
+          date_end: input.date_end,
+          ...ctx.recoveryFor('invalid_date_range'),
+        },
       );
     }
 
@@ -152,7 +171,12 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       );
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
-        throw ctx.fail('rate_limit_exceeded', err.message);
+        // The service's data carries the time left on the block; it overrides the contract's
+        // static "about an hour" hint, which stays as the fallback.
+        throw ctx.fail('rate_limit_exceeded', err.message, {
+          ...ctx.recoveryFor('rate_limit_exceeded'),
+          ...err.data,
+        });
       }
       throw err;
     }
@@ -166,23 +190,23 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     ctx.enrich.total(total);
 
     if (result.items.length === 0) {
-      // pages === 0 is the sentinel for a LOC 400 (out-of-range page request).
+      const scope =
+        (input.state ? ` in state "${input.state}"` : '') +
+        (input.date_start || input.date_end
+          ? ` in dates ${input.date_start ?? ''}–${input.date_end ?? ''}`
+          : '');
+      // pages === 0 is the service's sentinel for a page LOC would not serve (404, 400, or 520).
       if (pages === 0 && page > 1) {
         ctx.enrich.notice(
           ceilingReached
-            ? `Page ${page} is past LOC's ~100,000-item retrieval ceiling for query "${input.query}" — Chronicling America serves nothing deeper, regardless of the total match count. Narrow the search with a date range (date_start/date_end) or state so the target pages fall within the first 100,000 results.`
-            : `Page ${page} is out of range for query "${input.query}". Try a smaller page number.`,
+            ? `Page ${page} is past LOC's ~100,000-item retrieval ceiling for query "${input.query}" — Chronicling America serves nothing that deep, however few pages match. Re-run with page 1 to see the real total and page count; if the target pages lie past the first 100,000, narrow the search with a date range (date_start/date_end) or state.`
+            : `Page ${page} is out of range for "${input.query}"${scope}. Re-run with page 1 to see the total match count and page count, then request a page within that range.`,
         );
         ctx.enrich.total(0);
         return { items: [], total: 0, page, pages: 0, has_next: false };
       }
       ctx.enrich.notice(
-        `No newspaper pages matched "${input.query}"` +
-          (input.state ? ` in state "${input.state}"` : '') +
-          (input.date_start || input.date_end
-            ? ` in dates ${input.date_start ?? ''}–${input.date_end ?? ''}`
-            : '') +
-          '. Try broadening the date range, removing the state filter, or using different keywords. Historical OCR is approximate — variant spellings are common.',
+        `No newspaper pages matched "${input.query}"${scope}. Try broadening the date range, removing the state filter, or using different keywords. Historical OCR is approximate — variant spellings are common.`,
       );
       ctx.enrich.total(0);
       return { items: [], total: 0, page, pages: 0, has_next: false };
@@ -217,7 +241,7 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       lines.push(`\n## ${item.title}`);
       if (item.newspaper_title) lines.push(`**Publication:** ${item.newspaper_title}`);
       if (item.date) lines.push(`**Date:** ${item.date}`);
-      if (item.state) lines.push(`**State:** ${item.state}`);
+      if (item.states) lines.push(`**States:** ${item.states.join(', ')}`);
       if (item.description) lines.push(item.description);
       lines.push(`**URL:** ${item.url}`);
     }

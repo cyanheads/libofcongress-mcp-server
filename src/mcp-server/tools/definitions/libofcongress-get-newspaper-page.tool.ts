@@ -4,7 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, McpError, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
 const LOC_PAGE_URL_PREFIX = 'https://www.loc.gov/resource/';
@@ -12,7 +12,7 @@ const LOC_PAGE_URL_PREFIX = 'https://www.loc.gov/resource/';
 export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
   title: 'Get Newspaper Page',
   description:
-    'Retrieve the full OCR text of a specific historical newspaper page along with publication metadata. Pass the url field from a libofcongress_search_newspapers result — do not construct this URL manually. OCR quality varies by digitization batch and era: 19th-century and degraded materials may contain fragmented text, garbled words, and line-break artifacts that are surfaced as-is. When a page exists but has no digitized text, ocr_available is false and ocr_text is empty — this is a data property, not an error.',
+    "Retrieve the full OCR text of a specific historical newspaper page along with publication metadata — newspaper title, issue date, place of publication, indexed states, edition, the page's sequence, and the issue's page count. Pass the url field from a libofcongress_search_newspapers result — do not construct this URL manually. OCR quality varies by digitization batch and era: 19th-century and degraded materials may contain fragmented text, garbled words, and line-break artifacts that are surfaced as-is. When a page exists but has no digitized text, ocr_available is false and ocr_text is empty — this is a data property, not an error.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     page_url: z
@@ -23,11 +23,32 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
   }),
   output: z.object({
     page_url: z.string().describe('The LOC resource URL for this newspaper page.'),
-    newspaper_title: z.string().optional().describe('Title of the newspaper publication.'),
-    date: z.string().optional().describe('Issue publication date.'),
-    state: z.string().optional().describe('State where the newspaper was published.'),
-    edition: z.string().optional().describe('Edition or publication context identifier.'),
+    newspaper_title: z
+      .string()
+      .optional()
+      .describe('Title of the newspaper publication. Absent when LOC gives none.'),
+    date: z.string().optional().describe('Issue publication date (YYYY-MM-DD).'),
+    states: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Every US state LOC indexes this newspaper title under (e.g., ["georgia", "south carolina"]), in LOC order — possibly more than the state of publication. Absent when LOC lists no state.',
+      ),
+    place_of_publication: z
+      .string()
+      .optional()
+      .describe(
+        'Where the newspaper was published, as LOC catalogs it (e.g., "Charleston, S.C."). Absent when LOC gives none.',
+      ),
+    edition: z
+      .string()
+      .optional()
+      .describe('Edition number of the issue (e.g., "1"). Absent when LOC gives none.'),
     sequence: z.number().optional().describe('Page sequence number within the issue.'),
+    segment_count: z
+      .number()
+      .optional()
+      .describe('Number of pages in the issue. Absent when LOC gives none.'),
     ocr_text: z
       .string()
       .describe(
@@ -53,6 +74,14 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
 
   errors: [
     {
+      reason: 'invalid_page_url',
+      code: JsonRpcErrorCode.ValidationError,
+      retryable: false,
+      when: 'page_url does not begin with https://www.loc.gov/resource/.',
+      recovery:
+        'Pass the url field from a libofcongress_search_newspapers result verbatim. Do not construct, shorten, or edit page URLs.',
+    },
+    {
       reason: 'page_not_found',
       code: JsonRpcErrorCode.NotFound,
       when: 'The URL does not resolve to a valid LOC newspaper page resource.',
@@ -74,10 +103,11 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
 
     // Validate before any outbound request: must be a well-formed URL on www.loc.gov/resource/
     if (!input.page_url.startsWith(LOC_PAGE_URL_PREFIX)) {
-      throw validationError(
-        'page_url must begin with https://www.loc.gov/resource/. Pass the url field directly from a libofcongress_search_newspapers result.',
-        { field: 'page_url', received: input.page_url },
-      );
+      throw ctx.fail('invalid_page_url', `page_url must begin with ${LOC_PAGE_URL_PREFIX}.`, {
+        field: 'page_url',
+        received: input.page_url,
+        ...ctx.recoveryFor('invalid_page_url'),
+      });
     }
 
     const svc = getLocApiService();
@@ -86,10 +116,18 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       result = await svc.getNewspaperPage(input.page_url, ctx);
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
-        throw ctx.fail('page_not_found', err.message, { pageUrl: input.page_url });
+        throw ctx.fail('page_not_found', `No LOC newspaper page resolves at "${input.page_url}".`, {
+          pageUrl: input.page_url,
+          ...ctx.recoveryFor('page_not_found'),
+        });
       }
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
-        throw ctx.fail('rate_limit_exceeded', err.message);
+        // The service's data carries the time left on the block; it overrides the contract's
+        // static "about an hour" hint, which stays as the fallback.
+        throw ctx.fail('rate_limit_exceeded', err.message, {
+          ...ctx.recoveryFor('rate_limit_exceeded'),
+          ...err.data,
+        });
       }
       throw err;
     }
@@ -111,9 +149,16 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     if (result.newspaper_title) lines.push(`# ${result.newspaper_title}`);
     lines.push(`**URL:** ${result.page_url}`);
     if (result.date) lines.push(`**Date:** ${result.date}`);
-    if (result.state) lines.push(`**State:** ${result.state}`);
+    if (result.place_of_publication)
+      lines.push(`**Place of publication:** ${result.place_of_publication}`);
+    if (result.states) lines.push(`**States:** ${result.states.join(', ')}`);
     if (result.edition) lines.push(`**Edition:** ${result.edition}`);
-    if (result.sequence !== undefined) lines.push(`**Sequence:** ${result.sequence}`);
+    if (result.sequence !== undefined) {
+      const ofTotal = result.segment_count !== undefined ? ` of ${result.segment_count}` : '';
+      lines.push(`**Sequence:** ${result.sequence}${ofTotal}`);
+    } else if (result.segment_count !== undefined) {
+      lines.push(`**Pages in issue:** ${result.segment_count}`);
+    }
     lines.push(`**OCR available:** ${result.ocr_available ? 'Yes' : 'No'}`);
     if (result.ocr_available && result.ocr_text) {
       lines.push('\n---\n');

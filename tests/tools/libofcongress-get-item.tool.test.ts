@@ -5,10 +5,15 @@
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createInMemoryStorage,
+  createMockContext,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locGetItem } from '@/mcp-server/tools/definitions/libofcongress-get-item.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
+import { contentText, contractRecovery, structured, wireError } from '../helpers/tool-result.js';
 
 /** Full LOC item response fixture */
 function makeItemResponse(overrides: Record<string, unknown> = {}) {
@@ -17,7 +22,13 @@ function makeItemResponse(overrides: Record<string, unknown> = {}) {
       id: 'https://www.loc.gov/item/2009632251/',
       title: 'Portrait of a man',
       date: '1920',
-      contributor: ['Smith, John', 'Jones, Mary'],
+      // Live item JSON carries names-with-roles in contributor_names and the same people as
+      // { name: facet-url } objects in contributors — never a `contributor` key.
+      contributor_names: ['Smith, John (Photographer)', 'Jones, Mary (Publisher)'],
+      contributors: [
+        { 'smith, john': 'https://www.loc.gov/search/?fa=contributor:smith,+john&fo=json' },
+        { 'jones, mary': 'https://www.loc.gov/search/?fa=contributor:jones,+mary&fo=json' },
+      ],
       subject: ['Portraits', 'Men -- Photographs'],
       notes: ['From the Bain collection.'],
       rights_information: 'No known restrictions.',
@@ -64,7 +75,7 @@ describe('locGetItem', () => {
     expect(result.item_id).toBe('2009632251');
     expect(result.title).toBe('Portrait of a man');
     expect(result.date).toBe('1920');
-    expect(result.contributors).toEqual(['Smith, John', 'Jones, Mary']);
+    expect(result.contributors).toEqual(['Smith, John (Photographer)', 'Jones, Mary (Publisher)']);
     expect(result.subject_headings).toContain('Portraits');
     expect(result.notes).toContain('From the Bain collection.');
     expect(result.rights_information).toBe('No known restrictions.');
@@ -81,7 +92,7 @@ describe('locGetItem', () => {
           item: {
             title: 'Minimal Item',
             url: 'https://www.loc.gov/item/min-id/',
-            // contributor, subject, notes all absent
+            // contributor_names, subject, notes all absent
           },
           resources: [],
           related_items: [],
@@ -168,24 +179,6 @@ describe('locGetItem', () => {
     expect(data).not.toHaveProperty('url');
     expect(JSON.stringify(data)).not.toContain('fo=json');
     expect((err as Error).message).not.toContain('www.loc.gov');
-  });
-
-  it('throws NotFound when item is absent from the response envelope', async () => {
-    vi.stubGlobal('fetch', mockFetch(JSON.stringify({ resources: [], related_items: [] })));
-    const ctx = createMockContext({ errors: locGetItem.errors });
-    const input = locGetItem.input.parse({ item_id: 'nonexistent-id' });
-    await expect(locGetItem.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-    });
-  });
-
-  it('throws NotFound on HTTP 404', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })));
-    const ctx = createMockContext({ errors: locGetItem.errors });
-    const input = locGetItem.input.parse({ item_id: 'bad-id' });
-    await expect(locGetItem.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-    });
   });
 
   it('deduplicates resource_links', async () => {
@@ -434,16 +427,135 @@ describe('locGetItem', () => {
     expect(calledUrl).not.toContain('%2F');
   });
 
-  // Rate-limit test last — sets module-level rateLimitBlockedUntil
-  it('throws RateLimited on HTTP 429', async () => {
+  it('succeeds on both surfaces for an item whose item.related_items holds objects (#39, #47)', async () => {
+    // afc9999005.10348's live shape: item.related_items mixes in { title, url } objects, and
+    // the contributors live in contributor_names. Before the fix the object entries reached
+    // output validation and failed the call outright.
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(new Response('Rate limited', { status: 429 })),
+      mockFetch(
+        JSON.stringify({
+          item: {
+            title: 'Dust bowl refugees',
+            url: 'https://www.loc.gov/item/afc9999005.10348/',
+            contributor_names: [
+              'Lomax, Alan (1915-2002) (Recordist)',
+              'Guthrie, Woody (1912-1967) (Performer)',
+            ],
+            related_items: [
+              'string-related-id',
+              {
+                title: 'Alan Lomax Collection of Woody Guthrie Recordings (AFC 1940/007)',
+                url: 'https://lccn.loc.gov/2009655315',
+              },
+            ],
+          },
+          resources: [],
+          related_items: [
+            { id: 'http://lccn.loc.gov/2002522665', url: '//lccn.loc.gov/2002522665' },
+          ],
+        }),
+      ),
     );
-    const ctx = createMockContext({ errors: locGetItem.errors });
-    const input = locGetItem.input.parse({ item_id: '2009632251' });
-    await expect(locGetItem.handler(input, ctx)).rejects.toMatchObject({
+    const result = await runToolContract(locGetItem, { item_id: 'afc9999005.10348' });
+
+    expect(result.isError).toBeFalsy();
+    const sc = structured(result);
+    expect(sc.related_items).toEqual([
+      'http://lccn.loc.gov/2002522665',
+      'string-related-id',
+      'https://lccn.loc.gov/2009655315',
+    ]);
+    expect(sc.contributors).toEqual([
+      'Lomax, Alan (1915-2002) (Recordist)',
+      'Guthrie, Woody (1912-1967) (Performer)',
+    ]);
+    const text = contentText(result);
+    expect(text).toContain(
+      '**Related items:** http://lccn.loc.gov/2002522665, string-related-id, https://lccn.loc.gov/2009655315',
+    );
+    expect(text).toContain(
+      '**Contributors:** Lomax, Alan (1915-2002) (Recordist), Guthrie, Woody (1912-1967) (Performer)',
+    );
+  });
+
+  it('returns mgw1b.721 contributors from contributor_names on both surfaces (#47)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: {
+            title: 'George Washington Papers, Series 1',
+            url: 'https://www.loc.gov/item/mgw1b.721/',
+            contributor_names: ['Washington, George, 1732-1799 (Author)'],
+            contributors: [
+              {
+                'washington, george':
+                  'https://www.loc.gov/search/?fa=contributor:washington,+george&fo=json',
+              },
+            ],
+          },
+          resources: [],
+          related_items: [],
+        }),
+      ),
+    );
+    const result = await runToolContract(locGetItem, { item_id: 'mgw1b.721' });
+
+    expect(structured(result).contributors).toEqual(['Washington, George, 1732-1799 (Author)']);
+    expect(contentText(result)).toContain(
+      '**Contributors:** Washington, George, 1732-1799 (Author)',
+    );
+  });
+
+  it.each([
+    {
+      name: 'an upstream 404',
+      fetch: () => vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })),
+    },
+    {
+      name: 'a response with no item record',
+      fetch: () => mockFetch(JSON.stringify({ resources: [], related_items: [] })),
+    },
+  ])(
+    'names the failed id and forwards item_not_found recovery on both surfaces for $name (#44)',
+    async ({ fetch }) => {
+      vi.stubGlobal('fetch', fetch());
+      const result = await runToolContract(locGetItem, { item_id: '99999999999zzz' });
+
+      const error = wireError(result);
+      const hint = contractRecovery(locGetItem, 'item_not_found');
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.NotFound,
+        data: { reason: 'item_not_found', itemId: '99999999999zzz', recovery: { hint } },
+      });
+      expect(error.message).toContain('99999999999zzz');
+      expect(error.message).not.toBe('LOC resource not found');
+      const text = contentText(result);
+      expect(text).toContain('99999999999zzz');
+      expect(text).toContain(`Recovery: ${hint}`);
+    },
+  );
+
+  // Rate-limit test last — sets module-level rateLimitBlockedUntil
+  it('forwards the most specific rate-limit hint on both surfaces: a fresh 429, then the running block (#44)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('Rate limited', { status: 429 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const fresh = await runToolContract(locGetItem, { item_id: '2005691065' });
+    const freshError = wireError(fresh);
+    expect(freshError).toMatchObject({
       code: JsonRpcErrorCode.RateLimited,
+      data: { reason: 'rate_limit_exceeded', retryable: false },
     });
+    const freshHint = String(freshError.data?.recovery?.hint);
+    expect(freshHint).toMatch(/1 hour/);
+    expect(contentText(fresh)).toContain(`Recovery: ${freshHint}`);
+
+    const blocked = await runToolContract(locGetItem, { item_id: '2005691065' });
+    const blockedHint = String(wireError(blocked).data?.recovery?.hint);
+    expect(blockedHint).toMatch(/60 more minute/);
+    expect(contentText(blocked)).toContain(`Recovery: ${blockedHint}`);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

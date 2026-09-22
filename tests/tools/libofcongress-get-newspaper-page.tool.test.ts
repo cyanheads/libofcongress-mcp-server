@@ -9,30 +9,49 @@ import {
   createInMemoryStorage,
   createMockContext,
   getEnrichment,
+  runToolContract,
 } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locGetNewspaperPage } from '@/mcp-server/tools/definitions/libofcongress-get-newspaper-page.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
+import { contentText, contractRecovery, structured, wireError } from '../helpers/tool-result.js';
 
 const PAGE_URL = 'https://www.loc.gov/resource/sn84026749/1900-01-01/ed-1/?sp=1';
 
 /**
+ * The `item` block of a `?fo=json&at=item,resource` page response, keyed and shaped as LOC
+ * sends it: facets are arrays, `place_of_publication` a plain string.
+ */
+const PAGE_ITEM = {
+  newspaper_title: ['The daily Oklahoman'],
+  partof_title: ['the daily oklahoman (oklahoma city, okla.) 1894-current'],
+  location_state: ['oklahoma'],
+  place_of_publication: 'Oklahoma City, Okla.',
+  number_edition: ['1'],
+  date_issued: '1900-01-01',
+};
+
+/**
  * The service makes two fetches when fulltext_file is present:
- * 1. Resource JSON (with fulltext_file pointer)
+ * 1. Page JSON — the `item` block (publication metadata) plus the `resource` block
+ *    (fulltext_file pointer, segment_count)
  * 2. tile.loc.gov JSON for OCR text (shape: { "<key>": { full_text: "..." } })
  *
  * fetchSpy is called sequentially; we alternate responses via mockImplementation.
+ * `resourceOverrides` patch the resource block; pass `item: null` to omit the item block.
  */
-function makeResourceResponse(overrides: Record<string, unknown> = {}) {
+function makeResourceResponse(
+  resourceOverrides: Record<string, unknown> = {},
+  item: Record<string, unknown> | null = PAGE_ITEM,
+) {
   return JSON.stringify({
+    ...(item && { item }),
     resource: {
-      title: 'The Daily Oklahoman',
-      date_issued: '1900-01-01',
-      sequence: 1,
-      part_of: 'Oklahoma newspapers',
+      url: 'https://www.loc.gov/resource/sn84026749/1900-01-01/ed-1/',
+      segment_count: 8,
       fulltext_file:
         'https://tile.loc.gov/text-services/word-coordinates-service?segment=%2Ffiles%2Fsn84026749%2F1900-01-01%2Fed-1%2Fseq-1&format=alto_xml&full_text=1',
-      ...overrides,
+      ...resourceOverrides,
     },
   });
 }
@@ -70,9 +89,12 @@ describe('locGetNewspaperPage', () => {
     const result = await locGetNewspaperPage.handler(input, ctx);
 
     expect(result.page_url).toBe(PAGE_URL);
-    expect(result.newspaper_title).toBe('The Daily Oklahoman');
+    expect(result.newspaper_title).toBe('The daily Oklahoman');
     expect(result.date).toBe('1900-01-01');
-    expect(result.state).toBe('Oklahoma');
+    expect(result.states).toEqual(['oklahoma']);
+    expect(result.place_of_publication).toBe('Oklahoma City, Okla.');
+    expect(result.edition).toBe('1');
+    expect(result.segment_count).toBe(8);
     expect(result.sequence).toBe(1);
     expect(result.ocr_available).toBe(true);
     expect(result.ocr_text).toContain('Hello');
@@ -80,18 +102,11 @@ describe('locGetNewspaperPage', () => {
   });
 
   it('derives date and sequence from page_url when the resource omits them', async () => {
-    // Live ?fo=json&at=resource responses omit date_issued/sequence/part_of; both values live in
-    // the page URL. Mirrors the live shape confirmed in issue #28.
+    // The resource block never carries date or sequence; with no item block to supply the date,
+    // both come from the page URL (#28).
     vi.stubGlobal(
       'fetch',
-      mockFetchSequence({
-        body: makeResourceResponse({
-          date_issued: undefined,
-          sequence: undefined,
-          part_of: undefined,
-          fulltext_file: undefined,
-        }),
-      }),
+      mockFetchSequence({ body: makeResourceResponse({ fulltext_file: undefined }, null) }),
     );
     const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
     const input = locGetNewspaperPage.input.parse({
@@ -130,31 +145,13 @@ describe('locGetNewspaperPage', () => {
 
     expect(result.ocr_available).toBe(true);
     expect(result.ocr_text).toBe(''); // OCR unavailable but not an error
-    expect(result.newspaper_title).toBe('The Daily Oklahoman');
+    expect(result.newspaper_title).toBe('The daily Oklahoman');
     // The retrieval-miss fact now rides ctx.enrich.notice, reaching structuredContent (notice
     // field) and content[] (enrichment trailer) identically — a structured-only client is no
     // longer blind to it, since the bare ocr_available:true/ocr_text:"" shape is ambiguous. #31
     const enrichment = getEnrichment(ctx);
     expect(enrichment.notice).toBeDefined();
     expect(String(enrichment.notice)).toContain('OCR');
-  });
-
-  it('throws NotFound when resource key is missing from response', async () => {
-    vi.stubGlobal('fetch', mockFetchSequence({ body: JSON.stringify({}) }));
-    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
-    const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
-    await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-    });
-  });
-
-  it('throws NotFound on HTTP 404', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })));
-    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
-    const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
-    await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-    });
   });
 
   it('NotFound data carries the caller-facing page URL, not the internal request URL', async () => {
@@ -206,26 +203,117 @@ describe('locGetNewspaperPage', () => {
     expect(calledUrl).toContain('fo=json');
   });
 
-  it('format() renders title, URL, date, state, sequence, and OCR text', () => {
+  it('format() renders title, URL, date, states, place, edition, sequence, page count, and OCR text', () => {
     const output = locGetNewspaperPage.output.parse({
       page_url: PAGE_URL,
-      newspaper_title: 'The Daily Oklahoman',
+      newspaper_title: 'The daily Oklahoman',
       date: '1900-01-01',
-      state: 'Oklahoma',
-      edition: 'Oklahoma newspapers',
+      states: ['oklahoma'],
+      place_of_publication: 'Oklahoma City, Okla.',
+      edition: '1',
       sequence: 1,
+      segment_count: 8,
       ocr_text: 'Train derailment near Guthrie.',
       ocr_available: true,
     });
     const blocks = locGetNewspaperPage.format!(output);
     expect(blocks[0]!.type).toBe('text');
     const text = (blocks[0] as { type: 'text'; text: string }).text;
-    expect(text).toContain('The Daily Oklahoman');
+    expect(text).toContain('# The daily Oklahoman');
     expect(text).toContain(PAGE_URL);
-    expect(text).toContain('1900-01-01');
-    expect(text).toContain('Oklahoma');
+    expect(text).toContain('**Date:** 1900-01-01');
+    expect(text).toContain('**States:** oklahoma');
+    expect(text).toContain('**Place of publication:** Oklahoma City, Okla.');
+    expect(text).toContain('**Edition:** 1');
+    expect(text).toContain('**Sequence:** 1 of 8');
     expect(text).toContain('Train derailment');
     expect(text).toContain('Yes');
+  });
+
+  it('pins the populated item block on both surfaces for the Southern Christian Advocate page (#42)', async () => {
+    // Live shape of sn87065702/1927-06-16/ed-1/?sp=10 under at=item,resource.
+    vi.stubGlobal(
+      'fetch',
+      mockFetchSequence(
+        {
+          body: makeResourceResponse(
+            {
+              url: 'https://www.loc.gov/resource/sn87065702/1927-06-16/ed-1/',
+              segment_count: 16,
+            },
+            {
+              title: 'Southern Christian advocate (Charleston, S.C.), June 16, 1927',
+              newspaper_title: ['Southern Christian advocate'],
+              partof_title: ['southern christian advocate (charleston, s.c.) 1837-1948'],
+              location_state: ['georgia', 'south carolina'],
+              place_of_publication: 'Charleston, S.C.',
+              number_edition: ['1'],
+              date_issued: '1927-06-16',
+            },
+          ),
+        },
+        { body: OCR_JSON },
+      ),
+    );
+    const pageUrl = 'https://www.loc.gov/resource/sn87065702/1927-06-16/ed-1/?sp=10';
+    const result = await runToolContract(locGetNewspaperPage, { page_url: pageUrl });
+
+    expect(result.isError).toBeFalsy();
+    const sc = structured(result);
+    expect(sc).toMatchObject({
+      page_url: pageUrl,
+      newspaper_title: 'Southern Christian advocate',
+      date: '1927-06-16',
+      states: ['georgia', 'south carolina'],
+      place_of_publication: 'Charleston, S.C.',
+      edition: '1',
+      sequence: 10,
+      segment_count: 16,
+      ocr_text: 'Hello World',
+      ocr_available: true,
+    });
+    expect(sc).not.toHaveProperty('state');
+    const text = contentText(result);
+    expect(text).toContain('# Southern Christian advocate');
+    expect(text).toContain('**States:** georgia, south carolina');
+    expect(text).toContain('**Place of publication:** Charleston, S.C.');
+    expect(text).toContain('**Edition:** 1');
+    expect(text).toContain('**Sequence:** 10 of 16');
+    expect(text).not.toContain('**State:**');
+  });
+
+  it.each([
+    { name: 'an empty item block', item: {} },
+    {
+      name: 'an item block with empty facets',
+      item: { newspaper_title: [], partof_title: [], location_state: [], number_edition: [] },
+    },
+    { name: 'no item block', item: null },
+  ])('degrades to URL fallbacks on both surfaces for $name (#42)', async ({ item }) => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetchSequence({
+        body: makeResourceResponse({ fulltext_file: undefined, segment_count: undefined }, item),
+      }),
+    );
+    const pageUrl = 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/?sp=12';
+    const result = await runToolContract(locGetNewspaperPage, { page_url: pageUrl });
+
+    expect(result.isError).toBeFalsy();
+    expect(structured(result)).toEqual({
+      page_url: pageUrl,
+      date: '1912-04-18',
+      sequence: 12,
+      ocr_text: '',
+      ocr_available: false,
+    });
+    const text = contentText(result);
+    expect(text).toContain('**Date:** 1912-04-18');
+    expect(text).toContain('**Sequence:** 12');
+    expect(text).not.toContain(' of ');
+    for (const label of ['States:', 'Place of publication:', 'Edition:']) {
+      expect(text).not.toContain(label);
+    }
   });
 
   it('format() notes image-only digitization when ocr_available is false', () => {
@@ -238,28 +326,6 @@ describe('locGetNewspaperPage', () => {
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('No');
     expect(text).toContain('image-only');
-  });
-
-  it('rejects non-LOC page_url with ValidationError before any fetch', async () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
-    const input = locGetNewspaperPage.input.parse({ page_url: 'https://example.com/not-loc' });
-    await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.ValidationError,
-    });
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it('rejects malformed page_url with ValidationError before any fetch', async () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
-    const input = locGetNewspaperPage.input.parse({ page_url: 'not-a-url-at-all' });
-    await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.ValidationError,
-    });
-    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('strips q= param from page_url before constructing resource URL', async () => {
@@ -346,19 +412,6 @@ describe('locGetNewspaperPage', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('security: URL with path traversal attempt is rejected before fetch', async () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
-    const input = locGetNewspaperPage.input.parse({
-      page_url: 'https://www.loc.gov/../../etc/passwd',
-    });
-    await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.ValidationError,
-    });
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
   it('format() includes edition when present', () => {
     const output = locGetNewspaperPage.output.parse({
       page_url: PAGE_URL,
@@ -404,16 +457,82 @@ describe('locGetNewspaperPage', () => {
     expect(calledUrl.split('?').length).toBeLessThanOrEqual(2);
   });
 
+  it.each([
+    {
+      name: 'an upstream 404',
+      fetch: () => vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })),
+    },
+    {
+      name: 'a response with no resource record',
+      fetch: () => mockFetchSequence({ body: JSON.stringify({}) }),
+    },
+  ])(
+    'names the failed page URL and forwards page_not_found recovery on both surfaces for $name (#44)',
+    async ({ fetch }) => {
+      vi.stubGlobal('fetch', fetch());
+      const result = await runToolContract(locGetNewspaperPage, { page_url: PAGE_URL });
+
+      const error = wireError(result);
+      const hint = contractRecovery(locGetNewspaperPage, 'page_not_found');
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.NotFound,
+        data: { reason: 'page_not_found', pageUrl: PAGE_URL, recovery: { hint } },
+      });
+      expect(error.message).toContain(PAGE_URL);
+      const text = contentText(result);
+      expect(text).toContain(PAGE_URL);
+      expect(text).toContain(`Recovery: ${hint}`);
+    },
+  );
+
+  it.each([
+    'https://example.com/not-loc',
+    'not-a-url-at-all',
+    'https://www.loc.gov/../../etc/passwd',
+  ])(
+    'rejects page_url %s as invalid_page_url before any fetch, keeping its data and forwarding recovery (#45)',
+    async (pageUrl) => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await runToolContract(locGetNewspaperPage, { page_url: pageUrl });
+
+      const error = wireError(result);
+      const hint = contractRecovery(locGetNewspaperPage, 'invalid_page_url');
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: {
+          reason: 'invalid_page_url',
+          field: 'page_url',
+          received: pageUrl,
+          recovery: { hint },
+        },
+      });
+      const text = contentText(result);
+      expect(text).toContain(`Recovery: ${hint}`);
+      expect(text).toContain('reason invalid_page_url');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
   // Rate-limit test last — sets module-level rateLimitBlockedUntil
-  it('throws RateLimited on HTTP 429', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response('Too Many Requests', { status: 429 })),
-    );
-    const ctx = createMockContext({ errors: locGetNewspaperPage.errors });
-    const input = locGetNewspaperPage.input.parse({ page_url: PAGE_URL });
-    await expect(locGetNewspaperPage.handler(input, ctx)).rejects.toMatchObject({
+  it('forwards the most specific rate-limit hint on both surfaces: a fresh 429, then the running block (#44)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('Too Many Requests', { status: 429 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const fresh = await runToolContract(locGetNewspaperPage, { page_url: PAGE_URL });
+    const freshError = wireError(fresh);
+    expect(freshError).toMatchObject({
       code: JsonRpcErrorCode.RateLimited,
+      data: { reason: 'rate_limit_exceeded', retryable: false },
     });
+    const freshHint = String(freshError.data?.recovery?.hint);
+    expect(freshHint).toMatch(/1 hour/);
+    expect(contentText(fresh)).toContain(`Recovery: ${freshHint}`);
+
+    const blocked = await runToolContract(locGetNewspaperPage, { page_url: PAGE_URL });
+    const blockedHint = String(wireError(blocked).data?.recovery?.hint);
+    expect(blockedHint).toMatch(/60 more minute/);
+    expect(contentText(blocked)).toContain(`Recovery: ${blockedHint}`);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

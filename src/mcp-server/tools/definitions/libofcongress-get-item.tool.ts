@@ -17,7 +17,7 @@ export const locGetItem = tool('libofcongress_get_item', {
       .string()
       .min(1)
       .describe(
-        'LOC item id from a libofcongress_search result\'s "id" field (where is_item is true). A simple ID ("2009632251", "loc.pnp.ppmsc.02404") or a slash-separated path for newspaper pages ("sn95047246/1935-09-05/ed-1"). Pass the id verbatim; do not prepend the loc.gov URL or an "item/" prefix.',
+        'LOC item id from a libofcongress_search result\'s "id" field (where is_item is true). A simple ID ("2009632251", "2005691065") or a slash-separated path for newspaper pages ("sn95047246/1935-09-05/ed-1"). Pass the id verbatim; do not prepend the loc.gov URL or an "item/" prefix.',
       ),
   }),
   output: z.object({
@@ -28,7 +28,9 @@ export const locGetItem = tool('libofcongress_get_item', {
     date: z.string().optional().describe('Publication or creation date.'),
     contributors: z
       .array(z.string())
-      .describe('Names of contributors, creators, or photographers.'),
+      .describe(
+        'Contributors, creators, or photographers as LOC catalogs them, role included (e.g., "Washington, George, 1732-1799 (Author)"). One person can appear once per role. Empty when LOC lists none.',
+      ),
     subject_headings: z.array(z.string()).describe('LCSH subject headings assigned to this item.'),
     notes: z.array(z.string()).describe('Descriptive notes and annotations from catalogers.'),
     summary: z
@@ -71,7 +73,9 @@ export const locGetItem = tool('libofcongress_get_item', {
       ),
     related_items: z
       .array(z.string())
-      .describe('IDs or URLs of related LOC items for follow-up retrieval.'),
+      .describe(
+        'IDs or URLs of related LOC records for follow-up retrieval; a title stands in for a related record LOC gives neither for.',
+      ),
     url: z.string().describe('Canonical LOC item URL.'),
   }),
 
@@ -100,10 +104,18 @@ export const locGetItem = tool('libofcongress_get_item', {
       return await svc.getItem(input.item_id, ctx);
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
-        throw ctx.fail('item_not_found', err.message, { itemId: input.item_id });
+        throw ctx.fail('item_not_found', `No LOC item has the ID "${input.item_id}".`, {
+          itemId: input.item_id,
+          ...ctx.recoveryFor('item_not_found'),
+        });
       }
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
-        throw ctx.fail('rate_limit_exceeded', err.message);
+        // The service's data carries the time left on the block; it overrides the contract's
+        // static "about an hour" hint, which stays as the fallback.
+        throw ctx.fail('rate_limit_exceeded', err.message, {
+          ...ctx.recoveryFor('rate_limit_exceeded'),
+          ...err.data,
+        });
       }
       throw err;
     }

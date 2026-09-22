@@ -6,12 +6,12 @@
 
 | Name | Description | Key Inputs | Annotations | Errors |
 |:-----|:------------|:-----------|:------------|:-------|
-| `libofcongress_search` | Search LOC digital collections by keyword with format, date, subject, and collection filters. Returns item summaries with titles, dates, descriptions, and LOC IDs for follow-up retrieval. | `query`, `format`, `date_start`, `date_end`, `subject`, `location`, `collection_slug`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `incompatible_filters` (ValidationError), `collection_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
-| `libofcongress_get_item` | Retrieve full metadata for a specific LOC item by ID — contributors, subjects, summary, languages, locations, rights, call number, formats, access restrictions, resource links, and related items. | `item_id` | `readOnlyHint: true`, `openWorldHint: true` | `item_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
-| `libofcongress_search_newspapers` | Search historical newspaper pages (Chronicling America corpus) with full-text OCR content. Returns matching pages with article snippets and publication details. Accepts keyword, date range, state, and newspaper title filters. | `query`, `date_start`, `date_end`, `state`, `newspaper_title`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
-| `libofcongress_get_newspaper_page` | Retrieve the full OCR text of a specific newspaper page. Pass the `url` field from a `libofcongress_search_newspapers` result — two hops total: search, then this tool. Returns `ocr_available: false` when the page has no digitized text. | `page_url` | `readOnlyHint: true`, `openWorldHint: true` | `page_not_found` (NotFound), `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
+| `libofcongress_search` | Search LOC digital collections by keyword with format, date, subject, and collection filters. Returns item summaries with titles, dates, descriptions, and LOC IDs for follow-up retrieval. | `query`, `format`, `date_start`, `date_end`, `subject`, `location`, `collection_slug`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `invalid_date_range` (ValidationError), `incompatible_filters` (ValidationError), `collection_not_found` (NotFound), `rate_limit_exceeded` (RateLimited, 1hr block) |
+| `libofcongress_get_item` | Retrieve full metadata for a specific LOC item by ID — contributors, subjects, summary, languages, locations, rights, call number, formats, access restrictions, resource links, and related items. | `item_id` | `readOnlyHint: true`, `openWorldHint: true` | `item_not_found` (NotFound), `rate_limit_exceeded` (RateLimited, 1hr block) |
+| `libofcongress_search_newspapers` | Search historical newspaper pages (Chronicling America corpus) with full-text OCR content. Returns matching pages with article snippets and publication details. Accepts keyword, date range, state, and newspaper title filters. | `query`, `date_start`, `date_end`, `state`, `newspaper_title`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `invalid_date_range` (ValidationError), `rate_limit_exceeded` (RateLimited, 1hr block) |
+| `libofcongress_get_newspaper_page` | Retrieve the full OCR text of a specific newspaper page. Pass the `url` field from a `libofcongress_search_newspapers` result — two hops total: search, then this tool. Returns `ocr_available: false` when the page has no digitized text. | `page_url` | `readOnlyHint: true`, `openWorldHint: true` | `invalid_page_url` (ValidationError), `page_not_found` (NotFound), `rate_limit_exceeded` (RateLimited, 1hr block) |
 | `libofcongress_search_subjects` | Search LC Subject Headings (LCSH) by keyword — the controlled vocabulary used to categorize LOC items. Returns subject labels and their URIs, which can be used as filters in `libofcongress_search`. | `query`, `limit` | `readOnlyHint: true`, `openWorldHint: true` | — |
-| `libofcongress_browse_collections` | List and browse LOC curated digital collections with descriptions and item counts. Optionally filter by subject keyword. | `query`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `rate_limit_exceeded` (ServiceUnavailable, 1hr block) |
+| `libofcongress_browse_collections` | List and browse LOC curated digital collections with descriptions and item counts. Optionally filter by subject keyword. | `query`, `limit`, `page` | `readOnlyHint: true`, `openWorldHint: true` | `rate_limit_exceeded` (RateLimited, 1hr block) |
 
 ### Resources
 
@@ -46,7 +46,7 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 - Results per page: default 25, recommended maximum 1,000.
 - Newspaper OCR text quality varies by digitization batch and publication era — older papers and poor condition yields fragmented or garbled text. Surface text as-is; don't repair.
 - Items exist in many formats (image, audio, video, manuscript scan). Non-text items return metadata and description only — no binary content.
-- LC Linked Data (`id.loc.gov`): no published rate limits, but polite use expected. Subject suggest endpoint returns `[query, labels[], counts[], uris[]]` shape.
+- LC Linked Data (`id.loc.gov`): no published rate limits, but polite use expected. Subject suggest endpoint returns `[query, labels[], descriptions[], uris[]]` shape.
 
 ---
 
@@ -102,12 +102,15 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 
 **Output:** Array of item summaries, each with `id` (use in `libofcongress_get_item`), `title`, `date`, `description`, `format`, `url`. Includes `total` count and `pagination` object. If `total > limit`, indicates truncation with next-page info. `enrichment.effectiveCollectionSlug` echoes the applied collection scope; absent when the search covered all of LOC.
 
-**Errors:**
+**Errors:** every declared reason forwards its recovery hint — `data.recovery.hint` on `structuredContent.error`, and a `Recovery:` line in `content[]`.
+- `invalid_date_range` (ValidationError, non-retryable) — `date_start` is later than `date_end`. Rejected before any request; `data` carries `field`, `date_start`, `date_end`. Recovery: swap the two, or omit one to leave that side open.
 - `incompatible_filters` (ValidationError, non-retryable) — `format` and `collection_slug` were both supplied. Each selects a different LOC base path (`/{format}/` vs `/collections/{slug}/`), so no single request can honor both. Recovery: drop one — omit `format` and filter on each result's `format` field, or omit `collection_slug`.
-- `collection_not_found` (NotFound) — `collection_slug` does not resolve to a LOC collection (upstream 404). Recovery: call `libofcongress_browse_collections` and pass a slug exactly as returned; slugs are not derivable from the collection title.
-- `rate_limit_exceeded` (ServiceUnavailable, non-retryable for 1 hour) — 20 req/min exceeded; LOC blocks for 1 hour. Message: "LOC API rate limit exceeded. Requests are blocked for approximately 1 hour. Reduce request frequency to stay under 20 req/min."
+- `collection_not_found` (NotFound) — `collection_slug` does not resolve to a LOC collection (upstream 404 on page 1). Recovery: call `libofcongress_browse_collections` and pass a slug exactly as returned; slugs are not derivable from the collection title.
+- `rate_limit_exceeded` (RateLimited, non-retryable for 1 hour) — 20 req/min exceeded; LOC blocks for 1 hour. The recovery hint carries the service's runtime state, not the contract's static text: "wait at least 1 hour, until <time>" on the 429 itself, and the minutes left plus the expiry time for calls made during the block (`data.blockedUntil` holds the ISO timestamp).
 
 **Empty results:** returned as success with `enrichment.notice` populated — the handler returns `{ items: [], total: 0, ... }` with a contextual recovery hint in `enrichment.notice` rather than throwing an error.
+
+**Out-of-range pages:** a page LOC will not serve returns the same empty success with `pages: 0` and a notice naming the page, rather than an error. LOC answers a page past the end of any search-family endpoint (`/search/`, the format endpoints, `/collections/{slug}/`, `/newspapers/`, `/collections/`) with 404, so a 404 on `page > 1` takes this path; the notice points back to page 1 for the total and page count. A page past the ~100,000-item retrieval ceiling redirects to a terminal 400 even when the query matches only a handful of items, so its notice also points back to page 1 first, then recommends partitioning by date, subject, or location when the targets really lie past the first 100,000.
 
 **Annotations:** `readOnlyHint: true`, `openWorldHint: true`
 
@@ -118,15 +121,19 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 **Description:** Retrieve the full metadata record for a specific LOC digital item. Returns contributors, subjects, summary, languages, locations, rights information, physical description, call number, formats, access restrictions, notes, related items, and links to digital resources. Use after `libofcongress_search` to get complete details on a result.
 
 **Input:**
-- `item_id: string` — LOC item ID from a search result's `id` field (e.g., `"loc.pnp.ppmsc.02404"` or a numeric ID like `"2009632251"`). Do not include URL path segments — pass the bare ID only.
+- `item_id: string` — LOC item ID from a search result's `id` field (e.g., `"2005691065"` or `"2009632251"`). Do not include URL path segments — pass the bare ID only.
 
 **Output:** Full item record including `item_id`, `title`, `date`, `contributors`, `subject_headings`, `notes`, `summary`, `rights_information`, `physical_description`, `call_number`, `languages`, `locations`, `former_ids`, `original_formats`, `online_formats`, `access_restricted`, `resource_links` (digital file URLs), and `related_items` (array of IDs for follow-up). `resource_links` contains URLs to downloadable digital files (TIFF, JPEG, PDF) for items with digital surrogates. The curated metadata comes from the same upstream response as the rest of the record — no extra request.
+
+`contributors` is `item.contributor_names` verbatim — names with roles (`"Washington, George, 1732-1799 (Author)"`), one entry per person per role. The item JSON carries no `contributor` key; `item.contributors` holds the same people as `{ name: facet-url }` objects without roles, so it is not read.
+
+`related_items` merges the top-level `related_items` array with `item.related_items`. The latter mixes plain strings with `{ title, url }` objects; every object entry, in either array, normalizes to its `id`, then `url`, then `title`, so one malformed auxiliary entry never fails output validation for the whole record.
 
 **Response parity:** `format()` renders `resource_links` and `related_items` in full. Both surfaces carry the same values, so a `content[]`-only client can reach every entry `structuredContent` holds. A dense item (LOC's densest observed: 342 `resource_links`) therefore renders a long `content[]` block by design.
 
 **Errors:**
-- `item_not_found` (NotFound) — no item exists for the given ID. Recovery: verify the ID from `libofcongress_search` results; IDs are not guessable. Use `libofcongress_search` to find a valid ID.
-- `rate_limit_exceeded` (ServiceUnavailable, non-retryable for 1 hour) — see `libofcongress_search` error above.
+- `item_not_found` (NotFound) — no item exists for the given ID; the message names the ID. Recovery: verify the ID from `libofcongress_search` results; IDs are not guessable. Use `libofcongress_search` to find a valid ID.
+- `rate_limit_exceeded` (RateLimited, non-retryable for 1 hour) — see `libofcongress_search` error above.
 
 **Annotations:** `readOnlyHint: true`, `openWorldHint: true`
 
@@ -134,7 +141,7 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 
 ### `libofcongress_search_newspapers`
 
-**Description:** Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with OCR text excerpts (~500 characters), publication title, date, state, and the page URL needed for `libofcongress_get_newspaper_page`. Filters by keyword, date range, state, and newspaper title. The OCR excerpts are sufficient for relevance assessment; call `libofcongress_get_newspaper_page` to read the full page text.
+**Description:** Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with OCR text excerpts (~500 characters), publication title, date, the states LOC indexes the title under, and the page URL needed for `libofcongress_get_newspaper_page`. Filters by keyword, date range, state, and newspaper title. The OCR excerpts are sufficient for relevance assessment; call `libofcongress_get_newspaper_page` to read the full page text.
 
 **Input:**
 - `query: string` — keyword search across OCR text and metadata
@@ -145,12 +152,15 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 - `limit?: number` — results per page, default 25, max 100
 - `page?: number` — 1-indexed page number
 
-**Output:** Array of page results, each with `url` (pass to `libofcongress_get_newspaper_page`), `title` (page title/date), `description` (OCR excerpt, ~500 chars), `date`, `state`, `newspaper_title`, and `edition_label`. Includes `total` count and `pagination` object.
+**Output:** Array of page results, each with `url` (pass to `libofcongress_get_newspaper_page`), `title` (page title/date), `description` (OCR excerpt, ~500 chars), `date`, `states`, and `newspaper_title`. Includes `total` count and `pagination` object.
+
+`states` is the whole `location_state` facet in LOC's order, absent when LOC sends none. The facet is multi-valued — a title that relocated or is indexed against its circulation area lists several states (the Charleston, S.C. *Southern Christian advocate* carries `["georgia", "south carolina"]`) — so the output does not single one out as the place of publication, and `location` (cities, counties, "united states") never stands in. LOC does not project `place_of_publication` into `/newspapers/` results; `libofcongress_get_newspaper_page` returns it. The `state` input filter is unaffected: `fa=location:<state>` matches any entry in the facet.
 
 **Errors:**
-- `rate_limit_exceeded` (ServiceUnavailable, non-retryable for 1 hour) — see `libofcongress_search` error above.
+- `invalid_date_range` (ValidationError, non-retryable) — see `libofcongress_search` error above.
+- `rate_limit_exceeded` (RateLimited, non-retryable for 1 hour) — see `libofcongress_search` error above.
 
-**Empty results:** returned as success with `enrichment.notice` populated — the handler returns `{ items: [], total: 0, ... }` with a contextual recovery hint in `enrichment.notice` rather than throwing an error.
+**Empty results:** returned as success with `enrichment.notice` populated — the handler returns `{ items: [], total: 0, ... }` with a contextual recovery hint in `enrichment.notice` rather than throwing an error. Out-of-range pages behave as described under `libofcongress_search`.
 
 **Annotations:** `readOnlyHint: true`, `openWorldHint: true`
 
@@ -163,11 +173,12 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 **Input:**
 - `page_url: string` — the `url` field from a `libofcongress_search_newspapers` result. Format: `https://www.loc.gov/resource/sn{number}/{date-id}.{seq}/`. Always pass the value directly from search results; do not construct or modify this URL.
 
-**Output:** `{ page_url, newspaper_title, date, state, edition, sequence, ocr_text, ocr_available }`. `ocr_text` is the full plain-text content for the page; empty string when `ocr_available: false`. `ocr_available: false` when the page has no digitized text (image-only digitization batches — not all corpus pages have been OCR-processed). `ocr_text` may contain fragmented words, line-break artifacts, and misspellings inherent to historical OCR — do not attempt to repair.
+**Output:** `{ page_url, newspaper_title, date, states, place_of_publication, edition, sequence, segment_count, ocr_text, ocr_available }`. One request to `?fo=json&at=item,resource` supplies everything: `resource` carries `fulltext_file` and `segment_count` (pages in the issue), `item` carries the publication metadata — `newspaper_title` from `item.newspaper_title[0]` (falling back to `item.partof_title[0]`), `states` from `item.location_state` (same shape as search), `place_of_publication` (e.g. `"Charleston, S.C."`), `edition` from `item.number_edition[0]`, and `date` from `item.date_issued`. The `resource` projection alone carries none of that metadata, which is why `at=resource` left it empty. Neither block carries the page's sequence, so `sequence` comes from the URL's `sp` param, and `date` falls back to the URL's date segment; a sparse or missing `item` block degrades to those fallbacks rather than an error. Every metadata field is absent, never an empty string, when LOC doesn't send it. `ocr_text` is the full plain-text content for the page; empty string when `ocr_available: false`. `ocr_available: false` when the page has no digitized text (image-only digitization batches — not all corpus pages have been OCR-processed). `ocr_text` may contain fragmented words, line-break artifacts, and misspellings inherent to historical OCR — do not attempt to repair.
 
 **Errors:**
-- `page_not_found` (NotFound) — the URL does not resolve to a valid LOC resource. Recovery: re-run `libofcongress_search_newspapers` to get a fresh `url` from current results; do not modify or guess page URLs.
-- `rate_limit_exceeded` (ServiceUnavailable, non-retryable for 1 hour) — see `libofcongress_search` error above.
+- `invalid_page_url` (ValidationError, non-retryable) — `page_url` does not begin with `https://www.loc.gov/resource/`. Rejected before any request; `data` carries `field` and `received`. Recovery: pass the `url` from a `libofcongress_search_newspapers` result verbatim.
+- `page_not_found` (NotFound) — the URL does not resolve to a valid LOC resource; the message names the URL. Recovery: re-run `libofcongress_search_newspapers` to get a fresh `url` from current results; do not modify or guess page URLs.
+- `rate_limit_exceeded` (RateLimited, non-retryable for 1 hour) — see `libofcongress_search` error above.
 
 **Annotations:** `readOnlyHint: true`, `openWorldHint: true`
 
@@ -181,7 +192,9 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 - `query: string` — keyword or partial subject heading (e.g., "civil war", "immigration", "jazz")
 - `limit?: number` — max results to return, default 10, max 50
 
-**Output:** Array of subject records, each with `label` (the standardized heading — use this in `libofcongress_search subject` filter), `uri` (stable LOC URI for the heading), and `count` (approximate number of LOC items carrying this heading). Ordered by relevance.
+**Output:** Array of subject records, each with `label` (the standardized heading — use this in `libofcongress_search subject` filter), and `uri` (stable LOC URI for the heading). Ordered by relevance.
+
+No per-heading item count: the suggest response's third array is a description string (`"1 result"`, `"2 results"`) tallying matching authority records, not LOC items, so it carries no research signal. A heading's real item count is `libofcongress_search`'s `total` with the heading in the `subject` filter.
 
 **Errors:** None declared.
 
@@ -203,9 +216,9 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 **Output:** Array of collection summaries, each with `slug` (pass to `libofcongress_search` as `collection_slug`), `title`, `description`, `item_count`, and `url`. Includes `total` count. `slug` is the first path segment after `/collections/` in the collection's route — derived from the URL, not the title, which does not reliably match it ("Aaron Copland Collection" lives at `aaron-copland`). `item_count` comes from the upstream collection-level `count`.
 
 **Errors:**
-- `rate_limit_exceeded` (ServiceUnavailable, non-retryable for 1 hour) — see `libofcongress_search` error above.
+- `rate_limit_exceeded` (RateLimited, non-retryable for 1 hour) — see `libofcongress_search` error above.
 
-**Empty results:** returned as success with `enrichment.notice` populated — the handler returns `{ collections: [], total: 0, ... }` with a contextual recovery hint in `enrichment.notice` rather than throwing an error.
+**Empty results:** returned as success with `enrichment.notice` populated — the handler returns `{ collections: [], total: 0, ... }` with a contextual recovery hint in `enrichment.notice` rather than throwing an error. Out-of-range pages behave as described under `libofcongress_search`.
 
 **Annotations:** `readOnlyHint: true`, `openWorldHint: true`
 
@@ -248,8 +261,8 @@ The newspaper research workflow is **two agent hops** — search, then get full 
 
 | Step | Tool | Action |
 |:-----|:-----|:-------|
-| 1 | `libofcongress_search_newspapers` | GET `/newspapers/?fo=json&q=...&dates=...&fa=location:...` — returns page segments with OCR excerpts (~500 chars) in `description`, publication title, date, state, and a `url` field per result |
-| 2 | `libofcongress_get_newspaper_page` | Receives the `url` from step 1. Internally: (a) GET resource endpoint (`/resource/{id}/?fo=json&at=resource`) to obtain the `fulltext_file` URL, then (b) GET the text-services URL to fetch full OCR text. Agent sees only the completed text in the response. |
+| 1 | `libofcongress_search_newspapers` | GET `/newspapers/?fo=json&q=...&dates=...&fa=location:...` — returns page segments with OCR excerpts (~500 chars) in `description`, publication title, date, states, and a `url` field per result |
+| 2 | `libofcongress_get_newspaper_page` | Receives the `url` from step 1. Internally: (a) GET resource endpoint (`/resource/{id}/?fo=json&at=item,resource`) to obtain the `fulltext_file` URL and the issue's publication metadata, then (b) GET the text-services URL to fetch full OCR text. Agent sees only the completed text in the response. |
 
 **What is `page_url`?** It is the `url` field returned by each result object from `libofcongress_search_newspapers`. Format: `https://www.loc.gov/resource/sn{number}/{date-id}.{seq}/` — a LOC resource path. Do not construct this manually; always pass the value directly from search results.
 
@@ -296,6 +309,8 @@ The consequence is that `format` and `collection_slug` are mutually exclusive: b
 
 An unrecognized slug 404s upstream, which surfaces as `collection_not_found` naming the slug and pointing back at `libofcongress_browse_collections`. Slugs are not pre-validated with an extra request: the 404 already carries the signal, and a speculative round trip would spend the rate-limit budget to learn nothing new.
 
+That signal is only unambiguous on page 1. LOC also answers a page past the end of a valid collection's results with 404, with the same body, so on `page > 1` the page number is the only thing separating the two cases. Page 1 of a real endpoint never 404s (an empty result set is a 200), so a 404 there means the slug is wrong; on a later page the server reads the 404 as out of range and returns the notice, which points the caller back to page 1, where a bad slug fails with `collection_not_found`. Resolving the ambiguity on the later page would take a second request, and the rate limit rules that out.
+
 ### No LC Linked Data authority record detail
 
 The `id.loc.gov/{id}.json` endpoint returns JSON-LD with full authority structure (broader terms, variant labels, classification codes). This is genuinely useful for semantic discovery — but the JSON-LD is verbose and complex to parse. Decision: **exclude for v0.1**. `libofcongress_search_subjects` returns labels and URIs; that's enough to fuel `libofcongress_search` filters. The authority detail tool can be added if demand emerges.
@@ -333,9 +348,9 @@ Base pattern: `https://www.loc.gov/{endpoint}/?fo=json&{params}`
 
 **Format slugs:** `newspapers`, `photos`, `maps`, `manuscripts`, `audio`, `film-and-videos`, `books`, `notated-music`
 
-**Item endpoint:** `https://www.loc.gov/item/{id}/?fo=json&at=item,resources`
+**Item endpoint:** `https://www.loc.gov/item/{id}/?fo=json&at=item,resources,related_items`
 
-**Resource endpoint:** `https://www.loc.gov/resource/{id}/?fo=json&at=resource`
+**Resource endpoint:** `https://www.loc.gov/resource/{id}/?fo=json&at=item,resource` — `resource` alone carries only the page pointers (`fulltext_file`, `segment_count`, `image`, `pdf`, IIIF manifest); `item` adds the issue's publication metadata
 
 **Error shape** (404): `{ "exception": "not found", "status": "not found", ... }` — HTTP 404 with JSON body.
 
@@ -345,6 +360,6 @@ Base pattern: `https://www.loc.gov/{endpoint}/?fo=json&{params}`
 - Subjects scheme: `http://id.loc.gov/authorities/subjects`
 - Topic type: `http://www.loc.gov/mads/rdf/v1%23Topic`
 - Names scheme: `http://id.loc.gov/authorities/names`
-- Response shape: `[query, labels[], counts[], uris[]]`
+- Response shape: `[query, labels[], descriptions[], uris[]]` — each description is a string like `"1 result"` counting matching authority records, not LOC items
 
 **Rate limits:** None published. Polite use recommended.

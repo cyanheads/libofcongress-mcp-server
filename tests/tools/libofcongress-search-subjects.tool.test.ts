@@ -9,20 +9,22 @@ import {
   createInMemoryStorage,
   createMockContext,
   getEnrichment,
+  runToolContract,
 } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locSearchSubjects } from '@/mcp-server/tools/definitions/libofcongress-search-subjects.tool.js';
 import { initLcLinkedDataService } from '@/services/lc-linked-data/lc-linked-data-service.js';
+import { contentText, structured } from '../helpers/tool-result.js';
 
 /**
  * The id.loc.gov suggest endpoint returns a 4-tuple:
- * [query, labels[], counts[], uris[]]
+ * [query, labels[], descriptions[], uris[]] — each description is a string like "1 result".
  */
-function makeSuggestResponse(entries: Array<{ label: string; uri: string; count?: string }>) {
+function makeSuggestResponse(entries: Array<{ label: string; uri: string; description?: string }>) {
   const labels = entries.map((e) => e.label);
-  const counts = entries.map((e) => e.count ?? '');
+  const descriptions = entries.map((e) => e.description ?? '1 result');
   const uris = entries.map((e) => e.uri);
-  return JSON.stringify(['query', labels, counts, uris]);
+  return JSON.stringify(['query', labels, descriptions, uris]);
 }
 
 function mockFetch(body: string, status = 200) {
@@ -52,12 +54,11 @@ describe('locSearchSubjects', () => {
           {
             label: 'World War, 1939-1945',
             uri: 'http://id.loc.gov/authorities/subjects/sh85148273',
-            count: '1500',
           },
           {
             label: 'World War, 1914-1918',
             uri: 'http://id.loc.gov/authorities/subjects/sh85148248',
-            count: '800',
+            description: '2 results',
           },
         ]),
       ),
@@ -70,7 +71,6 @@ describe('locSearchSubjects', () => {
     expect(result.total).toBe(2);
     expect(result.subjects[0]!.label).toBe('World War, 1939-1945');
     expect(result.subjects[0]!.uri).toBe('http://id.loc.gov/authorities/subjects/sh85148273');
-    expect(result.subjects[0]!.count).toBe(1500);
     // Enrichment echoes query for both structuredContent and content[] clients
     const enrichment = getEnrichment(ctx);
     expect(enrichment.effectiveQuery).toBe('world war');
@@ -90,24 +90,45 @@ describe('locSearchSubjects', () => {
     expect(enrichment.effectiveQuery).toBe('xyzzy_no_match');
   });
 
-  it('omits count when upstream count string is empty', async () => {
+  it('carries no count on either surface, whatever the suggest description column holds (#41)', async () => {
+    // Live `aerial photography` descriptions — an authority-record tally, not an LOC item count.
     vi.stubGlobal(
       'fetch',
       mockFetch(
         makeSuggestResponse([
           {
+            label: 'Aerial photography in agriculture',
+            uri: 'http://id.loc.gov/authorities/subjects/sh85001254',
+            description: '1 result',
+          },
+          {
             label: 'Photography, Aerial',
             uri: 'http://id.loc.gov/authorities/subjects/sh85101360',
-            // count omitted
+            description: '2 results',
           },
         ]),
       ),
     );
-    const ctx = createMockContext({ errors: locSearchSubjects.errors });
-    const input = locSearchSubjects.input.parse({ query: 'aerial photo' });
-    const result = await locSearchSubjects.handler(input, ctx);
+    const result = await runToolContract(locSearchSubjects, { query: 'aerial photography' });
 
-    expect(result.subjects[0]!.count).toBeUndefined();
+    expect(result.isError).toBeFalsy();
+    const sc = structured(result);
+    expect(sc.subjects).toEqual([
+      {
+        label: 'Aerial photography in agriculture',
+        uri: 'http://id.loc.gov/authorities/subjects/sh85001254',
+      },
+      { label: 'Photography, Aerial', uri: 'http://id.loc.gov/authorities/subjects/sh85101360' },
+    ]);
+    const text = contentText(result);
+    expect(text).toContain('## Aerial photography in agriculture');
+    expect(text).toContain('**URI:** http://id.loc.gov/authorities/subjects/sh85101360');
+    expect(text).not.toContain('Items:');
+    // The advertised output schema no longer declares the field.
+    expect(Object.keys(locSearchSubjects.output.shape.subjects.element.shape)).toEqual([
+      'label',
+      'uri',
+    ]);
   });
 
   it('requests the full candidate cap regardless of limit and slices results to the requested limit', async () => {
@@ -169,7 +190,6 @@ describe('locSearchSubjects', () => {
       {
         label: 'Civil War Campaign Medal',
         uri: 'http://id.loc.gov/authorities/subjects/sh90004165',
-        count: '3',
       },
       ...Array.from({ length: 49 }, (_, i) => ({
         label: `Name authority ${i}`,
@@ -234,13 +254,12 @@ describe('locSearchSubjects', () => {
     await expect(locSearchSubjects.handler(input, ctx)).rejects.toThrow();
   });
 
-  it('format() renders label, URI, and count', () => {
+  it('format() renders label and URI', () => {
     const output = locSearchSubjects.output.parse({
       subjects: [
         {
           label: 'World War, 1939-1945',
           uri: 'http://id.loc.gov/authorities/subjects/sh85148273',
-          count: 1500,
         },
       ],
       total: 1,
@@ -250,7 +269,6 @@ describe('locSearchSubjects', () => {
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('World War, 1939-1945');
     expect(text).toContain('http://id.loc.gov/authorities/subjects/sh85148273');
-    expect(text).toContain('1500');
   });
 
   it('format() renders the total count even when results are empty', () => {
@@ -284,7 +302,7 @@ describe('locSearchSubjects', () => {
     expect(() => locSearchSubjects.input.parse({ query: 'test', limit: 1 })).not.toThrow();
   });
 
-  it('format() renders sparse subject — no count', () => {
+  it('format() renders an inverted-form heading verbatim', () => {
     const output = locSearchSubjects.output.parse({
       subjects: [
         {
