@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.1](changelog/0.3.x/0.3.1.md) — 2026-10-07
+
+Moves to @cyanheads/mcp-ts-core 0.13.13: error results carry a requestId and their declared recovery hint, stack traces and data.rootCause stay off the wire, and the registry's HTTP entry starts the HTTP transport.
+
 ## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-09-22 · ⚠️ Breaking
 
 Return newspaper states as a list, forward every declared recovery hint, and normalize LOC metadata (contributors, related items, out-of-range pages); breaking: states[] replaces state on two tools, and search_subjects drops count
