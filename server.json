@@ -18,18 +18,8 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/libofcongress-mcp-server",
-      "runtimeHint": "bun",
+      "runtimeHint": "npx",
       "version": "0.3.0",
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "run"
-        },
-        {
-          "type": "positional",
-          "value": "start:stdio"
-        }
-      ],
       "environmentVariables": [
         {
           "name": "LOC_USER_AGENT",
@@ -68,19 +58,15 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@cyanheads/libofcongress-mcp-server",
-      "runtimeHint": "bun",
+      "runtimeHint": "npx",
       "version": "0.3.0",
-      "packageArguments": [
-        {
-          "type": "positional",
-          "value": "run"
-        },
-        {
-          "type": "positional",
-          "value": "start:http"
-        }
-      ],
       "environmentVariables": [
+        {
+          "name": "MCP_TRANSPORT_TYPE",
+          "description": "Selects the HTTP transport.",
+          "format": "string",
+          "value": "http"
+        },
         {
           "name": "LOC_USER_AGENT",
           "description": "User-Agent header sent with LOC API requests. LOC recommends a descriptive value for polite access.",
