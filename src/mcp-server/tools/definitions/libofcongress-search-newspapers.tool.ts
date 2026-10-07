@@ -149,7 +149,6 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
           field: 'date_start',
           date_start: input.date_start,
           date_end: input.date_end,
-          ...ctx.recoveryFor('invalid_date_range'),
         },
       );
     }
@@ -172,11 +171,8 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
         // The service's data carries the time left on the block; it overrides the contract's
-        // static "about an hour" hint, which stays as the fallback.
-        throw ctx.fail('rate_limit_exceeded', err.message, {
-          ...ctx.recoveryFor('rate_limit_exceeded'),
-          ...err.data,
-        });
+        // static "about an hour" hint, which the framework fills only when no hint is set.
+        throw ctx.fail('rate_limit_exceeded', err.message, { ...err.data });
       }
       throw err;
     }

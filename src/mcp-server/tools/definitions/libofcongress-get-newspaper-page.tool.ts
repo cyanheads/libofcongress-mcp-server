@@ -106,7 +106,6 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       throw ctx.fail('invalid_page_url', `page_url must begin with ${LOC_PAGE_URL_PREFIX}.`, {
         field: 'page_url',
         received: input.page_url,
-        ...ctx.recoveryFor('invalid_page_url'),
       });
     }
 
@@ -118,16 +117,12 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
         throw ctx.fail('page_not_found', `No LOC newspaper page resolves at "${input.page_url}".`, {
           pageUrl: input.page_url,
-          ...ctx.recoveryFor('page_not_found'),
         });
       }
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
         // The service's data carries the time left on the block; it overrides the contract's
-        // static "about an hour" hint, which stays as the fallback.
-        throw ctx.fail('rate_limit_exceeded', err.message, {
-          ...ctx.recoveryFor('rate_limit_exceeded'),
-          ...err.data,
-        });
+        // static "about an hour" hint, which the framework fills only when no hint is set.
+        throw ctx.fail('rate_limit_exceeded', err.message, { ...err.data });
       }
       throw err;
     }

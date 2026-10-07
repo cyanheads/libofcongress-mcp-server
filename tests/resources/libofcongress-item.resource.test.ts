@@ -6,6 +6,7 @@
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createWorkerHandler } from '@cyanheads/mcp-ts-core/worker';
 import { ResourceTemplate } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locItemResource } from '@/mcp-server/resources/definitions/libofcongress-item.resource.js';
@@ -99,6 +100,62 @@ const callItemResource = async (
   params: Parameters<typeof locItemResource.handler>[0],
   ctx: Parameters<typeof locItemResource.handler>[1],
 ): Promise<LocItemDetail> => (await locItemResource.handler(params, ctx)) as LocItemDetail;
+
+const PROTOCOL_VERSION = '2026-07-28';
+
+type WorkerHandler = ReturnType<typeof createWorkerHandler>;
+
+/**
+ * Reads `uri` through the production resource factory, served by `createWorkerHandler`, and
+ * returns the JSON-RPC `error` the client receives. Calling `handler()` directly skips the
+ * factory, which is where a declared `errors[]` recovery hint is filled in.
+ */
+async function readItemResourceError(uri: string): Promise<Record<string, unknown>> {
+  const worker = createWorkerHandler({
+    name: 'libofcongress-mcp-server',
+    title: 'libofcongress-mcp-server',
+    resources: [locItemResource],
+  });
+  const response = await worker.fetch(
+    new Request('http://localhost/mcp', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json, text/event-stream',
+        'Content-Type': 'application/json',
+        'MCP-Protocol-Version': PROTOCOL_VERSION,
+        'Mcp-Method': 'resources/read',
+        'Mcp-Name': uri,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'resources/read',
+        params: {
+          uri,
+          _meta: {
+            'io.modelcontextprotocol/protocolVersion': PROTOCOL_VERSION,
+            'io.modelcontextprotocol/clientInfo': { name: 'resource-test', version: '1.0.0' },
+            'io.modelcontextprotocol/clientCapabilities': {},
+          },
+        },
+      }),
+    }),
+    {} as Parameters<WorkerHandler['fetch']>[1],
+    { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as Parameters<
+      WorkerHandler['fetch']
+    >[2],
+  );
+  const text = await response.text();
+  const payload =
+    text.startsWith('event:') || text.startsWith('data:')
+      ? text
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trim())
+          .join('\n')
+      : text;
+  return (JSON.parse(payload) as { error: Record<string, unknown> }).error;
+}
 
 describe('locItemResource', () => {
   beforeEach(async () => {
@@ -352,20 +409,29 @@ describe('locItemResource', () => {
       fetch: () => mockFetch(JSON.stringify({ resources: [], related_items: [] })),
     },
   ])(
-    'names the failed id and forwards item_not_found recovery in the error data for $name (#44)',
+    'names the failed id and carries the item_not_found recovery on the wire for $name (#44)',
     async ({ fetch }) => {
       vi.stubGlobal('fetch', fetch());
       const ctx = createResourceContext({ uri: new URL('libofcongress://item/99999999999zzz') });
       const params = locItemResource.params!.parse({ item_id: '99999999999zzz' });
 
-      // Resource errors reach the client as the JSON-RPC error envelope: code, message, data.
       await expect(callItemResource(params, ctx)).rejects.toMatchObject({
+        code: JsonRpcErrorCode.NotFound,
+        message: expect.stringContaining('99999999999zzz'),
+        data: { reason: 'item_not_found', itemId: '99999999999zzz' },
+      });
+
+      // The resource factory fills the declared recovery hint, so the client-facing envelope is
+      // read through a real `resources/read` rather than off the handler's own throw.
+      vi.stubGlobal('fetch', fetch());
+      expect(await readItemResourceError('libofcongress://item/99999999999zzz')).toMatchObject({
         code: JsonRpcErrorCode.NotFound,
         message: expect.stringContaining('99999999999zzz'),
         data: {
           reason: 'item_not_found',
           itemId: '99999999999zzz',
           recovery: { hint: contractRecovery(locItemResource, 'item_not_found') },
+          requestId: expect.any(String),
         },
       });
     },

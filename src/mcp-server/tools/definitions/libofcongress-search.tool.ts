@@ -189,7 +189,6 @@ export const locSearch = tool('libofcongress_search', {
           field: 'date_start',
           date_start: input.date_start,
           date_end: input.date_end,
-          ...ctx.recoveryFor('invalid_date_range'),
         },
       );
     }
@@ -205,7 +204,6 @@ export const locSearch = tool('libofcongress_search', {
           field: 'collection_slug',
           format: input.format,
           collectionSlug,
-          ...ctx.recoveryFor('incompatible_filters'),
         },
       );
     }
@@ -230,11 +228,8 @@ export const locSearch = tool('libofcongress_search', {
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
         // The service's data carries the time left on the block; it overrides the contract's
-        // static "about an hour" hint, which stays as the fallback.
-        throw ctx.fail('rate_limit_exceeded', err.message, {
-          ...ctx.recoveryFor('rate_limit_exceeded'),
-          ...err.data,
-        });
+        // static "about an hour" hint, which the framework fills only when no hint is set.
+        throw ctx.fail('rate_limit_exceeded', err.message, { ...err.data });
       }
       // LOC 404s an unrecognized collection slug. The service reads a 404 as not-found only on
       // page 1 (a later page's 404 is out of range), so this fires for a bad slug on page 1.
@@ -251,7 +246,6 @@ export const locSearch = tool('libofcongress_search', {
           {
             field: 'collection_slug',
             collectionSlug,
-            ...ctx.recoveryFor('collection_not_found'),
           },
         );
       }

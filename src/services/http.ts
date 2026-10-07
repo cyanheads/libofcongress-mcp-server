@@ -46,8 +46,8 @@ export function locRetryOptions(ctx: Context, operation: string): RetryOptions {
  * `fetch` with a timeout ceiling composed with the request's abort signal.
  *
  * On timeout, rejects with a `Timeout` `McpError` whose message carries no URL — preserving
- * the services' no-internal-URL invariant (the framework's own `fetchWithTimeout` embeds
- * `origin + pathname` in its thrown message, which would leak `www.loc.gov`). A caller-side
+ * the services' no-internal-URL invariant (the framework's own `fetchWithTimeout` names the
+ * request origin in its thrown message, which would leak `www.loc.gov`). A caller-side
  * cancel (`ctx.signal`) propagates its own reason unchanged, so `withRetry` stops on cancel
  * rather than treating it as a transient fault.
  */

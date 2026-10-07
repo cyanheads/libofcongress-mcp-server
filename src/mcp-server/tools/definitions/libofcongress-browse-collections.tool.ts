@@ -109,11 +109,8 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
         // The service's data carries the time left on the block; it overrides the contract's
-        // static "about an hour" hint, which stays as the fallback.
-        throw ctx.fail('rate_limit_exceeded', err.message, {
-          ...ctx.recoveryFor('rate_limit_exceeded'),
-          ...err.data,
-        });
+        // static "about an hour" hint, which the framework fills only when no hint is set.
+        throw ctx.fail('rate_limit_exceeded', err.message, { ...err.data });
       }
       throw err;
     }

@@ -57,18 +57,12 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
       return await svc.getItem(itemId, ctx);
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
-        throw ctx.fail('item_not_found', `No LOC item has the ID "${itemId}".`, {
-          itemId,
-          ...ctx.recoveryFor('item_not_found'),
-        });
+        throw ctx.fail('item_not_found', `No LOC item has the ID "${itemId}".`, { itemId });
       }
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
         // The service's data carries the time left on the block; it overrides the contract's
-        // static "about an hour" hint, which stays as the fallback.
-        throw ctx.fail('rate_limit_exceeded', err.message, {
-          ...ctx.recoveryFor('rate_limit_exceeded'),
-          ...err.data,
-        });
+        // static "about an hour" hint, which the framework fills only when no hint is set.
+        throw ctx.fail('rate_limit_exceeded', err.message, { ...err.data });
       }
       throw err;
     }
