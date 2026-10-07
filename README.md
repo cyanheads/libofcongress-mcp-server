@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -54,61 +54,43 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 ### `libofcongress_search` <sub>tool</sub>
 
-- Filters: eight material formats (`photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`), inclusive year range (`date_start`/`date_end`), subject heading (use `libofcongress_search_subjects` for the exact LCSH spelling), and geographic location
-- `collection_slug` scopes the search to one curated collection (slug from `libofcongress_browse_collections`) — mutually exclusive with `format`; an unrecognized slug returns `collection_not_found` on page 1
-- Up to 100 results per page, capped at LOC's ~100,000-item retrieval ceiling — a notice discloses how to partition by date, subject, or location to reach the rest; real results on a page beyond the reported total are always returned, never discarded
-- Empty results carry a `notice` field with recovery hints, echoing the applied filters
-- Each result carries `is_item` — `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for non-item results (collections, exhibit/guide pages, newspaper pages), whose `url` should be opened instead
+- Filters: eight material formats (`photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`), inclusive year range (`date_start`/`date_end`), LCSH subject (exact spelling from `libofcongress_search_subjects`), location, and `collection_slug` (from `libofcongress_browse_collections`, mutually exclusive with `format`); up to 100 results per page
+- Each result carries `is_item` — `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for collections, exhibit/guide pages, and newspaper pages, whose `url` should be opened instead
 
 ---
 
 ### `libofcongress_get_item` <sub>tool</sub>
 
-- Returns full metadata in one call: contributors (with their roles, e.g. `Washington, George, 1732-1799 (Author)`), LCSH subject headings, cataloger notes, summary, languages, locations, rights information, physical description, call number, former IDs, original/online formats, and `access_restricted`
-- `resource_links` (deduplicated from nested upstream `files[]` arrays) carries downloadable digital file URLs (TIFF/JPEG/PDF); `related_items` lists related LOC record IDs or URLs, normalized to strings whichever form LOC sends — both render in full on `structuredContent` and `content[]`, never truncated
-- Accepts multi-segment item IDs verbatim (e.g. newspaper pages `sn95047246/1935-09-05/ed-1`); the returned `url` is always an absolute `https://` URL
-- Fields absent upstream are omitted rather than filled — a sparse record stays sparse
+- Takes a search result's `id` verbatim, simple or multi-segment (newspaper pages: `sn95047246/1935-09-05/ed-1`); returns contributors with their roles, LCSH subject headings, notes, summary, languages, locations, rights, physical description, call number, former IDs, formats, and `access_restricted`
+- `resource_links` carries downloadable file URLs (TIFF/JPEG/PDF) and `related_items` related record IDs or URLs, both in full; fields absent upstream are omitted rather than filled
 
 ---
 
 ### `libofcongress_search_newspapers` <sub>tool</sub>
 
-- OCR text excerpts (~500 chars) returned inline for relevance assessment without a second hop
-- Filters: keyword, inclusive date range, US state (full name), and newspaper title (partial match)
-- Each result carries `states` — every state LOC indexes the title under, in LOC order; a title indexed against its circulation area lists several
-- Up to 100 results per page, capped at LOC's ~100,000-page retrieval ceiling — a notice discloses how to partition by date or state to reach the rest
-- Returns the `url` field needed by `libofcongress_get_newspaper_page` — do not construct these URLs manually
-- OCR quality varies by digitization batch and era; 19th-century and degraded materials may contain garbled text
-- Empty results carry a `notice` with recovery suggestions (broaden the date range, drop the state filter, historical-OCR caveat)
+- Filters: keyword, inclusive date range, US state (full name), and newspaper title (partial match); up to 100 results per page
+- Each result carries a ~500-character OCR excerpt for relevance assessment, `states` (every state LOC indexes the title under), and the `url` that `libofcongress_get_newspaper_page` takes verbatim
 
 ---
 
 ### `libofcongress_get_newspaper_page` <sub>tool</sub>
 
-- Accepts the `url` field from a `libofcongress_search_newspapers` result — validates the URL prefix before any outbound request and rejects anything else as `invalid_page_url`
-- Returns the issue's publication metadata alongside the text — `newspaper_title`, `date`, `place_of_publication`, `states`, `edition`, the page's `sequence`, and the issue's page count (`segment_count`) — from the same single request; fields LOC doesn't send are omitted
-- Fetches JSON from the LOC text-services endpoint (`tile.loc.gov`) and reads plain text from the `full_text` field
-- `ocr_available: false` when the page has no digitized text (image-only batch) — a data property, not an error
-- When `ocr_available` is `true` but the text service returns nothing, a `notice` discloses the retrieval miss, distinct from a genuinely image-only page
-- Strips echoed `q=` params from fulltext URLs to avoid `tile.loc.gov` 404s (a known LOC API quirk)
+- Takes the `url` from a `libofcongress_search_newspapers` result; anything outside `https://www.loc.gov/resource/` is rejected as `invalid_page_url` before any request
+- Returns `ocr_text` with the issue's `newspaper_title`, `date`, `place_of_publication`, `states`, `edition`, the page's `sequence`, and the issue's `segment_count`; `ocr_available: false` marks an image-only page, and a `notice` flags a page whose OCR exists but did not come back
 
 ---
 
 ### `libofcongress_search_subjects` <sub>tool</sub>
 
-- Returns standardized LCSH labels and stable LOC URIs; use the returned `label` verbatim in `libofcongress_search`'s `subject` filter — LCSH uses inverted forms ("Photography, Aerial", "World War, 1939-1945") that differ from natural language
-- Up to 50 results per call (default 10); for how many LOC items carry a heading, run `libofcongress_search` with it as the `subject` filter and read `total`
-- Draws from the id.loc.gov suggest endpoint's full 50-candidate pool (not scaled to `limit`) and filters to true LCSH headings, so a heading ranked below name-authority records isn't reported as a false empty
-- When the ranked pool — rather than a lack of coverage — yields an empty or short result, the response discloses it with a recovery hint
+- Keyword query, up to 50 results per call (default 10); returns LCSH `label` and stable LOC `uri` — pass the label verbatim as `libofcongress_search`'s `subject` filter, since LCSH uses inverted forms ("Photography, Aerial", "World War, 1939-1945")
+- When id.loc.gov's ranked suggest pool, rather than a lack of coverage, yields an empty or short result, the response says so with a recovery hint
 
 ---
 
 ### `libofcongress_browse_collections` <sub>tool</sub>
 
-- Returns collection `slug` — pass it to `libofcongress_search` as `collection_slug` to search inside that collection
-- Slugs come from the collection's loc.gov route, not its title — not guessable from the display name
-- Optional keyword filter by collection name/description; up to 100 collections per page
-- Item counts are approximate and omitted when the API doesn't provide them
+- Optional keyword filter on collection name and description; up to 100 collections per page
+- Each collection carries a `slug` for `libofcongress_search`'s `collection_slug` (taken from the loc.gov route, not derivable from the title); `item_count` is approximate and omitted when LOC doesn't provide it
 
 ---
 
@@ -129,6 +111,7 @@ Library of Congress-specific:
 - HTML-response detection guards against silent rate-limit proxy pages that return 200 with HTML
 - Out-of-range page handling: a page past the end of the results (HTTP 404 on any page after the first) or past the retrieval ceiling (HTTP 400) returns an empty result with a notice, not an error — both point back to page 1 for the real page count, and the ceiling notice also explains how to partition a search that matches more than LOC will page through
 - Transient-fault resilience: network drops and timeouts retry with backoff behind a 30s per-request timeout ceiling; the 429 rate-limit path is never retried, since a retry would deepen LOC's 1-hour block
+- Newspaper OCR is surfaced as-is: quality varies by digitization batch and era, and 19th-century or degraded pages may contain garbled text
 
 Agent-friendly output:
 
@@ -266,6 +249,7 @@ All configuration is validated at startup via Zod schemas in `src/config/server-
 | `MCP_SESSION_MODE` | HTTP session mode. This server is explicitly stateless. | `stateless` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
 | `LOGS_DIR` | Directory for log files (Node.js only). | `<project-root>/logs` |
+| `LOG_TOOL_FAILURE_PAYLOADS` | Log each failed tool call's arguments and result, redacted by key name and capped at `LOG_TOOL_FAILURE_PAYLOAD_MAX_BYTES` (default `16384`). A secret inside a free-form value is not redacted. | `false` |
 | `STORAGE_PROVIDER_TYPE` | Storage backend. | `in-memory` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry) (spans, metrics, completion logs). | `false` |
 
