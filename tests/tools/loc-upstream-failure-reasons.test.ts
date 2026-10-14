@@ -257,7 +257,7 @@ describe('request_timed_out — the upstream does not answer within the 50 s bud
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string, init?: RequestInit) =>
-        url.includes('tile.loc.gov')
+        new URL(url).hostname === 'tile.loc.gov'
           ? hangUntilAborted(url, init)
           : new Promise<Response>((resolve) =>
               setTimeout(() => resolve(new Response(pageBody, { status: 200 })), 45_000),

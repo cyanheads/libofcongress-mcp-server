@@ -308,7 +308,9 @@ describe('one per-call budget across attempts, body reads, and both newspaper-pa
       },
     });
     const fetchSpy = vi.fn((url: string, init?: RequestInit) =>
-      url.includes('tile.loc.gov') ? hangUntilAborted(init) : answerAfter(40_000, pageBody, init),
+      new URL(url).hostname === 'tile.loc.gov'
+        ? hangUntilAborted(init)
+        : answerAfter(40_000, pageBody, init),
     );
     vi.stubGlobal('fetch', fetchSpy);
 
@@ -341,7 +343,7 @@ describe('one per-call budget across attempts, body reads, and both newspaper-pa
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string) =>
-        url.includes('tile.loc.gov')
+        new URL(url).hostname === 'tile.loc.gov'
           ? new Response(stalledOcr, { status: 200 })
           : jsonResponse(pageBody),
       ),
@@ -369,7 +371,7 @@ describe('one per-call budget across attempts, body reads, and both newspaper-pa
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string, init?: RequestInit) =>
-        url.includes('tile.loc.gov')
+        new URL(url).hostname === 'tile.loc.gov'
           ? hangUntilAborted(init)
           : Promise.resolve(jsonResponse(pageBody)),
       ),
