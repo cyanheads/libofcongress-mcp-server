@@ -1,6 +1,6 @@
 # libofcongress-mcp-server - Directory Structure
 
-Generated on: 2026-10-14 14:15:54
+Generated on: 2026-10-14 22:31:55
 
 ```text
 libofcongress-mcp-server/
@@ -28,6 +28,7 @@ libofcongress-mcp-server/
 │   ├── 0.2.x/
 │   ├── 0.3.x/
 │   ├── 0.4.x/
+│   ├── 0.5.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
@@ -147,35 +148,57 @@ libofcongress-mcp-server/
 │   │   │   └── definitions/
 │   │   │       └── libofcongress-item.resource.ts
 │   │   └── tools/
-│   │       └── definitions/
-│   │           ├── libofcongress-browse-collections.tool.ts
-│   │           ├── libofcongress-get-item.tool.ts
-│   │           ├── libofcongress-get-newspaper-page.tool.ts
-│   │           ├── libofcongress-search-items.tool.ts
-│   │           ├── libofcongress-search-newspapers.tool.ts
-│   │           └── libofcongress-search-subjects.tool.ts
+│   │       ├── definitions/
+│   │       │   ├── libofcongress-browse-collections.tool.ts
+│   │       │   ├── libofcongress-get-item.tool.ts
+│   │       │   ├── libofcongress-get-newspaper-page.tool.ts
+│   │       │   ├── libofcongress-search-items.tool.ts
+│   │       │   ├── libofcongress-search-newspapers.tool.ts
+│   │       │   └── libofcongress-search-subjects.tool.ts
+│   │       ├── notices.ts
+│   │       └── render-text.ts
 │   ├── services/
 │   │   ├── lc-linked-data/
 │   │   │   ├── lc-linked-data-service.ts
 │   │   │   └── types.ts
 │   │   ├── loc-api/
+│   │   │   ├── date-range.ts
 │   │   │   ├── loc-api-service.ts
+│   │   │   ├── loc-text.ts
+│   │   │   ├── loc-urls.ts
+│   │   │   ├── state-names.ts
+│   │   │   ├── subject-terms.ts
 │   │   │   └── types.ts
 │   │   └── http.ts
 │   └── index.ts
 ├── tests/
 │   ├── config/
 │   │   └── server-config.test.ts
+│   ├── fixtures/
+│   │   ├── lc-subject-suggest.ts
+│   │   ├── loc-challenge.ts
+│   │   ├── loc-items.ts
+│   │   ├── loc-newspaper-search.ts
+│   │   ├── loc-pages.ts
+│   │   ├── loc-subjects.ts
+│   │   └── loc-text.ts
 │   ├── helpers/
+│   │   ├── cpu-scaling.ts
+│   │   ├── item-resource-read.ts
+│   │   ├── loc-fetch.ts
 │   │   └── tool-result.ts
 │   ├── prompts/
 │   ├── resources/
 │   │   └── libofcongress-item.resource.test.ts
 │   ├── services/
+│   │   ├── date-range.test.ts
 │   │   ├── http.test.ts
 │   │   ├── lc-linked-data-service.test.ts
 │   │   ├── loc-api-pacing-budget.test.ts
-│   │   └── loc-api-service.test.ts
+│   │   ├── loc-api-service.test.ts
+│   │   ├── loc-text.test.ts
+│   │   ├── loc-urls.test.ts
+│   │   └── subject-terms.test.ts
 │   └── tools/
 │       ├── libofcongress-browse-collections.tool.test.ts
 │       ├── libofcongress-get-item.tool.test.ts
@@ -183,7 +206,9 @@ libofcongress-mcp-server/
 │       ├── libofcongress-search-items.tool.test.ts
 │       ├── libofcongress-search-newspapers.tool.test.ts
 │       ├── libofcongress-search-subjects.tool.test.ts
-│       └── loc-upstream-failure-reasons.test.ts
+│       ├── loc-upstream-failure-reasons.test.ts
+│       ├── notices.test.ts
+│       └── render-text.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes

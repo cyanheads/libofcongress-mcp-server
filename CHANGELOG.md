@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.5.0](changelog/0.5.x/0.5.0.md) — 2026-10-14 · ⚠️ Breaking
+
+libofcongress_get_item returns a windowed page list in place of resource_links, subject filtering and subject_headings follow LOC's real LCSH headings, libofcongress_get_newspaper_page reads book and manuscript pages, and LOC outages and CAPTCHA challenges fail with a declared upstream_unavailable reason.
+
 ## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-10-14 · ⚠️ Breaking
 
 Renames libofcongress_search to libofcongress_search_items (no alias), queues every www.loc.gov request in arrival order under LOC's 20-per-minute limit, and bounds each tool call to a 50-second budget that fails as a typed error before a client's 60-second timeout.

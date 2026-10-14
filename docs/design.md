@@ -72,7 +72,7 @@ Chronicling America's standalone API (`chroniclingamerica.loc.gov`) has been red
 
 | Env Var | Required | Description |
 |:--------|:---------|:------------|
-| `LOC_USER_AGENT` | No | Custom User-Agent for LOC requests. Default: `libofcongress-mcp-server/0.4.0`. Recommended by LOC for polite access. |
+| `LOC_USER_AGENT` | No | Custom User-Agent for LOC requests. Default: `libofcongress-mcp-server/0.5.0`. Recommended by LOC for polite access. |
 | `LOC_REQUEST_DELAY_MS` | No | Minimum gap in ms between the starts of consecutive `www.loc.gov` requests, to stay within the 20 req/min limit. Default: `3100` (~19/min). The 20-per-minute window is enforced separately, whatever this is set to. |
 
 ---
