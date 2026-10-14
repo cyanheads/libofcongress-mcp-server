@@ -11,9 +11,21 @@ import { fencedText, inlineText, lineText } from '@/mcp-server/tools/render-text
 import { TITANIC_OCR_EXCERPT } from '../fixtures/loc-text.js';
 import { cpuScaling, repeatTo } from '../helpers/cpu-scaling.js';
 
+/** `html` without its tags. The renderer escapes a literal `<` in text, so every `<` here opens a tag. */
+function withoutTags(html: string): string {
+  let text = '';
+  let inTag = false;
+  for (const char of html) {
+    if (char === '<') inTag = true;
+    else if (char === '>' && inTag) inTag = false;
+    else if (!inTag) text += char;
+  }
+  return text;
+}
+
 /** The text a reader sees for an inline Markdown line: rendered, tags dropped, references decoded. */
 function renderedInlineText(markdownLine: string): string {
-  return decodeHTML((marked.parseInline(markdownLine) as string).replace(/<[^>]*>/g, ''));
+  return decodeHTML(withoutTags(marked.parseInline(markdownLine) as string));
 }
 
 describe('inlineText', () => {
