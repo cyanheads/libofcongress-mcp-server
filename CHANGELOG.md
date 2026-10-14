@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-10-14 · ⚠️ Breaking
+
+Renames libofcongress_search to libofcongress_search_items (no alias), queues every www.loc.gov request in arrival order under LOC's 20-per-minute limit, and bounds each tool call to a 50-second budget that fails as a typed error before a client's 60-second timeout.
+
 ## [0.3.1](changelog/0.3.x/0.3.1.md) — 2026-10-07
 
 Moves to @cyanheads/mcp-ts-core 0.13.13: error results carry a requestId and their declared recovery hint, stack traces and data.rootCause stay off the wire, and the registry's HTTP entry starts the HTTP transport.
