@@ -1,16 +1,27 @@
 /**
- * @fileoverview Shared HTTP resilience for the LOC upstreams — a timeout ceiling composed
- * with the request's abort signal, plus a retry predicate scoped to the transient-network
- * class only (never LOC's rate-limit path).
+ * @fileoverview Shared HTTP resilience for the LOC upstreams — one wall-clock budget per tool
+ * call across every attempt, backoff, queue wait, and body read, plus a retry predicate scoped
+ * to raw network faults only (never LOC's rate-limit path).
  * @module services/http
  */
 
 import type { Context } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import type { RetryOptions } from '@cyanheads/mcp-ts-core/utils';
+import { McpError, timeout } from '@cyanheads/mcp-ts-core/errors';
+import { type RetryAttempt, withRetry } from '@cyanheads/mcp-ts-core/utils';
 
-/** Per-request timeout ceiling (ms) for every LOC upstream call. */
-export const LOC_TIMEOUT_MS = 30_000;
+/**
+ * Wall-clock budget (ms) for one tool call, started at service-method entry and shared by every
+ * leg — pacer queue wait, each attempt including its body read, backoff, and a second upstream
+ * fetch. Under the MCP SDK client's 60 s default request timeout, so the caller receives this
+ * server's typed error rather than the client's own `Request timed out`.
+ */
+export const LOC_CALL_BUDGET_MS = 50_000;
+
+/**
+ * Time (ms) a dispatched request keeps for itself. A caller may wait in the www.loc.gov queue
+ * only for the budget left minus this reserve, so a request is never started too late to finish.
+ */
+export const LOC_REQUEST_RESERVE_MS = 30_000;
 
 /**
  * Backoff base (ms) for transient-fault retries. Composes with — rather than replaces —
@@ -19,56 +30,65 @@ export const LOC_TIMEOUT_MS = 30_000;
 const RETRY_BASE_DELAY_MS = 1_100;
 
 /**
- * Retry predicate scoped to the transient-network class. LOC blocks the caller's IP for
- * ~1 hour once its 20 req/min limit trips, so any status-derived error — rate limit,
- * service-unavailable, HTML soft-block, not-found — must fail fast rather than re-hit a
- * possibly blocked endpoint. Raw `fetch` rejections (socket drops, connection resets, DNS
- * failures) surface as non-`McpError` throws and are the class worth retrying, alongside
- * our own {@link timedFetch} timeout.
+ * Retry predicate scoped to raw network faults. LOC blocks the caller's IP for ~1 hour once its
+ * 20 req/min limit trips, so any status-derived error — rate limit, service-unavailable, HTML
+ * soft-block, not-found — must fail fast rather than re-hit a possibly blocked endpoint, and a
+ * pacer shed is local backpressure the caller waits out, not this loop. Raw `fetch` rejections
+ * (socket drops, connection resets, DNS failures) surface as non-`McpError` throws and are the
+ * class worth retrying. A `SyntaxError` is not one of them: a socket drop mid-body rejects the
+ * body read itself, so a parse failure means a complete but malformed body, which a re-send
+ * would only fetch again. There is no per-attempt timer: an attempt may run until the call's
+ * budget ends, and a budget expiry ends the ladder rather than re-sending the request.
  */
 export function isTransientNetworkFault(error: unknown): boolean {
-  if (error instanceof McpError) return error.code === JsonRpcErrorCode.Timeout;
-  return true;
-}
-
-/** `withRetry` options for a LOC upstream call: transient-only predicate, cancel-aware, paced backoff. */
-export function locRetryOptions(ctx: Context, operation: string): RetryOptions {
-  return {
-    operation,
-    context: ctx,
-    signal: ctx.signal,
-    isTransient: isTransientNetworkFault,
-    baseDelayMs: RETRY_BASE_DELAY_MS,
-  };
+  return !(error instanceof McpError || error instanceof SyntaxError);
 }
 
 /**
- * `fetch` with a timeout ceiling composed with the request's abort signal.
- *
- * On timeout, rejects with a `Timeout` `McpError` whose message carries no URL — preserving
- * the services' no-internal-URL invariant (the framework's own `fetchWithTimeout` names the
- * request origin in its thrown message, which would leak `www.loc.gov`). A caller-side
- * cancel (`ctx.signal`) propagates its own reason unchanged, so `withRetry` stops on cancel
- * rather than treating it as a transient fault.
+ * Runs `fn` under `withRetry` with the time left before `deadlineAt` as its total deadline.
+ * `fn` must thread `attempt.signal` (the deadline composed with `ctx.signal`) into its fetch and
+ * body read. A deadline expiry is rethrown as a `Timeout` naming only `upstream` — no URL, host,
+ * or internal operation label reaches the caller. A caller cancel keeps `withRetry`'s precedence
+ * and propagates unchanged.
  */
-export async function timedFetch(url: string, init: RequestInit, ctx: Context): Promise<Response> {
-  const timeoutController = new AbortController();
-  const timer = setTimeout(
-    () =>
-      timeoutController.abort(
-        new McpError(
-          JsonRpcErrorCode.Timeout,
-          `LOC request exceeded the ${LOC_TIMEOUT_MS}ms timeout ceiling.`,
-        ),
-      ),
-    LOC_TIMEOUT_MS,
-  );
-  const signal = ctx.signal
-    ? AbortSignal.any([timeoutController.signal, ctx.signal])
-    : timeoutController.signal;
+export async function retryWithinBudget<T>(
+  fn: (attempt: RetryAttempt) => Promise<T>,
+  options: { ctx: Context; operation: string; deadlineAt: number; upstream: string },
+): Promise<T> {
+  const { ctx, operation, deadlineAt, upstream } = options;
   try {
-    return await fetch(url, { ...init, signal });
-  } finally {
-    clearTimeout(timer);
+    return await withRetry(fn, {
+      operation,
+      context: ctx,
+      signal: ctx.signal,
+      isTransient: isTransientNetworkFault,
+      baseDelayMs: RETRY_BASE_DELAY_MS,
+      deadlineMs: Math.max(0, deadlineAt - Date.now()),
+    });
+  } catch (error) {
+    if (error instanceof McpError && error.data?.reason === 'retry_deadline_exceeded') {
+      throw timeout(
+        `${upstream} did not respond within the ${LOC_CALL_BUDGET_MS / 1000}-second request budget.`,
+        undefined,
+        { cause: error },
+      );
+    }
+    throw error;
   }
+}
+
+/**
+ * Reads a response body as text, rejecting with `signal.reason` the moment `signal` aborts — so a
+ * body that stalls after the headers is bounded by the same budget as the request that opened it.
+ */
+export function readText(response: Response, signal: AbortSignal): Promise<string> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<string>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    response
+      .text()
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }

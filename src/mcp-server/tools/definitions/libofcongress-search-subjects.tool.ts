@@ -4,6 +4,7 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import {
   getLcLinkedDataService,
   SUGGEST_MAX_COUNT,
@@ -12,7 +13,7 @@ import {
 export const locSearchSubjects = tool('libofcongress_search_subjects', {
   title: 'Search LC Subject Headings',
   description:
-    'Search Library of Congress Subject Headings (LCSH) by keyword. Returns controlled-vocabulary subject labels and their URIs. Use the returned label as the subject filter in libofcongress_search — LCSH uses precise, standardized terms that differ from natural language (e.g., "World War, 1939-1945" not "World War II"; "Photography, Aerial" not "Aerial photography"). Running this tool before a subject-filtered libofcongress_search dramatically improves result quality.',
+    'Search Library of Congress Subject Headings (LCSH) by keyword. Returns controlled-vocabulary subject labels and their URIs. Use the returned label as the subject filter in libofcongress_search_items — LCSH uses precise, standardized terms that differ from natural language (e.g., "World War, 1939-1945" not "World War II"; "Photography, Aerial" not "Aerial photography"). Running this tool before a subject-filtered libofcongress_search_items dramatically improves result quality.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -38,7 +39,7 @@ export const locSearchSubjects = tool('libofcongress_search_subjects', {
             label: z
               .string()
               .describe(
-                'Standardized LCSH heading — use this exact string in the libofcongress_search subject filter.',
+                'Standardized LCSH heading — use this exact string in the libofcongress_search_items subject filter.',
               ),
             uri: z
               .string()
@@ -47,7 +48,7 @@ export const locSearchSubjects = tool('libofcongress_search_subjects', {
           .describe('A single LCSH subject heading record.'),
       )
       .describe(
-        'LCSH subject headings matching the query, ordered by relevance. To see how many LOC items carry a heading, pass its label as the libofcongress_search subject filter and read total.',
+        'LCSH subject headings matching the query, ordered by relevance. To see how many LOC items carry a heading, pass its label as the libofcongress_search_items subject filter and read total.',
       ),
     total: z.number().describe('Number of subject headings returned.'),
   }),
@@ -80,14 +81,29 @@ export const locSearchSubjects = tool('libofcongress_search_subjects', {
       ),
   },
 
+  errors: [
+    {
+      reason: 'request_timed_out',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'The Library of Congress subject heading service did not respond within the 50-second request budget.',
+      recovery:
+        'Retry in a few minutes; the Library of Congress subject heading service is responding slowly.',
+    },
+  ],
+
   async handler(input, ctx) {
     ctx.log.info('libofcongress_search_subjects', { query: input.query, limit: input.limit });
     const svc = getLcLinkedDataService();
-    const { subjects, matchCount, poolCapReached } = await svc.searchSubjects(
-      input.query,
-      input.limit,
-      ctx,
-    );
+    let result: Awaited<ReturnType<typeof svc.searchSubjects>>;
+    try {
+      result = await svc.searchSubjects(input.query, input.limit, ctx);
+    } catch (err) {
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.Timeout) {
+        throw ctx.fail('request_timed_out', err.message);
+      }
+      throw err;
+    }
+    const { subjects, matchCount, poolCapReached } = result;
 
     ctx.enrich.echo(input.query);
 

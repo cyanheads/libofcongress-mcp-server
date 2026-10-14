@@ -2,9 +2,9 @@
 
 **Server:** libofcongress-mcp-server
 **Version:** 0.3.1
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.13`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.2.0
+**MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
 **Zod:** ^4.6.5
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -51,7 +51,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
-export const locSearch = tool('libofcongress_search', {
+export const locSearchItems = tool('libofcongress_search_items', {
   description: 'Search the Library of Congress digital collections by keyword with format, date range, subject heading, and geographic location filters.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
@@ -75,7 +75,7 @@ export const locSearch = tool('libofcongress_search', {
       recovery: 'Broaden the query, widen the date range, or use libofcongress_search_subjects to find the correct subject heading spelling.' },
   ],
   async handler(input, ctx) {
-    ctx.log.info('libofcongress_search', { query: input.query, page: input.page });
+    ctx.log.info('libofcongress_search_items', { query: input.query, page: input.page });
     const svc = getLocApiService();
     const result = await svc.search({ query: input.query, limit: input.limit, page: input.page }, ctx);
     return { items: result.items, total: result.pagination.total, has_next: result.pagination.hasNext };
@@ -238,15 +238,16 @@ src/
   config/
     server-config.ts                    # LOC_USER_AGENT and LOC_REQUEST_DELAY_MS (Zod schema)
   services/
+    http.ts                             # Shared per-call 50 s time budget, retry predicate, budget-bounded body read
     loc-api/
-      loc-api-service.ts               # LOC JSON API client — rate pacing, search, item fetch, newspaper page
+      loc-api-service.ts               # LOC JSON API client — www.loc.gov request queue, search, item fetch, newspaper page
       types.ts                          # Raw and normalized LOC API types
     lc-linked-data/
       lc-linked-data-service.ts        # id.loc.gov LCSH subject suggest client
       types.ts                          # Subject heading types
   mcp-server/
     tools/definitions/
-      libofcongress-search.tool.ts               # libofcongress_search — general LOC collection search
+      libofcongress-search-items.tool.ts         # libofcongress_search_items — general LOC item search
       libofcongress-get-item.tool.ts             # libofcongress_get_item — full item metadata
       libofcongress-search-newspapers.tool.ts    # libofcongress_search_newspapers — Chronicling America search
       libofcongress-get-newspaper-page.tool.ts   # libofcongress_get_newspaper_page — full OCR text

@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.3.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.3.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -35,7 +35,7 @@ Library of Congress digital collections, Chronicling America newspaper archives,
 
 | Tool | Description |
 |:-----|:------------|
-| `libofcongress_search` | Search LOC digital collections by keyword with format, date range, subject, location, and collection filters. |
+| `libofcongress_search_items` | Search LOC digital collections by keyword with format, date range, subject, location, and collection filters. |
 | `libofcongress_get_item` | Retrieve full metadata for a specific LOC digital item — contributors, subjects, rights, formats, and resource links. |
 | `libofcongress_search_newspapers` | Search historical newspaper pages in the Chronicling America corpus with OCR excerpts. |
 | `libofcongress_get_newspaper_page` | Retrieve the full OCR text and metadata for a specific newspaper page. |
@@ -48,11 +48,11 @@ Library of Congress digital collections, Chronicling America newspaper archives,
 |:-----|:------------|
 | `libofcongress://item/{+item_id}` | LOC digital item metadata by ID — stable URI for injecting item context into agent conversations. |
 
-All resource data is also reachable via `libofcongress_get_item`. Use `libofcongress_search` to discover item IDs first.
+All resource data is also reachable via `libofcongress_get_item`. Use `libofcongress_search_items` to discover item IDs first.
 
 ## Capability reference
 
-### `libofcongress_search` <sub>tool</sub>
+### `libofcongress_search_items` <sub>tool</sub>
 
 - Filters: eight material formats (`photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`), inclusive year range (`date_start`/`date_end`), LCSH subject (exact spelling from `libofcongress_search_subjects`), location, and `collection_slug` (from `libofcongress_browse_collections`, mutually exclusive with `format`); up to 100 results per page
 - Each result carries `is_item` — `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for collections, exhibit/guide pages, and newspaper pages, whose `url` should be opened instead
@@ -82,7 +82,7 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 ### `libofcongress_search_subjects` <sub>tool</sub>
 
-- Keyword query, up to 50 results per call (default 10); returns LCSH `label` and stable LOC `uri` — pass the label verbatim as `libofcongress_search`'s `subject` filter, since LCSH uses inverted forms ("Photography, Aerial", "World War, 1939-1945")
+- Keyword query, up to 50 results per call (default 10); returns LCSH `label` and stable LOC `uri` — pass the label verbatim as `libofcongress_search_items`'s `subject` filter, since LCSH uses inverted forms ("Photography, Aerial", "World War, 1939-1945")
 - When id.loc.gov's ranked suggest pool, rather than a lack of coverage, yields an empty or short result, the response says so with a recovery hint
 
 ---
@@ -90,14 +90,14 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 ### `libofcongress_browse_collections` <sub>tool</sub>
 
 - Optional keyword filter on collection name and description; up to 100 collections per page
-- Each collection carries a `slug` for `libofcongress_search`'s `collection_slug` (taken from the loc.gov route, not derivable from the title); `item_count` is approximate and omitted when LOC doesn't provide it
+- Each collection carries a `slug` for `libofcongress_search_items`'s `collection_slug` (taken from the loc.gov route, not derivable from the title); `item_count` is approximate and omitted when LOC doesn't provide it
 
 ---
 
 ### `libofcongress://item/{+item_id}` <sub>resource</sub>
 
 - Returns the same full record as `libofcongress_get_item`, as `application/json`
-- `item_id` comes from a `libofcongress_search` result's `id` field, or from `libofcongress_get_item`
+- `item_id` comes from a `libofcongress_search_items` result's `id` field, or from `libofcongress_get_item`
 - Multi-segment newspaper IDs keep their slashes intact (e.g. `libofcongress://item/sn95047246/1935-09-05/ed-1`); percent-encoded slashes (`%2F`) also resolve
 
 ## Features
@@ -106,11 +106,11 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): s
 
 Library of Congress-specific:
 
-- Module-level rate-limit enforcement: 20 req/min limit; 429 responses trigger a 1-hour block, and the error's recovery hint counts down the minutes left and names the time it lifts
-- Configurable pacing delay (default 3100ms, ~19 req/min) applied before every outbound LOC API request
+- One request queue in front of `www.loc.gov`: concurrent calls start in arrival order, at least `LOC_REQUEST_DELAY_MS` apart (default 3100ms, ~19 req/min), and no 60-second window holds more than LOC's documented 20 starts, whatever the delay is set to. A call the queue cannot start within its time budget fails at once as `server_busy`, with the seconds to wait in `retryAfter`
+- Rate-limit block enforcement: a 429 triggers LOC's 1-hour block, checked again as each queued request is dispatched, so calls already waiting fail without sending anything; the error's recovery hint counts down the minutes left and names the time it lifts
 - HTML-response detection guards against silent rate-limit proxy pages that return 200 with HTML
 - Out-of-range page handling: a page past the end of the results (HTTP 404 on any page after the first) or past the retrieval ceiling (HTTP 400) returns an empty result with a notice, not an error — both point back to page 1 for the real page count, and the ceiling notice also explains how to partition a search that matches more than LOC will page through
-- Transient-fault resilience: network drops and timeouts retry with backoff behind a 30s per-request timeout ceiling; the 429 rate-limit path is never retried, since a retry would deepen LOC's 1-hour block
+- One 50-second budget per tool call covers queue wait, every attempt including its body read, retry backoff, and the newspaper page's OCR fetch, so a slow upstream fails as `request_timed_out` with a recovery hint before a client's 60-second request timeout. Network drops retry with backoff while budget remains; the 429 rate-limit path is never retried, since a retry would deepen LOC's 1-hour block
 - Newspaper OCR is surfaced as-is: quality varies by digitization batch and era, and 19th-century or degraded pages may contain garbled text
 
 Agent-friendly output:

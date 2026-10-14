@@ -5,11 +5,16 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { notFound, rateLimited, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import { McpError, notFound, rateLimited, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
-import { withRetry } from '@cyanheads/mcp-ts-core/utils';
-import { getServerConfig } from '@/config/server-config.js';
-import { locRetryOptions, timedFetch } from '@/services/http.js';
+import { createPacer, type Pacer, type RetryAttempt } from '@cyanheads/mcp-ts-core/utils';
+import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
+import {
+  LOC_CALL_BUDGET_MS,
+  LOC_REQUEST_RESERVE_MS,
+  readText,
+  retryWithinBudget,
+} from '@/services/http.js';
 import type {
   LocCollection,
   LocItemDetail,
@@ -98,17 +103,14 @@ const FORMAT_SLUG_MAP: Record<string, string> = {
  */
 let rateLimitBlockedUntil = 0;
 
-/** Paces requests to stay under 20 req/min: resolves after the configured delay. */
-let lastRequestAt = 0;
+/** Names the www.loc.gov pacer in telemetry and in the shed message a caller reads. */
+const UPSTREAM_NAME = 'Library of Congress';
 
-async function pace(delayMs: number): Promise<void> {
-  const now = Date.now();
-  const elapsed = now - lastRequestAt;
-  if (elapsed < delayMs) {
-    await new Promise<void>((resolve) => setTimeout(resolve, delayMs - elapsed));
-  }
-  lastRequestAt = Date.now();
-}
+/** Subject of the budget-expiry message — the upstream by name, never by host or URL. */
+const LOC_UPSTREAM = `The ${UPSTREAM_NAME}`;
+
+/** LOC's documented JSON/YAML API ceiling: 20 requests per minute, or a 1-hour IP block. */
+const LOC_RATE_LIMIT = { requests: 20, perMs: 60_000 };
 
 function extractFirstString(value: string | string[] | undefined): string | undefined {
   if (!value) return;
@@ -206,12 +208,30 @@ function normalizePagination(
 
 export class LocApiService {
   private readonly userAgent: string;
-  private readonly requestDelayMs: number;
+  /**
+   * One FIFO queue in front of www.loc.gov. `minStartGapMs` spaces consecutive starts by the
+   * configured delay; the window holds LOC's documented 20-per-minute ceiling whatever that delay
+   * is, since a window alone admits all 20 starts in the same millisecond. id.loc.gov and the
+   * tile.loc.gov OCR fetch are different hosts under different limits and stay off it.
+   */
+  private readonly pacer: Pacer;
 
-  constructor(_config: AppConfig, _storage: StorageService) {
-    const serverConfig = getServerConfig();
+  constructor(
+    _config: AppConfig,
+    _storage: StorageService,
+    serverConfig: ServerConfig = getServerConfig(),
+  ) {
     this.userAgent = serverConfig.userAgent;
-    this.requestDelayMs = serverConfig.requestDelayMs;
+    this.pacer = createPacer({
+      name: UPSTREAM_NAME,
+      minStartGapMs: serverConfig.requestDelayMs,
+      limits: [LOC_RATE_LIMIT],
+    });
+  }
+
+  /** Rejects every caller still queued for www.loc.gov. Called from the server's teardown. */
+  dispose(): void {
+    this.pacer.dispose();
   }
 
   /**
@@ -236,19 +256,56 @@ export class LocApiService {
     }
   }
 
+  /**
+   * Sends one www.loc.gov request through the pacer, as one attempt of a retry ladder. The queue
+   * wait is charged to the call's budget: a caller may wait only for the time left minus
+   * {@link LOC_REQUEST_RESERVE_MS}, and one the queue cannot start in time is shed at once
+   * (`RateLimited`, `data.reason: 'pacer_shed'`) with a hint naming the wait. The 1-hour block is
+   * checked on arrival, so a blocked caller neither queues nor is shed with a seconds-long wait,
+   * and again when the request is dispatched, so callers already waiting when a 429 lands fail
+   * without sending anything.
+   */
   private async fetch(
     url: string,
     ctx: Context,
+    attempt: RetryAttempt,
     opts?: { allowStatus?: number[] },
   ): Promise<Response> {
     this.checkRateLimit();
-    await pace(this.requestDelayMs);
+    try {
+      return await this.pacer.run((signal) => this.send(url, ctx, signal, opts), {
+        signal: attempt.signal,
+        maxWaitMs: Math.max(0, attempt.remainingMs - LOC_REQUEST_RESERVE_MS),
+      });
+    } catch (err) {
+      if (err instanceof McpError && err.data?.reason === 'pacer_shed') {
+        throw rateLimited(
+          `${LOC_UPSTREAM} request queue cannot start this call in time.`,
+          {
+            ...err.data,
+            recovery: {
+              hint: `Wait ${String(err.data.retryAfter)} seconds, then retry. Send calls to this server one at a time rather than in parallel.`,
+            },
+          },
+          { cause: err },
+        );
+      }
+      throw err;
+    }
+  }
+
+  private async send(
+    url: string,
+    ctx: Context,
+    signal: AbortSignal,
+    opts?: { allowStatus?: number[] },
+  ): Promise<Response> {
+    this.checkRateLimit();
     ctx.log.debug('LOC API request', { url });
-    const response = await timedFetch(
-      url,
-      { headers: { 'User-Agent': this.userAgent, Accept: 'application/json' } },
-      ctx,
-    );
+    const response = await fetch(url, {
+      headers: { 'User-Agent': this.userAgent, Accept: 'application/json' },
+      signal,
+    });
     if (response.status === 429) {
       rateLimitBlockedUntil = Date.now() + 60 * 60 * 1000;
       const blockedUntil = new Date(rateLimitBlockedUntil).toISOString();
@@ -279,12 +336,12 @@ export class LocApiService {
   }
 
   /**
-   * Fetch and parse a LOC JSON endpoint.
+   * Fetch and parse a LOC JSON endpoint within the call's budget, which ends at `deadlineAt`.
    *
-   * The retry boundary wraps the full pipeline — fetch, body read, and parse — so a socket
-   * drop mid-body is retried, not just a failed connection. Only transient network faults and
-   * timeouts retry ({@link locRetryOptions}); the 429 and HTML soft-block throws below fail fast
-   * so a retry never re-hits a rate-limited endpoint.
+   * The retry boundary wraps the full pipeline — queue, fetch, body read, and parse — so a socket
+   * drop mid-body is retried, not just a failed connection, and a retry re-queues through the
+   * pacer. Only raw network faults retry ({@link isTransientNetworkFault}); the 429 and HTML
+   * soft-block throws below fail fast so a retry never re-hits a rate-limited endpoint.
    *
    * Neither failure path attaches the request `url` to its error data — it embeds the
    * internal endpoint and query string, and callers already hold the caller-facing
@@ -292,14 +349,18 @@ export class LocApiService {
    * no catch block to rewrite the payload, so anything attached here reaches the client
    * verbatim. The URL stays in the debug log above.
    */
-  private fetchJson<T>(url: string, ctx: Context): Promise<T> {
-    return withRetry(
-      async () => {
-        const response = await this.fetch(url, ctx);
+  private fetchJson<T>(
+    url: string,
+    ctx: Context,
+    deadlineAt = Date.now() + LOC_CALL_BUDGET_MS,
+  ): Promise<T> {
+    return retryWithinBudget(
+      async (attempt) => {
+        const response = await this.fetch(url, ctx, attempt);
         if (response.status === 404) {
           throw notFound('LOC resource not found');
         }
-        const text = await response.text();
+        const text = await readText(response, attempt.signal);
         if (HTML_RESPONSE_RE.test(text)) {
           throw serviceUnavailable(
             'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
@@ -307,7 +368,7 @@ export class LocApiService {
         }
         return JSON.parse(text) as T;
       },
-      locRetryOptions(ctx, 'loc-api-fetch-json'),
+      { ctx, operation: 'loc-api-fetch-json', deadlineAt, upstream: LOC_UPSTREAM },
     );
   }
 
@@ -332,9 +393,11 @@ export class LocApiService {
     ctx: Context,
     normalize: (result: RawLocSearchResult) => T,
   ): Promise<{ items: T[]; pagination: LocPagination }> {
-    const res = await withRetry(
-      async (): Promise<{ data: RawLocSearchResponse } | { outOfRange: OutOfRangeStatus }> => {
-        const response = await this.fetch(url, ctx, { allowStatus: [400, 520] });
+    const res = await retryWithinBudget(
+      async (
+        attempt,
+      ): Promise<{ data: RawLocSearchResponse } | { outOfRange: OutOfRangeStatus }> => {
+        const response = await this.fetch(url, ctx, attempt, { allowStatus: [400, 520] });
         const { status } = response;
         if (status === 404 && page === 1) {
           throw notFound('LOC resource not found');
@@ -343,7 +406,7 @@ export class LocApiService {
           ctx.log.debug('LOC search returned out-of-range page', { status, url });
           return { outOfRange: status };
         }
-        const text = await response.text();
+        const text = await readText(response, attempt.signal);
         if (HTML_RESPONSE_RE.test(text)) {
           throw serviceUnavailable(
             'LOC API returned HTML — may be rate-limited or temporarily unavailable.',
@@ -351,7 +414,12 @@ export class LocApiService {
         }
         return { data: JSON.parse(text) as RawLocSearchResponse };
       },
-      locRetryOptions(ctx, 'loc-api-search-json'),
+      {
+        ctx,
+        operation: 'loc-api-search-json',
+        deadlineAt: Date.now() + LOC_CALL_BUDGET_MS,
+        upstream: LOC_UPSTREAM,
+      },
     );
     if ('outOfRange' in res) return outOfRangePage(page, limit, res.outOfRange);
     const { data } = res;
@@ -528,8 +596,12 @@ export class LocApiService {
     });
   }
 
-  /** Retrieve full OCR text for a specific newspaper page via its resource URL */
+  /**
+   * Retrieve full OCR text for a specific newspaper page via its resource URL. The page fetch and
+   * the OCR fetch share one call budget; the OCR leg gets whatever the page fetch left.
+   */
   async getNewspaperPage(pageUrl: string, ctx: Context): Promise<LocNewspaperPageDetail> {
+    const deadlineAt = Date.now() + LOC_CALL_BUDGET_MS;
     // Strip search-specific params (q=) that LOC echoes into fulltext_file URLs,
     // causing tile.loc.gov OCR requests to 404. Keep sp= (selects the page within a resource).
     const parsed = new URL(pageUrl);
@@ -543,7 +615,7 @@ export class LocApiService {
       ? `${cleanUrl}&fo=json&at=item,resource`
       : `${cleanUrl}?fo=json&at=item,resource`;
 
-    const data = await this.fetchJson<RawLocNewspaperPageResponse>(resourceUrl, ctx);
+    const data = await this.fetchJson<RawLocNewspaperPageResponse>(resourceUrl, ctx, deadlineAt);
 
     const res = data.resource;
     if (!res) {
@@ -569,42 +641,10 @@ export class LocApiService {
     const sequence =
       spParam && /^\d+$/.test(spParam) && Number(spParam) > 0 ? Number(spParam) : undefined;
 
-    let ocrText = '';
-    let ocrAvailable = false;
-
-    if (res.fulltext_file) {
-      ocrAvailable = true;
-      try {
-        // fulltext_file is already a fully-qualified URL from the LOC resource API.
-        // Strip q= to avoid echoed search terms causing tile.loc.gov 404s.
-        const fulltextUrl = new URL(res.fulltext_file);
-        fulltextUrl.searchParams.delete('q');
-        const textUrl = fulltextUrl.toString();
-        ctx.log.debug('Fetching OCR text', { url: textUrl });
-        // Retry + timeout this secondary tile.loc.gov fetch too. It intentionally skips the
-        // www.loc.gov pace()/checkRateLimit() guards — a different host, already best-effort
-        // inside this try/catch — so any residual failure degrades to ocr_available with empty
-        // text rather than failing the whole page.
-        const textResponse = await withRetry(
-          () => timedFetch(textUrl, { headers: { 'User-Agent': this.userAgent } }, ctx),
-          locRetryOptions(ctx, 'loc-api-ocr-text'),
-        );
-        if (textResponse.ok) {
-          // tile.loc.gov returns JSON, not ALTO XML. Shape:
-          // { "<batch-key>": { "full_text": "...", "height": N, "width": N } }
-          const json = (await textResponse.json()) as Record<string, { full_text?: string }>;
-          const firstEntry = Object.values(json)[0];
-          ocrText = firstEntry?.full_text ?? '';
-        } else {
-          // OCR service unavailable — return empty text, still mark as available
-          ctx.log.warning('OCR text service returned error', {
-            status: textResponse.status,
-          });
-        }
-      } catch (err) {
-        ctx.log.warning('OCR text fetch failed', { error: String(err) });
-      }
-    }
+    const ocrAvailable = Boolean(res.fulltext_file);
+    const ocrText = res.fulltext_file
+      ? await this.fetchOcrText(res.fulltext_file, ctx, deadlineAt)
+      : '';
 
     return {
       page_url: pageUrl,
@@ -618,6 +658,55 @@ export class LocApiService {
       ocr_text: ocrText,
       ocr_available: ocrAvailable,
     };
+  }
+
+  /**
+   * The OCR text behind a page's `fulltext_file`, or `''` when it cannot be had this call — the
+   * page reports `ocr_available` either way. Retried within what the page fetch left of the
+   * budget, and off the www.loc.gov pacer and block check: tile.loc.gov is a different host under
+   * different limits. A cancelled call rethrows rather than degrading.
+   */
+  private async fetchOcrText(
+    fulltextFile: string,
+    ctx: Context,
+    deadlineAt: number,
+  ): Promise<string> {
+    if (deadlineAt <= Date.now()) {
+      ctx.log.warning('OCR text fetch skipped — no time left in the call budget');
+      return '';
+    }
+    try {
+      // fulltext_file is already a fully-qualified URL from the LOC resource API.
+      // Strip q= to avoid echoed search terms causing tile.loc.gov 404s.
+      const fulltextUrl = new URL(fulltextFile);
+      fulltextUrl.searchParams.delete('q');
+      const textUrl = fulltextUrl.toString();
+      ctx.log.debug('Fetching OCR text', { url: textUrl });
+      const ocr = await retryWithinBudget(
+        async ({ signal }) => {
+          const response = await fetch(textUrl, {
+            headers: { 'User-Agent': this.userAgent },
+            signal,
+          });
+          return response.ok
+            ? { status: response.status, text: await readText(response, signal) }
+            : { status: response.status };
+        },
+        { ctx, operation: 'loc-api-ocr-text', deadlineAt, upstream: LOC_UPSTREAM },
+      );
+      if (ocr.text === undefined) {
+        ctx.log.warning('OCR text service returned error', { status: ocr.status });
+        return '';
+      }
+      // tile.loc.gov returns JSON, not ALTO XML. Shape:
+      // { "<batch-key>": { "full_text": "...", "height": N, "width": N } }
+      const json = JSON.parse(ocr.text) as Record<string, { full_text?: string }>;
+      return Object.values(json)[0]?.full_text ?? '';
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
+      ctx.log.warning('OCR text fetch failed', { error: String(err) });
+      return '';
+    }
   }
 
   /** Browse LOC curated digital collections */

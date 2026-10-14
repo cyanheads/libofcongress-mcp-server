@@ -1,7 +1,8 @@
 /**
- * @fileoverview Tests for the shared LOC HTTP resilience helpers — the transient-network retry
- * predicate and the timeout ceiling (kept in its own file so fake timers can't bleed into the
- * module-level rate-limit state exercised in loc-api-service.test.ts).
+ * @fileoverview Tests for the shared LOC HTTP resilience helpers — the raw-network-fault retry
+ * predicate, the per-call budget ladder, and the signal-bounded body read (kept in its own file
+ * so fake timers can't bleed into the module-level rate-limit state exercised in
+ * loc-api-service.test.ts).
  * @module tests/services/http.test
  */
 
@@ -13,13 +14,13 @@ import {
   serviceUnavailable,
 } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { defaultIsTransient, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import { createPacer, defaultIsTransient } from '@cyanheads/mcp-ts-core/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   isTransientNetworkFault,
-  LOC_TIMEOUT_MS,
-  locRetryOptions,
-  timedFetch,
+  LOC_CALL_BUDGET_MS,
+  readText,
+  retryWithinBudget,
 } from '@/services/http.js';
 
 describe('isTransientNetworkFault', () => {
@@ -27,12 +28,28 @@ describe('isTransientNetworkFault', () => {
     expect(isTransientNetworkFault(new TypeError('The socket connection was closed'))).toBe(true);
   });
 
-  it('retries a Timeout McpError', () => {
-    expect(isTransientNetworkFault(new McpError(JsonRpcErrorCode.Timeout, 'timed out'))).toBe(true);
+  it('never retries a JSON SyntaxError — a complete but malformed body parses the same way again', () => {
+    expect(isTransientNetworkFault(new SyntaxError('Unexpected end of JSON input'))).toBe(false);
+  });
+
+  it('never retries a Timeout McpError — a spent budget ends the ladder instead of re-sending', () => {
+    expect(isTransientNetworkFault(new McpError(JsonRpcErrorCode.Timeout, 'timed out'))).toBe(
+      false,
+    );
   });
 
   it('never retries a RateLimited McpError — LOC blocks the IP for ~1 hour', () => {
     expect(isTransientNetworkFault(rateLimited('rate limited'))).toBe(false);
+  });
+
+  it('never retries a pacer shed — the caller waits out retryAfter, not this loop', async () => {
+    const pacer = createPacer({ name: 'test', minStartGapMs: 60_000 });
+    await pacer.run(async () => 'first');
+    const shed = await pacer.run(async () => 'second', { maxWaitMs: 0 }).catch((e: unknown) => e);
+    pacer.dispose();
+
+    expect(shed).toMatchObject({ data: { reason: 'pacer_shed' } });
+    expect(isTransientNetworkFault(shed)).toBe(false);
   });
 
   it('never retries a ServiceUnavailable McpError (5xx / HTML soft-block)', () => {
@@ -44,18 +61,24 @@ describe('isTransientNetworkFault', () => {
   });
 });
 
-describe('withRetry under locRetryOptions', () => {
+describe('retryWithinBudget', () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  const budget = (ctx = createMockContext()) => ({
+    ctx,
+    operation: 'loc-api-test-op',
+    deadlineAt: Date.now() + LOC_CALL_BUDGET_MS,
+    upstream: 'The Library of Congress',
   });
 
   it('fails a status-derived ServiceUnavailable on the first attempt, unlike the framework default', async () => {
     // The framework's default predicate retries 5xx; LOC's soft-block path must not re-hit the host.
     expect(defaultIsTransient(serviceUnavailable('unavailable'))).toBe(true);
     const fn = vi.fn().mockRejectedValue(serviceUnavailable('unavailable'));
-    const ctx = createMockContext();
 
-    await expect(withRetry(fn, locRetryOptions(ctx, 'test'))).rejects.toMatchObject({
+    await expect(retryWithinBudget(fn, budget())).rejects.toMatchObject({
       code: JsonRpcErrorCode.ServiceUnavailable,
     });
     expect(fn).toHaveBeenCalledTimes(1);
@@ -63,9 +86,8 @@ describe('withRetry under locRetryOptions', () => {
 
   it('fails a RateLimited error on the first attempt', async () => {
     const fn = vi.fn().mockRejectedValue(rateLimited('rate limited'));
-    const ctx = createMockContext();
 
-    await expect(withRetry(fn, locRetryOptions(ctx, 'test'))).rejects.toMatchObject({
+    await expect(retryWithinBudget(fn, budget())).rejects.toMatchObject({
       code: JsonRpcErrorCode.RateLimited,
     });
     expect(fn).toHaveBeenCalledTimes(1);
@@ -77,49 +99,89 @@ describe('withRetry under locRetryOptions', () => {
       .fn()
       .mockRejectedValueOnce(new TypeError('The socket connection was closed'))
       .mockResolvedValueOnce('ok');
-    const ctx = createMockContext();
 
-    const settled = withRetry(fn, locRetryOptions(ctx, 'test'));
+    const settled = retryWithinBudget(fn, budget());
     await vi.advanceTimersByTimeAsync(10_000);
 
     await expect(settled).resolves.toBe('ok');
     expect(fn).toHaveBeenCalledTimes(2);
   });
-});
 
-describe('timedFetch', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
-  it('resolves with the response when fetch completes within the ceiling', async () => {
-    const good = new Response('{"ok":true}', { status: 200 });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(good));
-    const ctx = createMockContext();
-    const res = await timedFetch('https://www.loc.gov/item/x', {}, ctx);
-    expect(res.status).toBe(200);
-  });
-
-  it('rejects with a Timeout error carrying no internal URL when the ceiling is exceeded', async () => {
+  it('hands each attempt the time left and a signal that fires when the budget ends', async () => {
     vi.useFakeTimers();
-    // Never settles until its signal aborts — mimics a hung connection so the timeout fires.
-    const fetchSpy = vi.fn(
-      (_url: string, init: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          init.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+    const seen: { remainingMs: number; signal: AbortSignal }[] = [];
+    const fn = vi.fn(
+      (attempt: { remainingMs: number; signal: AbortSignal }) =>
+        new Promise<never>((_resolve, reject) => {
+          seen.push(attempt);
+          attempt.signal.addEventListener('abort', () => reject(attempt.signal.reason));
         }),
     );
-    vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
 
-    const settled = timedFetch('https://www.loc.gov/secret-path', {}, ctx).catch((e: unknown) => e);
-    await vi.advanceTimersByTimeAsync(LOC_TIMEOUT_MS + 100);
+    const settled = retryWithinBudget(fn, budget()).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(LOC_CALL_BUDGET_MS + 10);
     const err = await settled;
 
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.remainingMs).toBe(LOC_CALL_BUDGET_MS);
+    expect(seen[0]?.signal.aborted).toBe(true);
+    expect(err).toBeInstanceOf(McpError);
     expect(err).toMatchObject({ code: JsonRpcErrorCode.Timeout });
-    // The framework's own fetchWithTimeout embeds origin+pathname; ours must not leak the host.
-    expect((err as Error).message).not.toContain('www.loc.gov');
-    expect(JSON.stringify((err as McpError).data ?? {})).not.toContain('www.loc.gov');
+    // The caller reads the upstream by name only: no operation label, URL, or host.
+    expect((err as McpError).message).toBe(
+      'The Library of Congress did not respond within the 50-second request budget.',
+    );
+    expect(JSON.stringify((err as McpError).data ?? {})).not.toContain('loc-api-test-op');
+  });
+
+  it('rethrows a caller cancel unchanged, never as a timeout', async () => {
+    const controller = new AbortController();
+    const ctx = createMockContext({ signal: controller.signal });
+    const fn = vi.fn(
+      ({ signal }: { signal: AbortSignal }) =>
+        new Promise<never>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason));
+        }),
+    );
+
+    const settled = retryWithinBudget(fn, budget(ctx)).catch((e: unknown) => e);
+    controller.abort(new DOMException('caller went away', 'AbortError'));
+    const err = await settled;
+
+    expect(err).toMatchObject({ name: 'AbortError', message: 'caller went away' });
+    expect(err).not.toBeInstanceOf(McpError);
+  });
+});
+
+describe('readText', () => {
+  it('returns the body when it completes before the signal fires', async () => {
+    const res = new Response('{"ok":true}', { status: 200 });
+    await expect(readText(res, new AbortController().signal)).resolves.toBe('{"ok":true}');
+  });
+
+  it('rejects with the signal reason when a body stalls after the headers', async () => {
+    const stalled = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"partial'));
+        },
+      }),
+      { status: 200 },
+    );
+    const controller = new AbortController();
+    const reason = new DOMException('budget spent', 'TimeoutError');
+
+    const settled = readText(stalled, controller.signal).catch((e: unknown) => e);
+    controller.abort(reason);
+
+    expect(await settled).toBe(reason);
+  });
+
+  it('rejects at once when the signal has already fired', async () => {
+    const controller = new AbortController();
+    controller.abort(new DOMException('budget spent', 'TimeoutError'));
+    await expect(
+      readText(new Response('{}', { status: 200 }), controller.signal),
+    ).rejects.toMatchObject({ name: 'TimeoutError' });
   });
 });

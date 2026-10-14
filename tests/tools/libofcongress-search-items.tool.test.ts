@@ -1,6 +1,6 @@
 /**
- * @fileoverview Tests for libofcongress_search tool.
- * @module tests/tools/libofcongress-search.tool.test
+ * @fileoverview Tests for libofcongress_search_items tool.
+ * @module tests/tools/libofcongress-search-items.tool.test
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
@@ -12,7 +12,7 @@ import {
   runToolContract,
 } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { locSearch } from '@/mcp-server/tools/definitions/libofcongress-search.tool.js';
+import { locSearchItems } from '@/mcp-server/tools/definitions/libofcongress-search-items.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 import { contentText, contractRecovery, structured, wireError } from '../helpers/tool-result.js';
 
@@ -48,7 +48,7 @@ function mockFetch(body: string, status = 200) {
   );
 }
 
-describe('locSearch', () => {
+describe('locSearchItems', () => {
   beforeEach(async () => {
     // Reset rate-limit state by re-initializing the service
     const storage = await createInMemoryStorage();
@@ -59,11 +59,16 @@ describe('locSearch', () => {
     vi.restoreAllMocks();
   });
 
+  it('registers as libofcongress_search_items with the title Search LOC Items (#49)', () => {
+    expect(locSearchItems.name).toBe('libofcongress_search_items');
+    expect(locSearchItems.title).toBe('Search LOC Items');
+  });
+
   it('returns items and pagination for a basic keyword search', async () => {
     vi.stubGlobal('fetch', mockFetch(makeSearchResponse()));
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'civil war photos' });
-    const result = await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'civil war photos' });
+    const result = await locSearchItems.handler(input, ctx);
 
     expect(result.items).toHaveLength(1);
     expect(result.items[0]!.id).toBe('2009632251');
@@ -84,9 +89,9 @@ describe('locSearch', () => {
         makeSearchResponse({ results: [], pagination: { total: 0, perpage: 25, pages: 0 } }),
       ),
     );
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'xyzzy_no_match_expected' });
-    const result = await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'xyzzy_no_match_expected' });
+    const result = await locSearchItems.handler(input, ctx);
 
     expect(result.items).toHaveLength(0);
     expect(result.total).toBe(0);
@@ -107,9 +112,9 @@ describe('locSearch', () => {
         makeSearchResponse({ results: [], pagination: { total: 1, perpage: 25, pages: 0 } }),
       ),
     );
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'zzzz_no_such_item_abcdef' });
-    const result = await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'zzzz_no_such_item_abcdef' });
+    const result = await locSearchItems.handler(input, ctx);
 
     expect(result.items).toHaveLength(0);
     expect(result.total).toBe(0);
@@ -120,9 +125,9 @@ describe('locSearch', () => {
   it('applies format filter — passes format slug in the URL', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'maps', format: 'map' });
-    await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'maps', format: 'map' });
+    await locSearchItems.handler(input, ctx);
 
     const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/maps/');
@@ -131,9 +136,9 @@ describe('locSearch', () => {
   it('applies date range filter in querystring', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'war', date_start: 1920, date_end: 1945 });
-    await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'war', date_start: 1920, date_end: 1945 });
+    await locSearchItems.handler(input, ctx);
 
     const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('dates=1920%2F1945');
@@ -142,13 +147,13 @@ describe('locSearch', () => {
   it('applies subject and location facets in querystring', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({
       query: 'photos',
       subject: 'World War, 1939-1945',
       location: 'oklahoma',
     });
-    await locSearch.handler(input, ctx);
+    await locSearchItems.handler(input, ctx);
 
     const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('fa=');
@@ -159,9 +164,9 @@ describe('locSearch', () => {
   it('strips empty subject/location strings (form-client payload)', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'photos', subject: '', location: '' });
-    await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'photos', subject: '', location: '' });
+    await locSearchItems.handler(input, ctx);
 
     const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).not.toContain('fa=');
@@ -170,12 +175,12 @@ describe('locSearch', () => {
   it('applies collection_slug — routes the search through the collection endpoint', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({
       query: 'correspondence',
       collection_slug: 'aaron-copland',
     });
-    await locSearch.handler(input, ctx);
+    await locSearchItems.handler(input, ctx);
 
     const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/collections/aaron-copland/');
@@ -185,9 +190,9 @@ describe('locSearch', () => {
   it('strips an empty collection_slug string (form-client payload)', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'photos', collection_slug: '   ' });
-    await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'photos', collection_slug: '   ' });
+    await locSearchItems.handler(input, ctx);
 
     const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/search/');
@@ -197,12 +202,12 @@ describe('locSearch', () => {
 
   it('echoes the applied collection scope in enrichment', async () => {
     vi.stubGlobal('fetch', mockFetch(makeSearchResponse()));
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({
       query: 'correspondence',
       collection_slug: '  aaron-copland  ',
     });
-    await locSearch.handler(input, ctx);
+    await locSearchItems.handler(input, ctx);
 
     expect(getEnrichment(ctx).effectiveCollectionSlug).toBe('aaron-copland');
   });
@@ -214,12 +219,12 @@ describe('locSearch', () => {
         makeSearchResponse({ results: [], pagination: { total: 0, perpage: 25, pages: 0 } }),
       ),
     );
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({
       query: 'zzzz_no_match',
       collection_slug: 'aaron-copland',
     });
-    await locSearch.handler(input, ctx);
+    await locSearchItems.handler(input, ctx);
 
     // A real collection with no matches must read differently from a bad slug, which 404s
     expect(String(getEnrichment(ctx).notice)).toContain('aaron-copland');
@@ -228,14 +233,14 @@ describe('locSearch', () => {
   it('rejects format + collection_slug with a typed incompatible_filters failure', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({
       query: 'letters',
       format: 'photo',
       collection_slug: 'aaron-copland',
     });
 
-    const err = await Promise.resolve(locSearch.handler(input, ctx)).catch((e: unknown) => e);
+    const err = await Promise.resolve(locSearchItems.handler(input, ctx)).catch((e: unknown) => e);
     expect(err).toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
       data: { reason: 'incompatible_filters' },
@@ -249,10 +254,12 @@ describe('locSearch', () => {
 
   it('keeps the internal request URL out of a collection_not_found failure', async () => {
     vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'letters', collection_slug: 'nope-xyz9' });
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'letters', collection_slug: 'nope-xyz9' });
 
-    const err = (await Promise.resolve(locSearch.handler(input, ctx)).catch((e: unknown) => e)) as {
+    const err = (await Promise.resolve(locSearchItems.handler(input, ctx)).catch(
+      (e: unknown) => e,
+    )) as {
       message: string;
       data?: Record<string, unknown>;
     };
@@ -264,10 +271,12 @@ describe('locSearch', () => {
 
   it('does not report a 404 as collection_not_found when no collection_slug was given', async () => {
     vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'letters' });
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'letters' });
 
-    const err = (await Promise.resolve(locSearch.handler(input, ctx)).catch((e: unknown) => e)) as {
+    const err = (await Promise.resolve(locSearchItems.handler(input, ctx)).catch(
+      (e: unknown) => e,
+    )) as {
       data?: Record<string, unknown>;
     };
     expect(err.data?.reason).not.toBe('collection_not_found');
@@ -282,22 +291,22 @@ describe('locSearch', () => {
         }),
       ),
     );
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'test', page: 1 });
-    const result = await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'test', page: 1 });
+    const result = await locSearchItems.handler(input, ctx);
     expect(result.has_next).toBe(true);
     expect(result.pages).toBe(2);
   });
 
   it('throws on HTML response (rate-limited proxy page)', async () => {
     vi.stubGlobal('fetch', mockFetch('<!DOCTYPE html><html><body>Error</body></html>', 200));
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'test' });
-    await expect(locSearch.handler(input, ctx)).rejects.toThrow();
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'test' });
+    await expect(locSearchItems.handler(input, ctx)).rejects.toThrow();
   });
 
   it('format() renders title, ID, and URL in output text', () => {
-    const output = locSearch.output.parse({
+    const output = locSearchItems.output.parse({
       items: [
         {
           id: 'loc.pnp.ppmsc.02404',
@@ -313,7 +322,7 @@ describe('locSearch', () => {
       pages: 1,
       has_next: false,
     });
-    const blocks = locSearch.format!(output);
+    const blocks = locSearchItems.format!(output);
     expect(blocks).toHaveLength(1);
     expect(blocks[0]!.type).toBe('text');
     const text = (blocks[0] as { type: 'text'; text: string }).text;
@@ -323,14 +332,14 @@ describe('locSearch', () => {
   });
 
   it('format() renders pagination summary even when items are empty', () => {
-    const output = locSearch.output.parse({
+    const output = locSearchItems.output.parse({
       items: [],
       total: 0,
       page: 1,
       pages: 0,
       has_next: false,
     });
-    const blocks = locSearch.format!(output);
+    const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     // Pagination summary line must always be present (notice is in the enrichment trailer, not here)
     expect(text).toContain('Total:');
@@ -338,7 +347,7 @@ describe('locSearch', () => {
   });
 
   it('format() renders sparse item — no date or format', () => {
-    const output = locSearch.output.parse({
+    const output = locSearchItems.output.parse({
       items: [
         {
           id: 'sparse-id',
@@ -352,7 +361,7 @@ describe('locSearch', () => {
       pages: 1,
       has_next: false,
     });
-    const blocks = locSearch.format!(output);
+    const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('sparse-id');
     expect(text).toContain('Sparse Item');
@@ -376,9 +385,9 @@ describe('locSearch', () => {
         }),
       ),
     );
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'test', page: 999 });
-    const result = await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'test', page: 999 });
+    const result = await locSearchItems.handler(input, ctx);
 
     // The served item is returned, not thrown away.
     expect(result.items).toHaveLength(1);
@@ -408,9 +417,9 @@ describe('locSearch', () => {
         }),
       ),
     );
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'civil rights', limit: 100, page: 250 });
-    const result = await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'civil rights', limit: 100, page: 250 });
+    const result = await locSearchItems.handler(input, ctx);
 
     expect(result.items).toHaveLength(1); // served item not discarded
     expect(result.total).toBe(1779931); // total reads from `of`, not the page count
@@ -423,9 +432,9 @@ describe('locSearch', () => {
 
   it('reports a generic out-of-range page (400 within the ceiling) without ceiling language', async () => {
     vi.stubGlobal('fetch', mockFetch('', 400));
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'niche query', limit: 25, page: 8 });
-    const result = await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'niche query', limit: 25, page: 8 });
+    const result = await locSearchItems.handler(input, ctx);
 
     expect(result.items).toHaveLength(0);
     const notice = String(getEnrichment(ctx).notice);
@@ -434,13 +443,13 @@ describe('locSearch', () => {
   });
 
   it('rejects empty query at schema level', () => {
-    expect(() => locSearch.input.parse({ query: '' })).toThrow();
+    expect(() => locSearchItems.input.parse({ query: '' })).toThrow();
   });
 
   it('format() renders a get_item-eligible line for is_item:true results (#31 parity)', () => {
     // is_item:true has no content[] representation before #31 — a text-only client could not tell a
     // get_item target from a non-item result. Both boolean states must render.
-    const output = locSearch.output.parse({
+    const output = locSearchItems.output.parse({
       items: [
         {
           id: '2009632251',
@@ -454,7 +463,7 @@ describe('locSearch', () => {
       pages: 1,
       has_next: false,
     });
-    const blocks = locSearch.format!(output);
+    const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('libofcongress_get_item');
     expect(text).not.toContain('Non-item result');
@@ -463,11 +472,11 @@ describe('locSearch', () => {
   it('query with injection chars is handled without URL structure breakage', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({
       query: "'; DROP TABLE items; SELECT * FROM items WHERE '1'='1",
     });
-    await locSearch.handler(input, ctx);
+    await locSearchItems.handler(input, ctx);
 
     const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     // URL must remain parseable and not contain raw SQL injection
@@ -477,19 +486,19 @@ describe('locSearch', () => {
   });
 
   it('rejects limit=0 at schema level (below min)', () => {
-    expect(() => locSearch.input.parse({ query: 'test', limit: 0 })).toThrow();
+    expect(() => locSearchItems.input.parse({ query: 'test', limit: 0 })).toThrow();
   });
 
   it('rejects limit=101 at schema level (above max)', () => {
-    expect(() => locSearch.input.parse({ query: 'test', limit: 101 })).toThrow();
+    expect(() => locSearchItems.input.parse({ query: 'test', limit: 101 })).toThrow();
   });
 
   it('rejects page=0 at schema level (below min)', () => {
-    expect(() => locSearch.input.parse({ query: 'test', page: 0 })).toThrow();
+    expect(() => locSearchItems.input.parse({ query: 'test', page: 0 })).toThrow();
   });
 
   it('format() includes description in output text when present', () => {
-    const output = locSearch.output.parse({
+    const output = locSearchItems.output.parse({
       items: [
         {
           id: 'desc-item',
@@ -506,13 +515,13 @@ describe('locSearch', () => {
       pages: 1,
       has_next: false,
     });
-    const blocks = locSearch.format!(output);
+    const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('photograph of the subject');
   });
 
   it('format() includes format label in output when present', () => {
-    const output = locSearch.output.parse({
+    const output = locSearchItems.output.parse({
       items: [
         {
           id: 'fmt-item',
@@ -527,7 +536,7 @@ describe('locSearch', () => {
       pages: 1,
       has_next: false,
     });
-    const blocks = locSearch.format!(output);
+    const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('map');
   });
@@ -555,9 +564,9 @@ describe('locSearch', () => {
         }),
       ),
     );
-    const ctx = createMockContext({ errors: locSearch.errors });
-    const input = locSearch.input.parse({ query: 'civil war' });
-    const result = await locSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: locSearchItems.errors });
+    const input = locSearchItems.input.parse({ query: 'civil war' });
+    const result = await locSearchItems.handler(input, ctx);
     expect(result.items[0]!.is_item).toBe(false);
     expect(result.items[0]!.id).toBe('collections/civil-war/about-this-collection');
     expect(result.items[1]!.is_item).toBe(true);
@@ -565,7 +574,7 @@ describe('locSearch', () => {
   });
 
   it('format() flags collection landing pages as non-get_item targets', () => {
-    const output = locSearch.output.parse({
+    const output = locSearchItems.output.parse({
       items: [
         {
           id: 'collections/civil-war/about-this-collection',
@@ -580,7 +589,7 @@ describe('locSearch', () => {
       pages: 1,
       has_next: false,
     });
-    const blocks = locSearch.format!(output);
+    const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
     expect(text).toContain('Non-item result');
     expect(text).toContain('not a libofcongress_get_item target');
@@ -589,7 +598,7 @@ describe('locSearch', () => {
   it('pins the retrieval-ceiling notice on both surfaces for a 400 past ~100k items (#33)', async () => {
     const fetchSpy = mockFetch('', 400);
     vi.stubGlobal('fetch', fetchSpy);
-    const result = await runToolContract(locSearch, {
+    const result = await runToolContract(locSearchItems, {
       query: 'civil rights',
       limit: 100,
       page: 1500,
@@ -607,7 +616,7 @@ describe('locSearch', () => {
 
   it('keeps a 520 on page > 1 on the out-of-range path', async () => {
     vi.stubGlobal('fetch', mockFetch('', 520));
-    const result = await runToolContract(locSearch, { query: 'niche query', page: 3 });
+    const result = await runToolContract(locSearchItems, { query: 'niche query', page: 3 });
 
     expect(result.isError).toBeFalsy();
     const sc = structured(result);
@@ -638,7 +647,7 @@ describe('locSearch', () => {
     async ({ args, mentions }) => {
       const fetchSpy = mockFetch(JSON.stringify({ exception: 'not found' }), 404);
       vi.stubGlobal('fetch', fetchSpy);
-      const result = await runToolContract(locSearch, args);
+      const result = await runToolContract(locSearchItems, args);
 
       expect(result.isError).toBeFalsy();
       const sc = structured(result);
@@ -663,10 +672,13 @@ describe('locSearch', () => {
   it('keeps collection_not_found for a 404 on page 1 and forwards its recovery on both surfaces (#40, #44)', async () => {
     vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
     const slug = 'zzz-not-a-real-collection-slug-123';
-    const result = await runToolContract(locSearch, { query: 'letters', collection_slug: slug });
+    const result = await runToolContract(locSearchItems, {
+      query: 'letters',
+      collection_slug: slug,
+    });
 
     const error = wireError(result);
-    const hint = contractRecovery(locSearch, 'collection_not_found');
+    const hint = contractRecovery(locSearchItems, 'collection_not_found');
     expect(error).toMatchObject({
       code: JsonRpcErrorCode.NotFound,
       data: {
@@ -683,14 +695,14 @@ describe('locSearch', () => {
   it('forwards incompatible_filters recovery on both surfaces without repeating it in the message (#44)', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
-    const result = await runToolContract(locSearch, {
+    const result = await runToolContract(locSearchItems, {
       query: 'letters',
       format: 'photo',
       collection_slug: 'aaron-copland',
     });
 
     const error = wireError(result);
-    const hint = contractRecovery(locSearch, 'incompatible_filters');
+    const hint = contractRecovery(locSearchItems, 'incompatible_filters');
     expect(error).toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
       data: {
@@ -710,14 +722,14 @@ describe('locSearch', () => {
   it('rejects an inverted date range as invalid_date_range, keeping its data and forwarding recovery (#45)', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
-    const result = await runToolContract(locSearch, {
+    const result = await runToolContract(locSearchItems, {
       query: 'test',
       date_start: 1950,
       date_end: 1900,
     });
 
     const error = wireError(result);
-    const hint = contractRecovery(locSearch, 'invalid_date_range');
+    const hint = contractRecovery(locSearchItems, 'invalid_date_range');
     expect(error).toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
       data: {
@@ -741,7 +753,7 @@ describe('locSearch', () => {
     const fetchSpy = vi.fn().mockResolvedValue(new Response('Rate limited', { status: 429 }));
     vi.stubGlobal('fetch', fetchSpy);
 
-    const fresh = await runToolContract(locSearch, { query: 'anything' });
+    const fresh = await runToolContract(locSearchItems, { query: 'anything' });
     const freshError = wireError(fresh);
     expect(freshError).toMatchObject({
       code: JsonRpcErrorCode.RateLimited,
@@ -752,7 +764,7 @@ describe('locSearch', () => {
     expect(contentText(fresh)).toContain(`Recovery: ${freshHint}`);
 
     // The block is live now: the next call fails before any request and says how long is left.
-    const blocked = await runToolContract(locSearch, { query: 'anything' });
+    const blocked = await runToolContract(locSearchItems, { query: 'anything' });
     const blockedError = wireError(blocked);
     expect(blockedError).toMatchObject({
       code: JsonRpcErrorCode.RateLimited,

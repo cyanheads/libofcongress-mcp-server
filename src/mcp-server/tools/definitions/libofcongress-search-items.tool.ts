@@ -1,14 +1,14 @@
 /**
- * @fileoverview libofcongress_search tool — search Library of Congress digital collections.
- * @module mcp-server/tools/definitions/libofcongress-search.tool
+ * @fileoverview libofcongress_search_items tool — search Library of Congress digital collections.
+ * @module mcp-server/tools/definitions/libofcongress-search-items.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
-export const locSearch = tool('libofcongress_search', {
-  title: 'Search LOC Collections',
+export const locSearchItems = tool('libofcongress_search_items', {
+  title: 'Search LOC Items',
   description:
     'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location, or scope the search to a single curated collection with collection_slug. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Each result carries is_item: pass the id of a result where is_item is true to libofcongress_get_item for full metadata; results where is_item is false are non-item resources (collections, exhibit and research-guide pages, newspaper-page results) with no item record — open their url instead. Use libofcongress_search_subjects first to find the exact LCSH heading spelling before applying a subject filter.',
   annotations: { readOnlyHint: true, openWorldHint: true },
@@ -163,6 +163,21 @@ export const locSearch = tool('libofcongress_search', {
       recovery:
         'Wait approximately 1 hour before retrying. Reduce request frequency to stay under 20 req/min.',
     },
+    {
+      reason: 'server_busy',
+      code: JsonRpcErrorCode.RateLimited,
+      retryable: true,
+      when: "More Library of Congress requests are queued on this server than can start within this call's time budget.",
+      recovery:
+        'Wait the number of seconds given in retryAfter, then retry. Send calls to this server one at a time rather than in parallel.',
+    },
+    {
+      reason: 'request_timed_out',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'The Library of Congress did not respond within the 50-second request budget.',
+      recovery:
+        'Narrow the search so it returns faster: add a format, subject, or location filter, or a tighter date_start/date_end range, then retry. If a narrow search also times out, retry in a few minutes.',
+    },
   ],
 
   async handler(input, ctx) {
@@ -170,7 +185,7 @@ export const locSearch = tool('libofcongress_search', {
     // as absent, matching subject/location.
     const collectionSlug = input.collection_slug?.trim() || undefined;
 
-    ctx.log.info('libofcongress_search', {
+    ctx.log.info('libofcongress_search_items', {
       query: input.query,
       format: input.format,
       collectionSlug,
@@ -226,10 +241,18 @@ export const locSearch = tool('libofcongress_search', {
         ctx,
       );
     } catch (err) {
+      // A shed is this server's own queue, not LOC's block — checked first, since it is also
+      // RateLimited. Its data carries the seconds until a slot opens, in the hint and retryAfter.
+      if (err instanceof McpError && err.data?.reason === 'pacer_shed') {
+        throw ctx.fail('server_busy', err.message, { ...err.data });
+      }
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
         // The service's data carries the time left on the block; it overrides the contract's
         // static "about an hour" hint, which the framework fills only when no hint is set.
         throw ctx.fail('rate_limit_exceeded', err.message, { ...err.data });
+      }
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.Timeout) {
+        throw ctx.fail('request_timed_out', err.message);
       }
       // LOC 404s an unrecognized collection slug. The service reads a 404 as not-found only on
       // page 1 (a later page's 404 is out of range), so this fires for a bad slug on page 1.

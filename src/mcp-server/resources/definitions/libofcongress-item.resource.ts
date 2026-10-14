@@ -17,13 +17,13 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
   name: 'loc-item',
   title: 'LOC Item',
   description:
-    'LOC digital item metadata by ID. Returns the same full record as libofcongress_get_item. Item IDs with internal slashes (newspaper pages) are written with their slashes intact: libofcongress://item/sn95047246/1935-09-05/ed-1. Use libofcongress_search to discover item IDs first.',
+    'LOC digital item metadata by ID. Returns the same full record as libofcongress_get_item. Item IDs with internal slashes (newspaper pages) are written with their slashes intact: libofcongress://item/sn95047246/1935-09-05/ed-1. Use libofcongress_search_items to discover item IDs first.',
   mimeType: 'application/json',
   params: z.object({
     item_id: z
       .string()
       .describe(
-        'LOC item ID (e.g., "2005691065" or "2009632251"). Same ID as in libofcongress_search result "id" field. Multi-segment newspaper IDs ("sn95047246/1935-09-05/ed-1") are supported — write the slashes literally rather than percent-encoding them.',
+        'LOC item ID (e.g., "2005691065" or "2009632251"). Same ID as in libofcongress_search_items result "id" field. Multi-segment newspaper IDs ("sn95047246/1935-09-05/ed-1") are supported — write the slashes literally rather than percent-encoding them.',
       ),
   }),
 
@@ -33,7 +33,7 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
       code: JsonRpcErrorCode.NotFound,
       when: 'No item exists for the given ID.',
       recovery:
-        'Verify the ID from libofcongress_search results. IDs are not guessable — use libofcongress_search to find a valid ID.',
+        'Verify the ID from libofcongress_search_items results. IDs are not guessable — use libofcongress_search_items to find a valid ID.',
     },
     {
       reason: 'rate_limit_exceeded',
@@ -42,6 +42,20 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
       when: 'LOC API rate limit exceeded; requests are blocked for approximately 1 hour.',
       recovery:
         'Wait approximately 1 hour before retrying. Reduce request frequency to stay under 20 req/min.',
+    },
+    {
+      reason: 'server_busy',
+      code: JsonRpcErrorCode.RateLimited,
+      retryable: true,
+      when: "More Library of Congress requests are queued on this server than can start within this read's time budget.",
+      recovery:
+        'Wait the number of seconds given in retryAfter, then retry. Send requests to this server one at a time rather than in parallel.',
+    },
+    {
+      reason: 'request_timed_out',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'The Library of Congress did not respond within the 50-second request budget.',
+      recovery: 'Retry in a few minutes; the Library of Congress is responding slowly.',
     },
   ],
 
@@ -59,10 +73,18 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
         throw ctx.fail('item_not_found', `No LOC item has the ID "${itemId}".`, { itemId });
       }
+      // A shed is this server's own queue, not LOC's block — checked first, since it is also
+      // RateLimited. Its data carries the seconds until a slot opens, in the hint and retryAfter.
+      if (err instanceof McpError && err.data?.reason === 'pacer_shed') {
+        throw ctx.fail('server_busy', err.message, { ...err.data });
+      }
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
         // The service's data carries the time left on the block; it overrides the contract's
         // static "about an hour" hint, which the framework fills only when no hint is set.
         throw ctx.fail('rate_limit_exceeded', err.message, { ...err.data });
+      }
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.Timeout) {
+        throw ctx.fail('request_timed_out', err.message);
       }
       throw err;
     }

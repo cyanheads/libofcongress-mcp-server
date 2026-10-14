@@ -96,6 +96,20 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       recovery:
         'Wait approximately 1 hour before retrying. Reduce request frequency to stay under 20 req/min.',
     },
+    {
+      reason: 'server_busy',
+      code: JsonRpcErrorCode.RateLimited,
+      retryable: true,
+      when: "More Library of Congress requests are queued on this server than can start within this call's time budget.",
+      recovery:
+        'Wait the number of seconds given in retryAfter, then retry. Send calls to this server one at a time rather than in parallel.',
+    },
+    {
+      reason: 'request_timed_out',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'The Library of Congress did not respond within the 50-second request budget.',
+      recovery: 'Retry in a few minutes; the Library of Congress is responding slowly.',
+    },
   ],
 
   async handler(input, ctx) {
@@ -119,10 +133,18 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
           pageUrl: input.page_url,
         });
       }
+      // A shed is this server's own queue, not LOC's block — checked first, since it is also
+      // RateLimited. Its data carries the seconds until a slot opens, in the hint and retryAfter.
+      if (err instanceof McpError && err.data?.reason === 'pacer_shed') {
+        throw ctx.fail('server_busy', err.message, { ...err.data });
+      }
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RateLimited) {
         // The service's data carries the time left on the block; it overrides the contract's
         // static "about an hour" hint, which the framework fills only when no hint is set.
         throw ctx.fail('rate_limit_exceeded', err.message, { ...err.data });
+      }
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.Timeout) {
+        throw ctx.fail('request_timed_out', err.message);
       }
       throw err;
     }

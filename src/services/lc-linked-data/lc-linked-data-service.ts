@@ -7,9 +7,8 @@ import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
-import { withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
-import { locRetryOptions, timedFetch } from '@/services/http.js';
+import { LOC_CALL_BUDGET_MS, readText, retryWithinBudget } from '@/services/http.js';
 import type { LcSubjectHeading } from './types.js';
 
 const LC_LINKED_DATA_BASE = 'https://id.loc.gov';
@@ -70,15 +69,14 @@ export class LcLinkedDataService {
     const url = `${LC_LINKED_DATA_BASE}/suggest/?${qs}`;
     ctx.log.debug('LC Linked Data subject suggest', { url });
 
-    // Retry the transient-network class only, with a timeout ceiling. The non-OK and HTML throws
+    // Retry raw network faults only, inside the call's one time budget. The non-OK and HTML throws
     // below are ServiceUnavailable, which the predicate treats as non-transient — they fail fast.
-    const data = await withRetry(
-      async () => {
-        const response = await timedFetch(
-          url,
-          { headers: { 'User-Agent': this.userAgent, Accept: 'application/json' } },
-          ctx,
-        );
+    const data = await retryWithinBudget(
+      async ({ signal }) => {
+        const response = await fetch(url, {
+          headers: { 'User-Agent': this.userAgent, Accept: 'application/json' },
+          signal,
+        });
         if (!response.ok) {
           // The request `url` carries the caller's query in its string — withhold it from error
           // data (it stays in the debug log above), matching the loc-api service's no-internal-URL
@@ -87,13 +85,18 @@ export class LcLinkedDataService {
             status: response.status,
           });
         }
-        const text = await response.text();
+        const text = await readText(response, signal);
         if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
           throw serviceUnavailable('LC Linked Data returned HTML — temporarily unavailable.');
         }
         return JSON.parse(text) as SuggestResponse;
       },
-      locRetryOptions(ctx, 'lc-linked-data-suggest'),
+      {
+        ctx,
+        operation: 'lc-linked-data-suggest',
+        deadlineAt: Date.now() + LOC_CALL_BUDGET_MS,
+        upstream: 'The Library of Congress subject heading service',
+      },
     );
 
     if (!Array.isArray(data) || data.length < 4) {
