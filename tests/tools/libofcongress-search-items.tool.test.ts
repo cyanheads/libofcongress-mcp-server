@@ -13,7 +13,13 @@ import {
 } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locSearchItems } from '@/mcp-server/tools/definitions/libofcongress-search-items.tool.js';
+import { type DateBound, resolveDateRange, yearBound } from '@/services/loc-api/date-range.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
+import { subjectFacetTerms } from '@/services/loc-api/subject-terms.js';
+import { COBB_PHOTO_SEARCH } from '../fixtures/loc-items.js';
+import { POSTERS_PHOTOS_SEARCH } from '../fixtures/loc-subjects.js';
+import { JAZZ_ENTITY_ROWS } from '../fixtures/loc-text.js';
+import { serveByHost } from '../helpers/loc-fetch.js';
 import { contentText, contractRecovery, structured, wireError } from '../helpers/tool-result.js';
 
 /** Minimal mock search response from the LOC JSON API */
@@ -38,6 +44,13 @@ function makeSearchResponse(overrides: { results?: object[]; pagination?: object
   });
 }
 
+/** The `dates` value resolveDateRange gives for a range the test expects to be valid. */
+function resolvedDates(start: DateBound | undefined, end: DateBound | undefined) {
+  const range = resolveDateRange(start, end);
+  if (!range.ok) throw new Error(range.message);
+  return range.dates;
+}
+
 /** Return a fetch stub that resolves a single response body */
 function mockFetch(body: string, status = 200) {
   return vi.fn().mockResolvedValue(
@@ -48,8 +61,74 @@ function mockFetch(body: string, status = 200) {
   );
 }
 
+describe('locSearchItems upstream text (#65)', () => {
+  beforeEach(async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+    initLocApiService(config, await createInMemoryStorage());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('decodes the captured descriptions on both surfaces', async () => {
+    serveByHost({
+      'www.loc.gov': { results: JAZZ_ENTITY_ROWS, pagination: { of: 3, perpage: 25, pages: 1 } },
+    });
+    const result = await runToolContract(locSearchItems, { query: 'jazz' });
+    const items = structured(result).items as Array<{ description: string }>;
+    expect(items[1]!.description).toContain('entitled “I Hate Jazz” and');
+    expect(contentText(result)).toContain('entitled “I Hate Jazz” and');
+    expect(contentText(result)).toContain('the birthday of Stèphane Grappelli');
+    expect(JSON.stringify(result)).not.toMatch(/&(?:[A-Za-z][A-Za-z0-9]*|#\d+|#[xX][0-9A-Fa-f]+);/);
+  });
+
+  it('escapes markup in catalog text in content[] only, and keeps identifiers and URLs as sent', async () => {
+    serveByHost({
+      'www.loc.gov': {
+        results: [
+          {
+            id: 'https://www.loc.gov/item/2009632251/',
+            title: '&lt;b&gt;Bold&lt;/b&gt; title, 1866-<1899>',
+            date: 'c1915 <Feb.>',
+            description: ['1. Line one\r\nline two &amp;lt;i&amp;gt;'],
+            original_format: ['photo_print'],
+            url: 'https://www.loc.gov/item/2009632251/',
+          },
+        ],
+        pagination: { of: 1, perpage: 25, pages: 1 },
+        facets: [{ type: 'subject', filters: [{ value: 'arts &lt;b&gt;', count: 2 }] }],
+      },
+    });
+    const result = await runToolContract(locSearchItems, { query: 'bold', include_facets: true });
+    expect(structured(result)).toMatchObject({
+      items: [
+        {
+          id: '2009632251',
+          title: '<b>Bold</b> title, 1866-<1899>',
+          date: 'c1915 <Feb.>',
+          description: '1. Line one\r\nline two &lt;i&gt;',
+          format: 'photo_print',
+        },
+      ],
+      subject_facets: [{ value: 'arts <b>', count: 2 }],
+    });
+    const text = contentText(result);
+    expect(text).toContain('\n## \\<b>Bold\\</b> title, 1866-<1899>\n');
+    expect(text).toContain('**Date:** c1915 \\<Feb.>');
+    expect(text).toContain('**Format:** photo_print');
+    expect(text).toContain('\n1\\. Line one line two \\&lt;i\\&gt;\n');
+    expect(text).toContain('**Top subjects:** arts \\<b> (2)');
+    expect(text).toContain('**ID:** 2009632251');
+    expect(text).toContain('**URL:** https://www.loc.gov/item/2009632251/');
+  });
+});
+
 describe('locSearchItems', () => {
   beforeEach(async () => {
+    // A test that forgets its stub fails here instead of reaching LOC, which blocks for an hour.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('unmocked fetch')));
     // Reset rate-limit state by re-initializing the service
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
@@ -57,6 +136,7 @@ describe('locSearchItems', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('registers as libofcongress_search_items with the title Search LOC Items (#49)', () => {
@@ -144,7 +224,57 @@ describe('locSearchItems', () => {
     expect(calledUrl).toContain('dates=1920%2F1945');
   });
 
-  it('applies subject and location facets in querystring', async () => {
+  // The open-side fills are tabled in date-range.test.ts; these prove each lone bound reaches it.
+  it('sends a lone date_end as the range resolveDateRange gives it (#60)', async () => {
+    const fetchSpy = mockFetch(makeSearchResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await runToolContract(locSearchItems, { query: 'map', date_end: 1550 });
+
+    expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('dates')).toBe(
+      resolvedDates(undefined, yearBound(1550)),
+    );
+  });
+
+  it('sends a lone date_start as the range resolveDateRange gives it (#60)', async () => {
+    const fetchSpy = mockFetch(makeSearchResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await runToolContract(locSearchItems, { query: 'map', date_start: 1900 });
+
+    expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('dates')).toBe(
+      resolvedDates(yearBound(1900), undefined),
+    );
+  });
+
+  it('rejects a lone date_start after the current year as invalid_date_range before any request (#60)', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const currentYear = new Date().getFullYear();
+
+    const result = await runToolContract(locSearchItems, {
+      query: 'map',
+      date_start: currentYear + 4,
+    });
+
+    const error = wireError(result);
+    const hint = contractRecovery(locSearchItems, 'invalid_date_range');
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.ValidationError,
+      data: {
+        reason: 'invalid_date_range',
+        field: 'date_start',
+        date_start: currentYear + 4,
+        current_year: currentYear,
+        recovery: { hint },
+      },
+    });
+    expect(error.message).toContain(String(currentYear));
+    expect(contentText(result)).toContain(`Recovery: ${hint}`);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('applies subject and location facets in querystring, the dated heading as its facet term (#57)', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
     const ctx = createMockContext({ errors: locSearchItems.errors });
@@ -155,10 +285,9 @@ describe('locSearchItems', () => {
     });
     await locSearchItems.handler(input, ctx);
 
-    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
-    expect(calledUrl).toContain('fa=');
-    expect(calledUrl).toContain('subject%3AWorld');
-    expect(calledUrl).toContain('location%3Aoklahoma');
+    expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('fa')).toBe(
+      'subject:world war|location:oklahoma',
+    );
   });
 
   it('strips empty subject/location strings (form-client payload)', async () => {
@@ -321,6 +450,8 @@ describe('locSearchItems', () => {
       page: 1,
       pages: 1,
       has_next: false,
+      subject_facets: [],
+      location_facets: [],
     });
     const blocks = locSearchItems.format!(output);
     expect(blocks).toHaveLength(1);
@@ -338,6 +469,8 @@ describe('locSearchItems', () => {
       page: 1,
       pages: 0,
       has_next: false,
+      subject_facets: [],
+      location_facets: [],
     });
     const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
@@ -360,6 +493,8 @@ describe('locSearchItems', () => {
       page: 1,
       pages: 1,
       has_next: false,
+      subject_facets: [],
+      location_facets: [],
     });
     const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
@@ -462,6 +597,8 @@ describe('locSearchItems', () => {
       page: 1,
       pages: 1,
       has_next: false,
+      subject_facets: [],
+      location_facets: [],
     });
     const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
@@ -489,8 +626,105 @@ describe('locSearchItems', () => {
     expect(() => locSearchItems.input.parse({ query: 'test', limit: 0 })).toThrow();
   });
 
-  it('rejects limit=101 at schema level (above max)', () => {
-    expect(() => locSearchItems.input.parse({ query: 'test', limit: 101 })).toThrow();
+  it('accepts limit up to 1000 and rejects limit=1001 at schema level (hard ceiling)', () => {
+    expect(locSearchItems.input.parse({ query: 'test', limit: 101 }).limit).toBe(101);
+    expect(locSearchItems.input.parse({ query: 'test', limit: 1000 }).limit).toBe(1000);
+    expect(() => locSearchItems.input.parse({ query: 'test', limit: 1001 })).toThrow();
+  });
+
+  describe('limit above the per-call cap of 100', () => {
+    /** A 100-result page as LOC answers `c=100`, with `perpage` echoing the sent page size. */
+    const fullPage = (pagination: object) =>
+      makeSearchResponse({
+        results: Array.from({ length: 100 }, (_, i) => ({
+          id: `https://www.loc.gov/item/clamp${i}/`,
+          title: `Result ${i}`,
+          url: `https://www.loc.gov/item/clamp${i}/`,
+        })),
+        pagination,
+      });
+
+    it('sends c=100 and discloses the clamp with effectiveLimit and the notice on both surfaces', async () => {
+      const fetchSpy = mockFetch(fullPage({ of: 5000, perpage: 100 }));
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'civil war',
+        limit: 500,
+        page: 2,
+      });
+
+      const calledUrl = new URL(fetchSpy.mock.calls[0]![0] as string);
+      expect(calledUrl.searchParams.get('c')).toBe('100');
+      expect(calledUrl.searchParams.get('sp')).toBe('2');
+      const sc = structured(result);
+      expect(sc).toMatchObject({ page: 2, pages: 50, has_next: true, effectiveLimit: 100 });
+      expect(sc.items).toHaveLength(100);
+      expect(sc.notice).toBe(
+        'Requested limit 500 exceeds the per-call cap of 100; this page holds up to 100 results, and page numbers count 100-result pages. Request page 3 with limit 100 for the next results.',
+      );
+      expect(contentText(result)).toContain(String(sc.notice));
+    });
+
+    it('leaves a limit at the cap unchanged — no effectiveLimit, no notice', async () => {
+      const fetchSpy = mockFetch(fullPage({ of: 5000, perpage: 100 }));
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const sc = structured(
+        await runToolContract(locSearchItems, { query: 'civil war', limit: 100 }),
+      );
+
+      expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('c')).toBe('100');
+      expect(sc).not.toHaveProperty('effectiveLimit');
+      expect(sc).not.toHaveProperty('notice');
+    });
+
+    it('combines the clamp notice with the retrieval-ceiling notice, and stops pages at page 1000', async () => {
+      vi.stubGlobal('fetch', mockFetch(fullPage({ of: 1779931, total: 17800, perpage: 100 })));
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'civil rights',
+        limit: 1000,
+        page: 1000,
+      });
+
+      const sc = structured(result);
+      expect(sc).toMatchObject({ page: 1000, pages: 1000, has_next: false, effectiveLimit: 100 });
+      const notice = String(sc.notice);
+      expect(notice).toMatch(/^Requested limit 1000 exceeds the per-call cap of 100;/);
+      expect(notice).not.toContain('Request page 1001');
+      expect(notice).toContain('LOC pages through only the first ~100,000');
+      expect(contentText(result)).toContain(notice);
+    });
+
+    it('combines the clamp notice with the ceiling notice for page 1001, which LOC answers 400', async () => {
+      const fetchSpy = mockFetch('', 400);
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const sc = structured(
+        await runToolContract(locSearchItems, { query: 'civil rights', limit: 250, page: 1001 }),
+      );
+
+      expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('c')).toBe('100');
+      expect(sc).toMatchObject({ items: [], pages: 0, has_next: false, effectiveLimit: 100 });
+      const notice = String(sc.notice);
+      expect(notice).toContain('Requested limit 250 exceeds the per-call cap of 100');
+      expect(notice).toContain("Page 1001 is past LOC's ~100,000-item retrieval ceiling");
+    });
+
+    it('combines the clamp notice with the empty-result notice', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch(makeSearchResponse({ results: [], pagination: { of: 0, perpage: 100 } })),
+      );
+
+      const result = await runToolContract(locSearchItems, { query: 'zyzzyva', limit: 200 });
+
+      const notice = String(structured(result).notice);
+      expect(notice).toContain('Requested limit 200 exceeds the per-call cap of 100');
+      expect(notice).toContain('No items matched "zyzzyva"');
+      expect(contentText(result)).toContain(notice);
+    });
   });
 
   it('rejects page=0 at schema level (below min)', () => {
@@ -514,6 +748,8 @@ describe('locSearchItems', () => {
       page: 1,
       pages: 1,
       has_next: false,
+      subject_facets: [],
+      location_facets: [],
     });
     const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
@@ -535,6 +771,8 @@ describe('locSearchItems', () => {
       page: 1,
       pages: 1,
       has_next: false,
+      subject_facets: [],
+      location_facets: [],
     });
     const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
@@ -588,6 +826,8 @@ describe('locSearchItems', () => {
       page: 1,
       pages: 1,
       has_next: false,
+      subject_facets: [],
+      location_facets: [],
     });
     const blocks = locSearchItems.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
@@ -746,6 +986,216 @@ describe('locSearchItems', () => {
     expect(text).toContain(`Recovery: ${hint}`);
     expect(text).toContain('reason invalid_date_range');
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns a row's cataloged item.date, falling back to the top-level date, on both surfaces (#62)", async () => {
+    const fetchSpy = vi.fn(async (url: string | URL | Request) => {
+      if (new URL(String(url)).hostname !== 'www.loc.gov') throw new Error('unmocked fetch');
+      return new Response(JSON.stringify(COBB_PHOTO_SEARCH), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await runToolContract(locSearchItems, {
+      query: 'cobb detroit baseball card',
+      format: 'photo',
+      limit: 10,
+    });
+
+    const items = structured(result).items as Array<{ id: string; date?: string }>;
+    expect(items.map((i) => i.date)).toEqual(['1909-1911.', 'c1915 Feb. 19.', '2016-02-11']);
+    const text = contentText(result);
+    expect(text).toContain('**Date:** c1915 Feb. 19.');
+    expect(text).not.toContain('1915-01-01');
+    expect(text).not.toContain('1909-01-01');
+  });
+
+  it.each([
+    ['a number', 1915],
+    ['an empty string', ''],
+    ['null', null],
+    ['an object', { start: '1915' }],
+  ])(
+    "keeps the top-level date when a row's item.date is %s, without failing the page",
+    async (_name, itemDate) => {
+      const [first, second, third] = COBB_PHOTO_SEARCH.results;
+      const body = {
+        ...COBB_PHOTO_SEARCH,
+        results: [first, { ...second, item: { date: itemDate } }, third],
+      };
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string | URL | Request) => {
+          if (new URL(String(url)).hostname !== 'www.loc.gov') throw new Error('unmocked fetch');
+          return new Response(JSON.stringify(body), { status: 200 });
+        }),
+      );
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'cobb detroit baseball card',
+        format: 'photo',
+        limit: 10,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const items = structured(result).items as Array<{ date?: string }>;
+      expect(items.map((i) => i.date)).toEqual(['1909-1911.', '1915-01-01', '2016-02-11']);
+      expect(contentText(result)).toContain('**Date:** 1915-01-01');
+    },
+  );
+
+  describe('subject headings and facets (#57)', () => {
+    const POSTERS_BODY = JSON.stringify(POSTERS_PHOTOS_SEARCH);
+    const facetValues = (type: string) =>
+      POSTERS_PHOTOS_SEARCH.facets
+        .find((f) => f.type === type)!
+        .filters.map((f) => ({ value: f.value, count: f.count }));
+
+    // The heading-to-terms split is tabled in subject-terms.test.ts; this proves its terms reach
+    // the request, the echo, and the content[] trailer.
+    it('sends a subdivided heading as its ANDed facet terms and echoes them on both surfaces', async () => {
+      const fetchSpy = mockFetch(POSTERS_BODY);
+      vi.stubGlobal('fetch', fetchSpy);
+      const subject = 'United States--History--Civil War, 1861-1865';
+      const terms = subjectFacetTerms(subject);
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'posters',
+        format: 'photo',
+        subject,
+      });
+
+      expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('fa')).toBe(
+        terms.map((term) => `subject:${term}`).join('|'),
+      );
+      expect(structured(result).effectiveSubjectTerms).toEqual(terms);
+      expect(contentText(result)).toContain(`**Subject terms:** ${terms.join(' + ')}`);
+    });
+
+    it('sends the same filter for an LCSH heading and its facet term', async () => {
+      const fetchSpy = mockFetch(POSTERS_BODY);
+      vi.stubGlobal('fetch', fetchSpy);
+
+      await runToolContract(locSearchItems, { query: 'posters', subject: 'World War, 1939-1945' });
+      fetchSpy.mockResolvedValue(new Response(POSTERS_BODY, { status: 200 }));
+      await runToolContract(locSearchItems, { query: 'posters', subject: 'world war' });
+
+      const sent = fetchSpy.mock.calls.map((c) => new URL(c[0] as string).searchParams.get('fa'));
+      expect(sent).toEqual(['subject:world war', 'subject:world war']);
+    });
+
+    it('echoes no subject terms when no subject filter is given', async () => {
+      vi.stubGlobal('fetch', mockFetch(POSTERS_BODY));
+
+      const sc = structured(await runToolContract(locSearchItems, { query: 'posters' }));
+
+      expect(sc).not.toHaveProperty('effectiveSubjectTerms');
+    });
+
+    it('requests the facet block alongside results and pagination when include_facets is true', async () => {
+      const fetchSpy = mockFetch(POSTERS_BODY);
+      vi.stubGlobal('fetch', fetchSpy);
+
+      await runToolContract(locSearchItems, {
+        query: 'posters',
+        format: 'photo',
+        include_facets: true,
+      });
+
+      expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('at')).toBe(
+        'results,pagination,facets',
+      );
+    });
+
+    it('by default sends results and pagination only and carries no facet fields on either surface', async () => {
+      // The fixture carries a facet block; with facets off it is neither requested nor read.
+      const fetchSpy = mockFetch(POSTERS_BODY);
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const result = await runToolContract(locSearchItems, { query: 'posters', format: 'photo' });
+
+      expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('at')).toBe(
+        'results,pagination',
+      );
+      const sc = structured(result);
+      expect(sc).not.toHaveProperty('subject_facets');
+      expect(sc).not.toHaveProperty('location_facets');
+      expect((sc.items as unknown[]).length).toBeGreaterThan(0);
+      const text = contentText(result);
+      expect(text).not.toContain('Top subjects');
+      expect(text).not.toContain('Top locations');
+    });
+
+    it('returns the subject and location facets as { value, count } on both surfaces', async () => {
+      vi.stubGlobal('fetch', mockFetch(POSTERS_BODY));
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'posters',
+        format: 'photo',
+        include_facets: true,
+      });
+
+      const sc = structured(result);
+      expect(sc.subject_facets).toEqual(facetValues('subject'));
+      expect(sc.location_facets).toEqual(facetValues('location'));
+      expect(sc.subject_facets).toHaveLength(10);
+      // Only the two facet types are carried; LOC's availability facet ("true") is not.
+      expect(JSON.stringify(sc.subject_facets)).not.toContain('"true"');
+      const text = contentText(result);
+      expect(text).toContain('**Top subjects:** color (11849); american (7834); posters (6621)');
+      expect(text).toContain('**Top locations:** united states (3245); california (1274)');
+    });
+
+    it('returns empty facet lists when LOC sends no facet block', async () => {
+      vi.stubGlobal('fetch', mockFetch(makeSearchResponse()));
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'posters',
+        include_facets: true,
+      });
+
+      const sc = structured(result);
+      expect(sc).toMatchObject({ subject_facets: [], location_facets: [] });
+      expect(contentText(result)).not.toContain('Top subjects');
+    });
+
+    it('names the applied subject terms and location in the zero-result notice on both surfaces', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch(JSON.stringify({ results: [], pagination: { of: 0, perpage: 25 }, facets: [] })),
+      );
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'posters',
+        format: 'photo',
+        subject: 'United States--History--Civil War, 1861-1865',
+        location: 'oklahoma',
+        include_facets: true,
+      });
+
+      const sc = structured(result);
+      expect(sc).toMatchObject({ items: [], total: 0, subject_facets: [], location_facets: [] });
+      const notice = String(sc.notice);
+      expect(notice).toBe(
+        'No items matched "posters" with format "photo" with subject terms "united states" + "history" + "civil war" in location "oklahoma". Every subject term must match; drop one, or the location, to widen the search. Also try broadening the query, widening the date range, or running libofcongress_search_subjects to find the subject heading.',
+      );
+      expect(contentText(result)).toContain(notice);
+    });
+
+    it('returns empty facet lists on an out-of-range page', async () => {
+      vi.stubGlobal('fetch', mockFetch('', 404));
+
+      const sc = structured(
+        await runToolContract(locSearchItems, {
+          query: 'posters',
+          subject: 'world war',
+          page: 9,
+          include_facets: true,
+        }),
+      );
+
+      expect(sc).toMatchObject({ items: [], pages: 0, subject_facets: [], location_facets: [] });
+      expect(String(sc.notice)).toContain('with subject terms "world war"');
+    });
   });
 
   // Rate-limit test last — sets module-level rateLimitBlockedUntil, must not bleed into other tests

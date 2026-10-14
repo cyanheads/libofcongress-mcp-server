@@ -36,9 +36,9 @@ Library of Congress digital collections, Chronicling America newspaper archives,
 | Tool | Description |
 |:-----|:------------|
 | `libofcongress_search_items` | Search LOC digital collections by keyword with format, date range, subject, location, and collection filters. |
-| `libofcongress_get_item` | Retrieve full metadata for a specific LOC digital item — contributors, subjects, rights, formats, and resource links. |
+| `libofcongress_get_item` | Retrieve full metadata for a specific LOC digital item — contributors, subjects, rights, formats, its digital resources, and a paged list of its pages. |
 | `libofcongress_search_newspapers` | Search historical newspaper pages in the Chronicling America corpus with OCR excerpts. |
-| `libofcongress_get_newspaper_page` | Retrieve the full OCR text and metadata for a specific newspaper page. |
+| `libofcongress_get_newspaper_page` | Retrieve the full text and metadata of one page — a newspaper page, or a book or manuscript page from `libofcongress_get_item`. |
 | `libofcongress_search_subjects` | Search Library of Congress Subject Headings (LCSH) by keyword. |
 | `libofcongress_browse_collections` | List and browse LOC curated digital collections, optionally filtered by keyword. |
 
@@ -54,50 +54,56 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 ### `libofcongress_search_items` <sub>tool</sub>
 
-- Filters: eight material formats (`photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`), inclusive year range (`date_start`/`date_end`), LCSH subject (exact spelling from `libofcongress_search_subjects`), location, and `collection_slug` (from `libofcongress_browse_collections`, mutually exclusive with `format`); up to 100 results per page
+- Filters: eight material formats (`photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`), inclusive year range (`date_start`/`date_end`), subject (an LCSH heading from `libofcongress_search_subjects` or a facet term, split at `--` into lowercase terms with dates dropped and ANDed — `United States--History--Civil War, 1861-1865` filters on `united states` + `history` + `civil war`), location, and `collection_slug` (from `libofcongress_browse_collections`, mutually exclusive with `format`); up to 100 results per page — a larger `limit` (up to 1000) is served as a 100-result page with `effectiveLimit` and a notice
+- Each result's `date` is the date as LOC catalogs it (`c1915 Feb. 19.`), not the padded `YYYY-01-01` sort key LOC uses for photos
 - Each result carries `is_item` — `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for collections, exhibit/guide pages, and newspaper pages, whose `url` should be opened instead
+- `include_facets: true` adds `subject_facets` and `location_facets` — LOC's top 10 subject and location terms across all matches, each with its item count, the values the `subject` and `location` filters accept. Off by default, since the facet block adds LOC response time to every search
+- A zero-result notice names the subject terms and location it applied
 
 ---
 
 ### `libofcongress_get_item` <sub>tool</sub>
 
-- Takes a search result's `id` verbatim, simple or multi-segment (newspaper pages: `sn95047246/1935-09-05/ed-1`); returns contributors with their roles, LCSH subject headings, notes, summary, languages, locations, rights, physical description, call number, former IDs, formats, and `access_restricted`
-- `resource_links` carries downloadable file URLs (TIFF/JPEG/PDF) and `related_items` related record IDs or URLs, both in full; fields absent upstream are omitted rather than filled
+- Takes a search result's `id`, simple or multi-segment (newspaper issues: `sn95047246/1935-09-05/ed-1`), or a loc.gov item link (`https://www.loc.gov/item/2017760320/`, `http://` or without `www.`, `item/2017760320`), read as its bare ID; any other URL — a `/resource/` page URL, another host — is rejected as `invalid_item_id` before any request. Returns contributors with their roles, LCSH `subject_headings` as cataloged (`Transportation--Oklahoma--Maps`), `subject_terms` (the lowercase facet terms the search `subject` filter accepts), notes, summary, languages, locations, rights, physical description, call number, former IDs, formats, and `access_restricted`
+- `date` is the date as LOC catalogs it (`1936 Apr.`, `1909-1911.`), not the padded sort key LOC keeps for photos
+- `rights_information` is plain text: where LOC sends its rights statement as HTML, the tags are dropped and each link's target is kept as an absolute URL (`Copyright and other Restrictions (https://www.loc.gov/legal/)`). Catalog text from `www.loc.gov` arrives with its HTML character references (`&#8217;`, `&hellip;`) decoded, on every tool; page text from `libofcongress_get_newspaper_page` is returned as the text service sends it, since that text is not HTML-escaped
+- `resources` lists each digital resource with its page count, representative `image`, `pdf`, and `audio` (MP3); `pages` lists a window of the item's pages — each a `page_url` and `has_text` — 50 at a time by default (`page_offset`, `page_limit`, `page_total`, `next_page_offset`; at most 100 per call — a larger `page_limit`, up to 1000, is served as 100 with `effectivePageLimit` and a notice). A page with text reads through `libofcongress_get_newspaper_page`. `include_files: true` adds each listed page's download URLs (JPEG sizes, JP2, TIFF, text)
+- `related_items` carries related record IDs or URLs in full; fields absent upstream are omitted rather than filled
 
 ---
 
 ### `libofcongress_search_newspapers` <sub>tool</sub>
 
-- Filters: keyword, inclusive date range, US state (full name), and newspaper title (partial match); up to 100 results per page
-- Each result carries a ~500-character OCR excerpt for relevance assessment, `states` (every state LOC indexes the title under), and the `url` that `libofcongress_get_newspaper_page` takes verbatim
+- Filters: keyword, inclusive date range down to the day (`date_start`/`date_end` take an integer year or a `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` string), US state (full name or postal code, matched against the state LOC indexes each title under), and newspaper title (the exact `newspaper_title` of a search result); up to 100 results per page — a larger `limit` (up to 1000) is served as a 100-result page with `effectiveLimit` and a notice
+- Each result carries a ~500-character OCR excerpt for relevance assessment (in a fenced code block in the text output), `states` (every state LOC indexes the title under), and the `url` that `libofcongress_get_newspaper_page` takes verbatim
 
 ---
 
 ### `libofcongress_get_newspaper_page` <sub>tool</sub>
 
-- Takes the `url` from a `libofcongress_search_newspapers` result; anything outside `https://www.loc.gov/resource/` is rejected as `invalid_page_url` before any request
-- Returns `ocr_text` with the issue's `newspaper_title`, `date`, `place_of_publication`, `states`, `edition`, the page's `sequence`, and the issue's `segment_count`; `ocr_available: false` marks an image-only page, and a `notice` flags a page whose OCR exists but did not come back
+- Takes the `url` from a `libofcongress_search_newspapers` result, or a `pages[].page_url` from `libofcongress_get_item` — newspaper, book, and manuscript pages alike. Also reads the same `/resource/` URL over `http://` or without `www.`, a newspaper page path ending `/ed-N/seq-M/`, and a Chronicling America page link (`chroniclingamerica.loc.gov/lccn/<lccn>/<date>/ed-N/seq-M/` or `www.loc.gov/chroniclingamerica/lccn/…`), each as its `https://www.loc.gov/resource/…/?sp=M` page; the output `page_url` is that URL, with only the `sp` query parameter kept. Rejected as `invalid_page_url` before any request: a Chronicling America link that names no single page (an issue link without `seq-M`, an `/ocr/` view, a file link), any other host, a path with a dot segment or percent-escape, and a non-numeric `sp`
+- Returns that page's own text (OCR, or a volunteer transcription for some manuscripts) as `ocr_text` — in the text output, a fenced code block holding the same text, so OCR noise never reads as Markdown — with the issue's `newspaper_title`, `date`, `place_of_publication`, `states`, `edition`, the page's `sequence`, and the page count `segment_count`; `ocr_available: false` marks an image-only page, and a `notice` says why a page with text came back empty — a text service that did not answer (retry) or a body that could not be read as text (retrying will not help)
 
 ---
 
 ### `libofcongress_search_subjects` <sub>tool</sub>
 
-- Keyword query, up to 50 results per call (default 10); returns LCSH `label` and stable LOC `uri` — pass the label verbatim as `libofcongress_search_items`'s `subject` filter, since LCSH uses inverted forms ("Photography, Aerial", "World War, 1939-1945")
-- When id.loc.gov's ranked suggest pool, rather than a lack of coverage, yields an empty or short result, the response says so with a recovery hint
+- Keyword query, up to 50 results per call (default 10; a larger `limit`, up to 1000, returns up to 50 with a notice); returns the authorized LCSH `label` and stable LOC `uri`, ranked by relevance with an exact match for the query first — pass the label verbatim as `libofcongress_search_items`'s `subject` filter, since LCSH uses standardized wording ("World War, 1939-1945", "Aerial photography")
+- A partial word with no keyword match (`aerial photog`) falls back to the headings that begin with it; when more headings match than the call returns, the response says how many
 
 ---
 
 ### `libofcongress_browse_collections` <sub>tool</sub>
 
-- Optional keyword filter on collection name and description; up to 100 collections per page
+- Optional keyword filter on collection name and description; up to 100 collections per page — a larger `limit` (up to 1000) is served as a 100-collection page with `effectiveLimit` and a notice
 - Each collection carries a `slug` for `libofcongress_search_items`'s `collection_slug` (taken from the loc.gov route, not derivable from the title); `item_count` is approximate and omitted when LOC doesn't provide it
 
 ---
 
 ### `libofcongress://item/{+item_id}` <sub>resource</sub>
 
-- Returns the same full record as `libofcongress_get_item`, as `application/json`
-- `item_id` comes from a `libofcongress_search_items` result's `id` field, or from `libofcongress_get_item`
+- Returns the same full record as `libofcongress_get_item`, as `application/json`, with its default page window (the first 50 pages, no files); `next_page_offset` marks where `libofcongress_get_item`'s `page_offset` continues
+- `item_id` comes from a `libofcongress_search_items` result's `id` field, or from `libofcongress_get_item`; it is checked like the tool's `item_id`, so a URL or path that is not an item ID is rejected as `invalid_item_id` before any request
 - Multi-segment newspaper IDs keep their slashes intact (e.g. `libofcongress://item/sn95047246/1935-09-05/ed-1`); percent-encoded slashes (`%2F`) also resolve
 
 ## Features
@@ -108,9 +114,10 @@ Library of Congress-specific:
 
 - One request queue in front of `www.loc.gov`: concurrent calls start in arrival order, at least `LOC_REQUEST_DELAY_MS` apart (default 3100ms, ~19 req/min), and no 60-second window holds more than LOC's documented 20 starts, whatever the delay is set to. A call the queue cannot start within its time budget fails at once as `server_busy`, with the seconds to wait in `retryAfter`
 - Rate-limit block enforcement: a 429 triggers LOC's 1-hour block, checked again as each queued request is dispatched, so calls already waiting fail without sending anything; the error's recovery hint counts down the minutes left and names the time it lifts
-- HTML-response detection guards against silent rate-limit proxy pages that return 200 with HTML
+- Soft-block pause: when `www.loc.gov` answers with a Cloudflare challenge (`cf-mitigated: challenge`) or an HTML page instead of JSON — LOC's documented CAPTCHA response under heavy load — the call fails as `upstream_unavailable` with `retryAfter: 60`, and further `www.loc.gov` requests, queued ones included, are refused for 60 seconds without being sent. `libofcongress_search_subjects` (`id.loc.gov`) is unaffected
 - Out-of-range page handling: a page past the end of the results (HTTP 404 on any page after the first) or past the retrieval ceiling (HTTP 400) returns an empty result with a notice, not an error — both point back to page 1 for the real page count, and the ceiling notice also explains how to partition a search that matches more than LOC will page through
 - One 50-second budget per tool call covers queue wait, every attempt including its body read, retry backoff, and the newspaper page's OCR fetch, so a slow upstream fails as `request_timed_out` with a recovery hint before a client's 60-second request timeout. Network drops retry with backoff while budget remains; the 429 rate-limit path is never retried, since a retry would deepen LOC's 1-hour block
+- An unreachable or misbehaving upstream — refused or dropped connections once retries run out, a 5xx or 403, or a 200 carrying an empty or truncated body or JSON that is not a response object — fails as `upstream_unavailable` with a retry hint, on every tool and the item resource. The message names the upstream and any HTTP status, never a URL, host, or transport error text
 - Newspaper OCR is surfaced as-is: quality varies by digitization batch and era, and 19th-century or degraded pages may contain garbled text
 
 Agent-friendly output:
@@ -296,7 +303,7 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 | `src/config` | Server-specific environment variable parsing (`LOC_USER_AGENT`, `LOC_REQUEST_DELAY_MS`). |
 | `src/mcp-server/tools` | Tool definitions (`*.tool.ts`) — six LOC tools. |
 | `src/mcp-server/resources` | Resource definitions — `libofcongress://item/{+item_id}`. |
-| `src/services/loc-api` | `LocApiService` wrapping `www.loc.gov` — search, item fetch, newspaper page, collection browser. |
+| `src/services/loc-api` | `LocApiService` wrapping `www.loc.gov` — search, item fetch, page text, collection browser. |
 | `src/services/lc-linked-data` | `LcLinkedDataService` wrapping `id.loc.gov` — LCSH subject heading suggest. |
 | `tests/` | Unit and integration tests mirroring `src/`. |
 

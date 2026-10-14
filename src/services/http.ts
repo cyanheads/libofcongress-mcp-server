@@ -6,7 +6,7 @@
  */
 
 import type { Context } from '@cyanheads/mcp-ts-core';
-import { McpError, timeout } from '@cyanheads/mcp-ts-core/errors';
+import { McpError, serviceUnavailable, timeout } from '@cyanheads/mcp-ts-core/errors';
 import { type RetryAttempt, withRetry } from '@cyanheads/mcp-ts-core/utils';
 
 /**
@@ -45,11 +45,20 @@ export function isTransientNetworkFault(error: unknown): boolean {
 }
 
 /**
+ * The `errors[]` reason every LOC-backed definition declares for an upstream that cannot be
+ * reached or answers with something other than its JSON. Thrown by the services, never a handler.
+ */
+export const UPSTREAM_UNAVAILABLE = 'upstream_unavailable';
+
+/**
  * Runs `fn` under `withRetry` with the time left before `deadlineAt` as its total deadline.
  * `fn` must thread `attempt.signal` (the deadline composed with `ctx.signal`) into its fetch and
  * body read. A deadline expiry is rethrown as a `Timeout` naming only `upstream` — no URL, host,
- * or internal operation label reaches the caller. A caller cancel keeps `withRetry`'s precedence
- * and propagates unchanged.
+ * or internal operation label reaches the caller. A non-`McpError` the ladder gives up on — an
+ * exhausted network fault, or a `SyntaxError` from an unreadable body — becomes
+ * `ServiceUnavailable` with reason {@link UPSTREAM_UNAVAILABLE}, naming only `upstream`: transport
+ * text (which can carry the host) stays on `cause` for the log. A caller cancel keeps `withRetry`'s
+ * precedence and propagates unchanged.
  */
 export async function retryWithinBudget<T>(
   fn: (attempt: RetryAttempt) => Promise<T>,
@@ -73,7 +82,14 @@ export async function retryWithinBudget<T>(
         { cause: error },
       );
     }
-    throw error;
+    if (error instanceof McpError || ctx.signal.aborted) throw error;
+    throw serviceUnavailable(
+      error instanceof SyntaxError
+        ? `${upstream} returned an incomplete or malformed response.`
+        : `${upstream} could not be reached.`,
+      { reason: UPSTREAM_UNAVAILABLE },
+      { cause: error },
+    );
   }
 }
 

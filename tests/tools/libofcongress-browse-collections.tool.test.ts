@@ -14,6 +14,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locBrowseCollections } from '@/mcp-server/tools/definitions/libofcongress-browse-collections.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
+import { COLLECTION_ENTITY_ROWS } from '../fixtures/loc-text.js';
+import { serveByHost } from '../helpers/loc-fetch.js';
 import { contentText, structured, wireError } from '../helpers/tool-result.js';
 
 /**
@@ -55,6 +57,48 @@ function mockFetch(body: string, status = 200) {
     }),
   );
 }
+
+describe('locBrowseCollections upstream text (#65)', () => {
+  beforeEach(async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+    initLocApiService(config, await createInMemoryStorage());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('decodes the captured descriptions and escapes markup in content[] only', async () => {
+    serveByHost({
+      'www.loc.gov': {
+        results: [
+          ...COLLECTION_ENTITY_ROWS,
+          {
+            title: 'Posters &lt;WPA&gt;',
+            description: ['# Art\r\nfor the &lt;b&gt;people&lt;/b&gt;.'],
+            url: 'https://www.loc.gov/collections/wpa-posters/about-this-collection/',
+            count: 907,
+          },
+        ],
+        pagination: { of: 3, perpage: 25, pages: 1 },
+      },
+    });
+    const result = await runToolContract(locBrowseCollections, {});
+    const collections = structured(result).collections as Array<Record<string, unknown>>;
+    expect(collections[0]!.description).toMatch(/hymn “Amazing Grace” from/);
+    expect(collections[2]).toMatchObject({
+      slug: 'wpa-posters',
+      title: 'Posters <WPA>',
+      description: '# Art\r\nfor the <b>people</b>.',
+    });
+    const text = contentText(result);
+    expect(text).toContain('Paris by storm at the Théâtre du Châtelet in May of 1909');
+    expect(text).not.toMatch(/&(?:[A-Za-z][A-Za-z0-9]*|#\d+|#[xX][0-9A-Fa-f]+);/);
+    expect(text).toContain('\n## Posters \\<WPA>\n**Slug:** wpa-posters\n');
+    expect(text).toContain('\n\\# Art for the \\<b>people\\</b>.\n');
+  });
+});
 
 describe('locBrowseCollections', () => {
   beforeEach(async () => {
@@ -345,6 +389,46 @@ describe('locBrowseCollections', () => {
 
   it('rejects limit=0 at schema level', () => {
     expect(() => locBrowseCollections.input.parse({ limit: 0 })).toThrow();
+  });
+
+  it('accepts limit up to 1000 and rejects limit=1001 at schema level (hard ceiling)', () => {
+    expect(locBrowseCollections.input.parse({ limit: 1000 }).limit).toBe(1000);
+    expect(() => locBrowseCollections.input.parse({ limit: 1001 })).toThrow();
+  });
+
+  it('serves a limit above 100 as a 100-collection page, with effectiveLimit and the clamp notice on both surfaces', async () => {
+    const fetchSpy = mockFetch(
+      makeCollectionsResponse({ pagination: { of: 583, total: 6, perpage: 100 } }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await runToolContract(locBrowseCollections, { limit: 600 });
+
+    expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('c')).toBe('100');
+    const sc = structured(result);
+    expect(sc).toMatchObject({
+      total: 583,
+      page: 1,
+      pages: 6,
+      has_next: true,
+      effectiveLimit: 100,
+    });
+    expect(sc.notice).toBe(
+      'Requested limit 600 exceeds the per-call cap of 100; this page holds up to 100 results, and page numbers count 100-result pages. Request page 2 with limit 100 for the next results.',
+    );
+    expect(contentText(result)).toContain(String(sc.notice));
+  });
+
+  it('combines the clamp notice with the out-of-range notice', async () => {
+    vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
+
+    const sc = structured(await runToolContract(locBrowseCollections, { limit: 600, page: 7 }));
+
+    expect(sc).toMatchObject({ collections: [], pages: 0, has_next: false, effectiveLimit: 100 });
+    const notice = String(sc.notice);
+    expect(notice).toMatch(
+      /^Requested limit 600 exceeds the per-call cap of 100; this page holds up to 100 results, and page numbers count 100-result pages\. Page 7 is out of range/,
+    );
   });
 
   it('rejects page=0 at schema level', () => {

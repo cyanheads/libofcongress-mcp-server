@@ -134,6 +134,50 @@ describe('retryWithinBudget', () => {
     expect(JSON.stringify((err as McpError).data ?? {})).not.toContain('loc-api-test-op');
   });
 
+  it('reports an exhausted network-fault ladder as upstream_unavailable, the transport error kept on cause only', async () => {
+    vi.useFakeTimers();
+    const transport = new TypeError('getaddrinfo ENOTFOUND www.loc.gov');
+    const fn = vi.fn().mockRejectedValue(transport);
+
+    const settled = retryWithinBudget(fn, budget()).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(20_000);
+    const err = await settled;
+
+    expect(fn).toHaveBeenCalledTimes(4);
+    expect(err).toBeInstanceOf(McpError);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'The Library of Congress could not be reached.',
+    });
+    expect((err as McpError).data).toEqual({ reason: 'upstream_unavailable' });
+    // withRetry's exhausted wrapper sits between: its cause is the transport error itself.
+    expect(((err as McpError).cause as Error).cause).toBe(transport);
+  });
+
+  it('reports a malformed or empty 200 body as upstream_unavailable on the first attempt, not as bad input', async () => {
+    const fn = vi.fn().mockRejectedValue(new SyntaxError('JSON Parse error: Unexpected EOF'));
+
+    const err = await retryWithinBudget(fn, budget()).catch((e: unknown) => e);
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'The Library of Congress returned an incomplete or malformed response.',
+    });
+    // The parser's text stays on `cause`; the caller reads the reason alone.
+    expect((err as McpError).data).toEqual({ reason: 'upstream_unavailable' });
+  });
+
+  it('leaves an McpError from the attempt untouched', async () => {
+    const thrown = serviceUnavailable('LOC API returned HTTP 503', {
+      status: 503,
+      reason: 'upstream_unavailable',
+    });
+    const fn = vi.fn().mockRejectedValue(thrown);
+
+    await expect(retryWithinBudget(fn, budget())).rejects.toBe(thrown);
+  });
+
   it('rethrows a caller cancel unchanged, never as a timeout', async () => {
     const controller = new AbortController();
     const ctx = createMockContext({ signal: controller.signal });
@@ -150,6 +194,21 @@ describe('retryWithinBudget', () => {
 
     expect(err).toMatchObject({ name: 'AbortError', message: 'caller went away' });
     expect(err).not.toBeInstanceOf(McpError);
+  });
+
+  it('rethrows a caller cancel that lands on a network fault unchanged, never as upstream_unavailable', async () => {
+    const controller = new AbortController();
+    const ctx = createMockContext({ signal: controller.signal });
+    const fault = new TypeError('The socket connection was closed unexpectedly');
+    const fn = vi.fn(async () => {
+      controller.abort(new DOMException('caller went away', 'AbortError'));
+      throw fault;
+    });
+
+    const err = await retryWithinBudget(fn, budget(ctx)).catch((e: unknown) => e);
+
+    expect(err).toBe(fault);
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });
 

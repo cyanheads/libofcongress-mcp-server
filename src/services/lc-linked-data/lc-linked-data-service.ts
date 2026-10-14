@@ -8,41 +8,51 @@ import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { getServerConfig } from '@/config/server-config.js';
-import { LOC_CALL_BUDGET_MS, readText, retryWithinBudget } from '@/services/http.js';
+import {
+  LOC_CALL_BUDGET_MS,
+  readText,
+  retryWithinBudget,
+  UPSTREAM_UNAVAILABLE,
+} from '@/services/http.js';
 import type { LcSubjectHeading } from './types.js';
 
-const LC_LINKED_DATA_BASE = 'https://id.loc.gov';
-const SUBJECTS_SCHEME = 'http://id.loc.gov/authorities/subjects';
+/** The subject-scoped suggest endpoint: every hit is an `/authorities/subjects/` record. */
+const SUGGEST2_URL = 'https://id.loc.gov/authorities/subjects/suggest2/';
+
+const UPSTREAM = 'The Library of Congress subject heading service';
 
 /**
- * Hard ceiling on candidates the id.loc.gov `/suggest/` endpoint returns for any query.
- * Requested on every call regardless of `limit`: the endpoint ranks name-authority and other
- * non-subject records ahead of real LCSH headings, so a valid heading can sit deep in this pool.
- * A limit-scaled request size would miss it and report a false empty (issue #25).
+ * Fewest headings requested from suggest2, whatever `limit` asks for. The exact-label promotion
+ * can only lift a heading the page holds, and keyword ranking can put the exact heading well past
+ * a small limit (`civil war` → `Civil war` near 10th). id.loc.gov is fast and off the www.loc.gov
+ * request queue, so the larger page costs little.
  */
-export const SUGGEST_MAX_COUNT = 50;
+const MIN_SUGGEST_COUNT = 50;
+
+/** One hit of a suggest2 page. Only the fields this service reads are typed. */
+interface Suggest2Hit {
+  /**
+   * The authorized heading. A left-anchored cross-reference matches on a variant, so its
+   * `suggestLabel` reads `<variant> (USE <heading>)` while `aLabel` is the heading itself.
+   */
+  aLabel?: string;
+  uri?: string;
+}
 
 /**
- * Response shape from the id.loc.gov suggest endpoint: [query, labels[], descriptions[], uris[]].
- * Each description is a string like "1 result" — a tally of matching authority records, not of
- * LOC items carrying the heading — so it is not read.
+ * A suggest2 page: `{ q, count, pagesize, start, sortmethod, searchtype, directory, hits[] }`.
+ * `count` is the total number of matching subject authority records, not the page size.
  */
-type SuggestResponse = [string, string[], string[], string[]];
+interface Suggest2Page {
+  count: number;
+  hits: Suggest2Hit[];
+}
 
-/** Outcome of a subject-heading search, carrying the disclosure signal the tool turns into recovery hints. */
+/** Outcome of a subject-heading search. */
 export interface SubjectSuggestResult {
-  /**
-   * Count of subject-namespace matches before slicing to `limit`. Greater than `limit` means more
-   * headings exist within the candidate pool — the tool surfaces a truncation hint.
-   */
+  /** Upstream total of matching subject headings — more than `subjects.length` means truncation. */
   matchCount: number;
-  /**
-   * True when the endpoint returned its full {@link SUGGEST_MAX_COUNT} candidate cap, so a matching
-   * heading may rank beyond the visible pool. Lets the tool distinguish "exhausted by ranking"
-   * (recoverable via a more specific query) from "no LCSH coverage" when results are empty or short.
-   */
-  poolCapReached: boolean;
-  /** LCSH subject headings, filtered to the `/authorities/subjects/` namespace and sliced to `limit`. */
+  /** LCSH subject headings, at most the requested `limit`, an exact-label match first. */
   subjects: LcSubjectHeading[];
 }
 
@@ -54,23 +64,50 @@ export class LcLinkedDataService {
     this.userAgent = serverConfig.userAgent;
   }
 
-  /** Search LCSH subject headings via the suggest endpoint */
+  /**
+   * Search LCSH subject headings. A keyword search ranks base headings such as
+   * `World War, 1939-1945` at or near the top; a partial word (`aerial photog`) matches nothing by
+   * keyword, so a zero-hit keyword search is retried once left-anchored. Both requests share the
+   * call's one time budget. Each asks for at least {@link MIN_SUGGEST_COUNT} headings so an exact
+   * label ranked past `limit` can still be promoted; the result is then cut to `limit`.
+   */
   async searchSubjects(query: string, limit: number, ctx: Context): Promise<SubjectSuggestResult> {
-    // Request the endpoint's full candidate cap regardless of `limit`. `memberOf` is an unenforced
-    // hint — /suggest/ interleaves /authorities/names/ and childrensSubjects records with real LCSH
-    // headings and ranks them ahead, so a valid heading can sit deep in the pool. Decoupling request
-    // size from `limit` means a small and a large `limit` draw from the same pool and differ only in
-    // how many filtered results get sliced off (issue #25).
+    const deadlineAt = Date.now() + LOC_CALL_BUDGET_MS;
+    const count = Math.max(limit, MIN_SUGGEST_COUNT);
+    let page = await this.suggest({ q: query, searchtype: 'keyword', count }, ctx, deadlineAt);
+    if (page.hits.length === 0) {
+      // Omitting `searchtype` selects the endpoint's left-anchored search.
+      page = await this.suggest({ q: query, count }, ctx, deadlineAt);
+    }
+
+    const subjects: LcSubjectHeading[] = [];
+    for (const hit of page.hits) {
+      // `aLabel` is the authorized heading — the value the item search's subject filter accepts.
+      if (hit.aLabel && hit.uri) subjects.push({ label: hit.aLabel, uri: hit.uri });
+    }
+    const wanted = query.trim().toLowerCase();
+    const exact = subjects.findIndex((s) => s.label.toLowerCase() === wanted);
+    if (exact > 0) subjects.unshift(...subjects.splice(exact, 1));
+
+    return { subjects: subjects.slice(0, limit), matchCount: page.count };
+  }
+
+  private async suggest(
+    params: { q: string; searchtype?: 'keyword'; count: number },
+    ctx: Context,
+    deadlineAt: number,
+  ): Promise<Suggest2Page> {
     const qs = new URLSearchParams({
-      q: query,
-      memberOf: SUBJECTS_SCHEME,
-      count: String(SUGGEST_MAX_COUNT),
+      q: params.q,
+      ...(params.searchtype && { searchtype: params.searchtype }),
+      count: String(params.count),
     });
-    const url = `${LC_LINKED_DATA_BASE}/suggest/?${qs}`;
+    const url = `${SUGGEST2_URL}?${qs}`;
     ctx.log.debug('LC Linked Data subject suggest', { url });
 
     // Retry raw network faults only, inside the call's one time budget. The non-OK and HTML throws
     // below are ServiceUnavailable, which the predicate treats as non-transient — they fail fast.
+    // Every outage shape carries the upstream_unavailable reason the tool declares.
     const data = await retryWithinBudget(
       async ({ signal }) => {
         const response = await fetch(url, {
@@ -83,45 +120,33 @@ export class LcLinkedDataService {
           // invariant. Bare status is safe.
           throw serviceUnavailable(`LC Linked Data returned HTTP ${response.status}`, {
             status: response.status,
+            reason: UPSTREAM_UNAVAILABLE,
           });
         }
         const text = await readText(response, signal);
         if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
-          throw serviceUnavailable('LC Linked Data returned HTML — temporarily unavailable.');
+          throw serviceUnavailable('LC Linked Data returned HTML — temporarily unavailable.', {
+            reason: UPSTREAM_UNAVAILABLE,
+          });
         }
-        return JSON.parse(text) as SuggestResponse;
+        return JSON.parse(text) as unknown;
       },
-      {
-        ctx,
-        operation: 'lc-linked-data-suggest',
-        deadlineAt: Date.now() + LOC_CALL_BUDGET_MS,
-        upstream: 'The Library of Congress subject heading service',
-      },
+      { ctx, operation: 'lc-linked-data-suggest', deadlineAt, upstream: UPSTREAM },
     );
 
-    if (!Array.isArray(data) || data.length < 4) {
-      return { subjects: [], matchCount: 0, poolCapReached: false };
+    if (!isSuggest2Page(data)) {
+      throw serviceUnavailable(`${UPSTREAM} returned an unexpected response.`, {
+        reason: UPSTREAM_UNAVAILABLE,
+      });
     }
-
-    const [, labels, , uris] = data;
-    const matches: LcSubjectHeading[] = [];
-    for (let i = 0; i < labels.length; i++) {
-      const label = labels[i];
-      const uri = uris[i];
-      if (!label || !uri) continue;
-      // Keep only true LCSH subject headings. Name-authority and childrensSubjects labels are
-      // not valid input for the `fa=subject:<value>` filter these results feed downstream.
-      if (!uri.startsWith(`${SUBJECTS_SCHEME}/`)) continue;
-      matches.push({ label, uri });
-    }
-
-    return {
-      subjects: matches.slice(0, limit),
-      matchCount: matches.length,
-      // Endpoint returned its cap → matching headings may exist beyond what it will surface.
-      poolCapReached: labels.length >= SUGGEST_MAX_COUNT,
-    };
+    return data;
   }
+}
+
+function isSuggest2Page(data: unknown): data is Suggest2Page {
+  if (typeof data !== 'object' || data === null) return false;
+  const page = data as Record<string, unknown>;
+  return typeof page.count === 'number' && Array.isArray(page.hits);
 }
 
 // --- Init/accessor pattern ---

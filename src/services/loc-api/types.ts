@@ -31,8 +31,12 @@ export type RawLocSearchResult = {
    * result — read `count` for a collection's size, never `item.*`.
    */
   count?: number;
-  /** Per-result detail block (e.g. `total`, `digitized`); shape varies by endpoint */
-  item?: Record<string, unknown>;
+  /**
+   * Per-result detail block (e.g. `total`, `digitized`); shape varies by endpoint. On item search
+   * rows, `date` is the date as cataloged ("c1915 Feb. 19.") where the top-level `date` can be a
+   * padded sort key ("1915-01-01").
+   */
+  item?: { date?: unknown; [key: string]: unknown };
 };
 
 /** Raw pagination object from LOC search responses */
@@ -62,10 +66,22 @@ export type RawLocPagination = {
   previous?: string;
 };
 
+/**
+ * One facet of a search response under `at=…,facets`: its `type` (`subject`, `location`,
+ * `partof`, …) and its top values, each with `value` (the filter value), `count` (matching items),
+ * a display `title`, and `on`/`off`/`not` filter links.
+ */
+export type RawLocFacet = {
+  type?: string;
+  filters?: Array<{ value?: string; count?: number }>;
+};
+
 /** Raw LOC search API response envelope */
 export type RawLocSearchResponse = {
   results?: RawLocSearchResult[];
   pagination?: RawLocPagination;
+  /** Present only when the request's `at` names `facets`. */
+  facets?: RawLocFacet[];
   content?: {
     results?: RawLocSearchResult[];
     pagination?: RawLocPagination;
@@ -83,11 +99,17 @@ export type RawLocItemResponse = {
   item?: {
     id?: string;
     title?: string | string[];
+    /** On Prints & Photographs records, a padded sort key ("1936-01-01"); elsewhere the date as cataloged. */
     date?: string;
+    /** The date as cataloged ("1936 Apr.", "1909-1911."); sent on Prints & Photographs records. */
+    created_published_date?: string;
     created_published?: string | string[];
     /** Contributor names with roles (e.g. "Washington, George, 1732-1799 (Author)"). */
     contributor_names?: string[];
+    /** Subject facet terms: lowercase heading components without dates (e.g. "civil war"). */
     subject?: string[];
+    /** LCSH headings as cataloged (e.g. "United States--History--Civil War, 1861-1865"). */
+    subject_headings?: string[];
     notes?: string[];
     rights?: string | string[];
     rights_information?: string | string[];
@@ -108,22 +130,33 @@ export type RawLocItemResponse = {
     access_restricted?: boolean;
     online_format?: string[];
   };
+  /**
+   * The item's digital resources (a photo, a scanned volume, a recording). `files` holds one file
+   * group per page, in page order: page N is addressed as `url` + `?sp=N`.
+   */
   resources?: Array<{
     url?: string;
     caption?: string;
+    /** Representative image. */
     image?: string;
+    /** Whole-resource PDF. */
     pdf?: string;
-    files?: Array<
-      Array<{ url?: string; mimeType?: string; size?: number; levels?: number; info?: string }>
-    >;
+    /** Audio stream (MP3) of a sound recording. */
+    audio?: string;
+    /**
+     * One group per page: every derivative of that page (IIIF sizes, JP2, TIFF master, text).
+     * A `text/plain` entry carries the page's text service; it may have no `url` of its own.
+     */
+    files?: Array<Array<{ url?: string; mimetype?: string; fulltext_service?: string }>>;
   }>;
   related_items?: Array<Exclude<RawLocRelatedItem, string>>;
 };
 
 /**
- * Raw LOC newspaper page response under `?fo=json&at=item,resource`. `item` carries the issue's
- * publication metadata; `resource` carries the page-level pointers. Neither block carries the
- * page's sequence, and `resource` carries no date — both are derived from the page URL.
+ * Raw LOC page response under `?fo=json&at=item,resource,fulltext_service`. `item` carries the
+ * publication metadata; `resource` the page count; `fulltext_service` the page's text service.
+ * Neither block carries the page's sequence, and `resource` carries no date — both are derived
+ * from the page URL.
  */
 export type RawLocNewspaperPageResponse = {
   item?: {
@@ -140,11 +173,27 @@ export type RawLocNewspaperPageResponse = {
   };
   resource?: {
     url?: string;
+    /**
+     * Not read: on books and manuscripts it is the whole volume's text file, the same for every
+     * page; on newspaper pages it equals the top-level `fulltext_service`.
+     */
     fulltext_file?: string;
     /** Number of pages (segments) in the issue. */
     segment_count?: number;
   };
+  /**
+   * Text-service URL for the requested page (`sp`), present under `at=…,fulltext_service` when
+   * the page has OCR or transcribed text. Answers `{ "<segment>": { "full_text": "…" } }`.
+   */
+  fulltext_service?: string;
 };
+
+/**
+ * Why a page with text returned none: `unavailable` — the text service failed, answered with an
+ * HTML page, or the call ran out of time (a retry can help); `unparseable` — the service answered
+ * with another body that is not its JSON text shape (a retry cannot).
+ */
+export type OcrMiss = 'unavailable' | 'unparseable';
 
 /** Normalized item summary returned from search */
 export type LocItemSummary = {
@@ -161,6 +210,12 @@ export type LocItemSummary = {
   is_item: boolean;
   url: string;
 };
+
+/** One facet value of a search, with the number of matching items that carry it. */
+export type LocFacetValue = { value: string; count: number };
+
+/** The subject and location facets of a search, each LOC's top values. */
+export type LocSearchFacets = { subject: LocFacetValue[]; location: LocFacetValue[] };
 
 /** Normalized pagination info */
 export type LocPagination = {
@@ -183,7 +238,10 @@ export type LocItemDetail = {
   title: string;
   date?: string;
   contributors: string[];
+  /** LCSH headings as cataloged, from the raw `subject_headings`. */
   subject_headings: string[];
+  /** Subject facet terms, from the raw `subject` — values the item search's subject filter matches. */
+  subject_terms: string[];
   notes: string[];
   summary?: string;
   rights_information?: string;
@@ -197,9 +255,34 @@ export type LocItemDetail = {
   online_formats: string[];
   /** Whether LOC restricts access to the original. Absent when upstream omits it. */
   access_restricted?: boolean;
-  resource_links: string[];
+  resources: LocItemResource[];
+  /** The requested window of the item's pages, across every resource in order. */
+  pages: LocItemPage[];
+  /** Pages across every resource. */
+  page_total: number;
+  /** Offset of the page after this window. Absent when the window reaches the last page. */
+  next_page_offset?: number;
   related_items: string[];
   url: string;
+};
+
+/** One digital resource of an item, e.g. a photo, a scanned volume, or a recording. */
+export type LocItemResource = {
+  url: string;
+  page_count: number;
+  image?: string;
+  pdf?: string;
+  audio?: string;
+};
+
+/** One page of an item resource. */
+export type LocItemPage = {
+  /** The page's `/resource/` URL — the resource URL plus `?sp=N`, bare for a one-page resource. */
+  page_url: string;
+  /** True when the page's file group carries a `text/plain` entry. */
+  has_text: boolean;
+  /** URL of every file of the page that has one. Present only when files were requested. */
+  files?: string[];
 };
 
 /** Normalized newspaper page search result */

@@ -57,7 +57,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
   input: z.object({
     query: z.string().min(1).describe('Full-text search across metadata and available descriptive text.'),
     format: z.enum(['photo', 'map', 'newspaper', 'manuscript', 'audio', 'film', 'book', 'notated-music']).optional().describe('Material type filter.'),
-    limit: z.number().int().min(1).max(100).default(25).describe('Results per page. Default 25, max 100.'),
+    limit: z.number().int().min(1).max(1000).default(25).describe('Results per page. Default 25. A larger limit (up to 1000) is served as a 100-result page.'),
     page: z.number().int().min(1).default(1).describe('1-indexed page number.'),
   }),
   output: z.object({
@@ -93,7 +93,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
 import { resource, z } from '@cyanheads/mcp-ts-core';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 
-export const locItemResource = resource('libofcongress://item/{item_id}', {
+export const locItemResource = resource('libofcongress://item/{+item_id}', {
   name: 'loc-item',
   description: 'LOC digital item metadata by ID. Stable URI for injecting item context into agent conversations.',
   mimeType: 'application/json',
@@ -240,12 +240,19 @@ src/
   services/
     http.ts                             # Shared per-call 50 s time budget, retry predicate, budget-bounded body read
     loc-api/
-      loc-api-service.ts               # LOC JSON API client — www.loc.gov request queue, search, item fetch, newspaper page
+      loc-api-service.ts               # LOC JSON API client — www.loc.gov request queue, search, item fetch, page text (newspaper, book, manuscript)
+      date-range.ts                     # `dates` range grammar — bound parsing, open-side fills, range checks
+      loc-text.ts                       # Upstream text — character references decoded once; HTML `item.rights` to plain text
+      loc-urls.ts                       # Caller item IDs and page URLs reduced to the forms the service requests
+      state-names.ts                    # Postal code → `location_state` name map for the newspaper state filter
+      subject-terms.ts                  # `subject` filter grammar — an LCSH heading split into the facet terms LOC indexes
       types.ts                          # Raw and normalized LOC API types
     lc-linked-data/
-      lc-linked-data-service.ts        # id.loc.gov LCSH subject suggest client
+      lc-linked-data-service.ts        # id.loc.gov LCSH subject suggest client (suggest2 keyword, left-anchored retry)
       types.ts                          # Subject heading types
   mcp-server/
+    tools/notices.ts                             # Notice writer that keeps every notice a response raises; page-size clamp notice
+    tools/render-text.ts                         # format() text — inline escaping of catalog text, fenced OCR text
     tools/definitions/
       libofcongress-search-items.tool.ts         # libofcongress_search_items — general LOC item search
       libofcongress-get-item.tool.ts             # libofcongress_get_item — full item metadata

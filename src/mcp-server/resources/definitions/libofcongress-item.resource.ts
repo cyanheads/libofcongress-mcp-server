@@ -6,6 +6,19 @@
 import { resource, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
+import { normalizeItemId } from '@/services/loc-api/loc-urls.js';
+
+/**
+ * `value` percent-decoded, or undefined when an escape is malformed — a truncated escape
+ * (`%E0%A4%A`), a lone `%`, or bytes that are not UTF-8 — where `decodeURIComponent` throws.
+ */
+function percentDecoded(value: string): string | undefined {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return;
+  }
+}
 
 /**
  * `{+item_id}` is an RFC 6570 reserved expansion, which the SDK compiles to the match
@@ -17,7 +30,7 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
   name: 'loc-item',
   title: 'LOC Item',
   description:
-    'LOC digital item metadata by ID. Returns the same full record as libofcongress_get_item. Item IDs with internal slashes (newspaper pages) are written with their slashes intact: libofcongress://item/sn95047246/1935-09-05/ed-1. Use libofcongress_search_items to discover item IDs first.',
+    'LOC digital item metadata by ID. Returns the same full record as libofcongress_get_item with its default page window: the first 50 pages, without per-page files. When next_page_offset is present, call libofcongress_get_item with page_offset to list the rest. Item IDs with internal slashes (newspaper pages) are written with their slashes intact: libofcongress://item/sn95047246/1935-09-05/ed-1. Use libofcongress_search_items to discover item IDs first.',
   mimeType: 'application/json',
   params: z.object({
     item_id: z
@@ -28,6 +41,14 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
   }),
 
   errors: [
+    {
+      reason: 'invalid_item_id',
+      code: JsonRpcErrorCode.ValidationError,
+      retryable: false,
+      when: 'item_id is neither a LOC item ID nor a loc.gov /item/ link: a URL on another loc.gov path or another host, or text with characters or segments no LOC ID has.',
+      recovery:
+        'Use the id from a libofcongress_search_items result, written with its slashes intact: libofcongress://item/sn95047246/1935-09-05/ed-1.',
+    },
     {
       reason: 'item_not_found',
       code: JsonRpcErrorCode.NotFound,
@@ -57,6 +78,13 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
       when: 'The Library of Congress did not respond within the 50-second request budget.',
       recovery: 'Retry in a few minutes; the Library of Congress is responding slowly.',
     },
+    {
+      reason: 'upstream_unavailable',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      thrownBy: 'service',
+      when: 'The Library of Congress could not be reached, or answered with an error status, a bot challenge or other HTML page, or an unreadable response instead of its JSON.',
+      recovery: 'Retry in a few minutes; the Library of Congress is temporarily unavailable.',
+    },
   ],
 
   async handler(params, ctx) {
@@ -66,7 +94,16 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
     // percent-encoded ID still reads as literal "%2F" text here. Decode once to hand
     // getItem() real slashes to split on — a no-op for the canonical raw-slash form,
     // which carries no escape sequences.
-    const itemId = decodeURIComponent(params.item_id);
+    // The decoded ID then passes the get_item tool's check, so a dot segment or a foreign URL
+    // never becomes a request path. A malformed escape decodes to nothing and fails the same way.
+    const decoded = percentDecoded(params.item_id);
+    const itemId = decoded === undefined ? undefined : normalizeItemId(decoded);
+    if (itemId === undefined) {
+      throw ctx.fail('invalid_item_id', `"${params.item_id}" is not a LOC item ID.`, {
+        field: 'item_id',
+        received: params.item_id,
+      });
+    }
     try {
       return await svc.getItem(itemId, ctx);
     } catch (err) {

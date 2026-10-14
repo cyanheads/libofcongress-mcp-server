@@ -7,13 +7,34 @@
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import {
   getLocApiService,
   initLocApiService,
   LocApiService,
 } from '@/services/loc-api/loc-api-service.js';
 import type { LocPagination } from '@/services/loc-api/types.js';
+import {
+  AUDIO_ITEM_JUKEBOX_68453,
+  BASEBALL_CARD_ITEM_2008676581,
+  BOOK_ITEM_02007458,
+  MANUSCRIPT_ITEM_MM77093930,
+  NEWSPAPER_ISSUE_SN83030214_1912_04_16,
+} from '../fixtures/loc-items.js';
+import {
+  MAP_ITEM_77694805,
+  POSTERS_PHOTOS_SEARCH,
+  VHP_ITEM_AFC2001001_119910,
+} from '../fixtures/loc-subjects.js';
+import {
+  COLLECTION_ENTITY_ROWS,
+  JAZZ_ENTITY_ROWS,
+  MANUSCRIPT_RIGHTS_MM77093930,
+  MAP_RIGHTS_98688514,
+  NEWSPAPER_NOTES_SN83030214,
+  TITANIC_OCR_EXCERPT,
+} from '../fixtures/loc-text.js';
+import { serveByHost } from '../helpers/loc-fetch.js';
 
 function mockFetch(body: string, status = 200) {
   return vi.fn().mockResolvedValue(
@@ -199,14 +220,20 @@ describe('LocApiService.search', () => {
     expect(result.pagination.total).toBe(5);
   });
 
-  it('throws ServiceUnavailable on non-OK, non-404, non-429 HTTP status', async () => {
-    vi.stubGlobal('fetch', mockFetch('Internal Server Error', 500));
-    const ctx = createMockContext();
-    const svc = getLocApiService();
-    await expect(svc.search({ query: 'test', page: 1 }, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.ServiceUnavailable,
-    });
-  });
+  it.each([500, 502, 503, 403])(
+    'throws ServiceUnavailable carrying upstream_unavailable and the bare status on HTTP %i',
+    async (status) => {
+      vi.stubGlobal('fetch', mockFetch('Internal Server Error', status));
+      const ctx = createMockContext();
+      const svc = getLocApiService();
+      const err = await svc.search({ query: 'test', page: 1 }, ctx).catch((e: unknown) => e);
+      expect(err).toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        message: `LOC API returned HTTP ${status}`,
+      });
+      expect((err as { data?: unknown }).data).toEqual({ status, reason: 'upstream_unavailable' });
+    },
+  );
 
   it('returns empty items and pages:0 sentinel on HTTP 400 (out-of-range page)', async () => {
     vi.stubGlobal('fetch', mockFetch('', 400));
@@ -287,13 +314,28 @@ describe('LocApiService.search', () => {
     expect(within.pagination.ceilingReached).toBe(false); // 8 <= 100000 / 25
   });
 
-  it('throws ServiceUnavailable when HTML is returned', async () => {
+  it('throws ServiceUnavailable carrying upstream_unavailable and a 60 s retryAfter when HTML is returned', async () => {
     vi.stubGlobal('fetch', mockFetch('<!DOCTYPE html><html><body>Rate limited</body></html>'));
     const ctx = createMockContext();
     const svc = getLocApiService();
     await expect(svc.search({ query: 'test', page: 1 }, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'upstream_unavailable', retryAfter: 60 },
     });
+  });
+
+  it('throws ServiceUnavailable carrying upstream_unavailable on an empty 200 body, sent once', async () => {
+    const fetchSpy = mockFetch('');
+    vi.stubGlobal('fetch', fetchSpy);
+    const err = await getLocApiService()
+      .search({ query: 'test', page: 1 }, createMockContext())
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'The Library of Congress returned an incomplete or malformed response.',
+      data: { reason: 'upstream_unavailable' },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('joins description array into a single string', async () => {
@@ -510,6 +552,139 @@ describe('LocApiService.search', () => {
   });
 });
 
+describe('LocApiService subjects and facets (#57)', () => {
+  let fetchSpy: MockInstance<typeof fetch>;
+
+  beforeEach(async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+    initLocApiService(config, await createInMemoryStorage());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+
+  it('with includeFacets, requests the facet block and returns the subject and location facets as { value, count }', async () => {
+    fetchSpy.mockImplementation(async () => json(POSTERS_PHOTOS_SEARCH));
+
+    const result = await getLocApiService().search(
+      { query: 'posters', format: 'photo', includeFacets: true },
+      createMockContext(),
+    );
+
+    const sent = new URL(String(fetchSpy.mock.calls[0]![0]));
+    expect(sent.searchParams.get('at')).toBe('results,pagination,facets');
+    const subject = POSTERS_PHOTOS_SEARCH.facets.find((f) => f.type === 'subject')!;
+    expect(result.facets?.subject).toEqual(
+      subject.filters.map((f) => ({ value: f.value, count: f.count })),
+    );
+    expect(result.facets?.location[0]).toEqual({ value: 'united states', count: 3245 });
+    expect(result.facets?.location).toHaveLength(10);
+  });
+
+  it('without includeFacets, sends the results and pagination projection only and returns no facets', async () => {
+    // A facet block in the response (the fixture carries one) is not read either.
+    fetchSpy.mockImplementation(async () => json(POSTERS_PHOTOS_SEARCH));
+
+    const result = await getLocApiService().search(
+      { query: 'posters', format: 'photo' },
+      createMockContext(),
+    );
+
+    const sent = new URL(String(fetchSpy.mock.calls[0]![0]));
+    expect(sent.searchParams.get('at')).toBe('results,pagination');
+    expect(result).not.toHaveProperty('facets');
+    expect(result.items).toHaveLength(POSTERS_PHOTOS_SEARCH.results.length);
+  });
+
+  it('skips facet entries missing a value or count', async () => {
+    fetchSpy.mockImplementation(async () =>
+      json({
+        results: [],
+        pagination: { of: 0 },
+        facets: [
+          {
+            type: 'subject',
+            filters: [{ value: 'jazz', count: 4 }, { value: 'blues' }, { count: 2 }],
+          },
+        ],
+      }),
+    );
+
+    const { facets } = await getLocApiService().search(
+      { query: 'music', includeFacets: true },
+      createMockContext(),
+    );
+
+    expect(facets).toEqual({ subject: [{ value: 'jazz', count: 4 }], location: [] });
+  });
+
+  it('returns empty facets for a page LOC will not serve', async () => {
+    fetchSpy.mockImplementation(async () => new Response('', { status: 400 }));
+
+    const { facets } = await getLocApiService().search(
+      { query: 'posters', page: 3, includeFacets: true },
+      createMockContext(),
+    );
+
+    expect(facets).toEqual({ subject: [], location: [] });
+  });
+
+  it('ANDs subject terms and the location into one fa value', async () => {
+    fetchSpy.mockImplementation(async () => json(POSTERS_PHOTOS_SEARCH));
+
+    await getLocApiService().search(
+      { query: 'posters', subjectTerms: ['united states', 'history'], location: 'oklahoma' },
+      createMockContext(),
+    );
+
+    expect(new URL(String(fetchSpy.mock.calls[0]![0])).searchParams.get('fa')).toBe(
+      'subject:united states|subject:history|location:oklahoma',
+    );
+  });
+
+  it('reads subject_headings from item.subject_headings and subject_terms from item.subject', async () => {
+    fetchSpy.mockImplementation(async () => json(MAP_ITEM_77694805));
+
+    const result = await getLocApiService().getItem('77694805', createMockContext());
+
+    expect(result.subject_headings).toEqual([
+      'Transportation--Oklahoma--Maps',
+      'Railroads--Oklahoma--Maps',
+      'United States--Oklahoma',
+    ]);
+    expect(result.subject_terms).toEqual([
+      'maps',
+      'transportation',
+      'united states',
+      'railroads',
+      'oklahoma',
+    ]);
+  });
+
+  it('keeps headings verbatim, spaced separators included', async () => {
+    fetchSpy.mockImplementation(async () => json(VHP_ITEM_AFC2001001_119910));
+
+    const result = await getLocApiService().getItem('afc2001001.119910', createMockContext());
+
+    expect(result.subject_headings).toEqual(VHP_ITEM_AFC2001001_119910.item.subject_headings);
+    expect(result.subject_headings).toContain('World War, 1939-1945 -- Personal Narratives');
+  });
+
+  it('returns empty subject_headings when the record carries none, whatever item.subject holds', async () => {
+    fetchSpy.mockImplementation(async () =>
+      json({ item: { title: 'No headings', subject: ['maps'] }, resources: [] }),
+    );
+
+    const result = await getLocApiService().getItem('no-headings', createMockContext());
+
+    expect(result.subject_headings).toEqual([]);
+    expect(result.subject_terms).toEqual(['maps']);
+  });
+});
+
 describe('LocApiService.getItem', () => {
   beforeEach(async () => {
     const storage = await createInMemoryStorage();
@@ -592,34 +767,44 @@ describe('LocApiService.getItem', () => {
     expect(result.physical_description).toBe('1 photograph');
   });
 
-  it('collects resource_links from nested files array', async () => {
+  it('lists a file group as a page, its files only when requested (#63)', async () => {
+    const body = JSON.stringify({
+      item: { title: 'Files Item', url: 'https://www.loc.gov/item/files/' },
+      resources: [
+        {
+          url: 'https://www.loc.gov/resource/files.0001/',
+          files: [
+            [
+              { url: 'https://tile.loc.gov/file1.tif', mimetype: 'image/tiff' },
+              { url: 'https://tile.loc.gov/file2.jpg' },
+              { mimetype: 'application/json' },
+            ],
+          ],
+        },
+      ],
+      related_items: [],
+    });
     vi.stubGlobal(
       'fetch',
-      mockFetch(
-        JSON.stringify({
-          item: {
-            title: 'Files Item',
-            url: 'https://www.loc.gov/item/files/',
-          },
-          resources: [
-            {
-              files: [
-                [
-                  { url: 'https://tile.loc.gov/file1.tif' },
-                  { url: 'https://tile.loc.gov/file2.jpg' },
-                ],
-              ],
-            },
-          ],
-          related_items: [],
-        }),
-      ),
+      vi.fn(async () => new Response(body)),
     );
-    const ctx = createMockContext();
     const svc = getLocApiService();
-    const result = await svc.getItem('files', ctx);
-    expect(result.resource_links).toContain('https://tile.loc.gov/file1.tif');
-    expect(result.resource_links).toContain('https://tile.loc.gov/file2.jpg');
+
+    const bare = await svc.getItem('files', createMockContext());
+    expect(bare.pages).toEqual([
+      { page_url: 'https://www.loc.gov/resource/files.0001/', has_text: false },
+    ]);
+    expect(bare).not.toHaveProperty('resource_links');
+
+    const withFiles = await svc.getItem('files', createMockContext(), {
+      pageOffset: 0,
+      pageLimit: 50,
+      includeFiles: true,
+    });
+    expect(withFiles.pages[0]!.files).toEqual([
+      'https://tile.loc.gov/file1.tif',
+      'https://tile.loc.gov/file2.jpg',
+    ]);
   });
 
   it('collects related_items from top-level related_items array and item.related_items', async () => {
@@ -771,29 +956,35 @@ describe('LocApiService.getItem', () => {
     expect(result.contributors).toEqual([]);
   });
 
-  it('deduplicates resource_links when url and image point to the same resource', async () => {
+  it('lists no pages for a resource without files or without a url (#63)', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(
         JSON.stringify({
-          item: { title: 'Dup', url: 'https://www.loc.gov/item/dup/' },
+          item: { title: 'Sparse', url: 'https://www.loc.gov/item/sparse/' },
           resources: [
             {
-              url: 'https://tile.loc.gov/same-resource.jpg',
-              image: 'https://tile.loc.gov/same-resource.jpg',
+              url: 'https://www.loc.gov/resource/sparse.0001/',
+              image: 'https://tile.loc.gov/a.jpg',
             },
+            { files: [[{ url: 'https://tile.loc.gov/orphan.jpg' }]] },
           ],
           related_items: [],
         }),
       ),
     );
-    const ctx = createMockContext();
-    const svc = getLocApiService();
-    const result = await svc.getItem('dup', ctx);
-    const count = result.resource_links.filter(
-      (l) => l === 'https://tile.loc.gov/same-resource.jpg',
-    ).length;
-    expect(count).toBe(1);
+    const result = await getLocApiService().getItem('sparse', createMockContext());
+
+    expect(result.resources).toEqual([
+      {
+        url: 'https://www.loc.gov/resource/sparse.0001/',
+        page_count: 0,
+        image: 'https://tile.loc.gov/a.jpg',
+      },
+    ]);
+    expect(result.pages).toEqual([]);
+    expect(result.page_total).toBe(0);
+    expect(result).not.toHaveProperty('next_page_offset');
   });
 
   it('userAgent env var value is never surfaced in item result data', async () => {
@@ -1025,22 +1216,201 @@ describe('LocApiService.getItem', () => {
     const svc = getLocApiService();
     const err = await svc.getItem('2009632251', ctx).catch((e: unknown) => e);
 
-    expect(err).toMatchObject({ code: JsonRpcErrorCode.ServiceUnavailable });
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'upstream_unavailable' },
+    });
     const data = (err as { data?: Record<string, unknown> }).data ?? {};
     expect(data).not.toHaveProperty('url');
     expect(JSON.stringify(data)).not.toContain('fo=json');
     expect((err as Error).message).not.toContain('www.loc.gov');
   });
+
+  it('throws ServiceUnavailable carrying upstream_unavailable on a 5xx, sent once', async () => {
+    const fetchSpy = mockFetch('Service Unavailable', 503);
+    vi.stubGlobal('fetch', fetchSpy);
+    const err = await getLocApiService()
+      .getItem('2009632251', createMockContext())
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'LOC API returned HTTP 503',
+      data: { status: 503, reason: 'upstream_unavailable' },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('LocApiService.getItem page window (#63)', () => {
+  let fetchSpy: MockInstance<typeof fetch>;
+
+  beforeEach(async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+    initLocApiService(config, await createInMemoryStorage());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Answers www.loc.gov item requests with `body`. */
+  const serve = (body: unknown) =>
+    fetchSpy.mockImplementation(async (url) => {
+      if (new URL(String(url)).hostname !== 'www.loc.gov') throw new Error('unmocked fetch');
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+
+  const window = (pageOffset: number, pageLimit: number, includeFiles = false) => ({
+    pageOffset,
+    pageLimit,
+    includeFiles,
+  });
+
+  it('lists the first 50 of 582 book pages by default, each addressed by ?sp=N', async () => {
+    serve(BOOK_ITEM_02007458);
+
+    const result = await getLocApiService().getItem('02007458', createMockContext());
+
+    expect(result.page_total).toBe(582);
+    expect(result.pages).toHaveLength(50);
+    expect(result.next_page_offset).toBe(50);
+    expect(result.pages[0]).toEqual({
+      page_url: 'https://www.loc.gov/resource/gdcmassbookdig.popularhistoryof00chen/?sp=1',
+      has_text: true,
+    });
+    expect(result.pages[49]!.page_url).toMatch(/\?sp=50$/);
+    expect(result.resources).toEqual([
+      {
+        url: 'https://www.loc.gov/resource/gdcmassbookdig.popularhistoryof00chen/',
+        page_count: 582,
+        image: BOOK_ITEM_02007458.resources[0]!.image,
+        pdf: BOOK_ITEM_02007458.resources[0]!.pdf,
+      },
+    ]);
+  });
+
+  it('pages through to the last page and stops advertising a next offset there', async () => {
+    serve(BOOK_ITEM_02007458);
+    const svc = getLocApiService();
+
+    const middle = await svc.getItem('02007458', createMockContext(), window(299, 100));
+    expect(middle.pages[0]!.page_url).toMatch(/\?sp=300$/);
+    expect(middle.next_page_offset).toBe(399);
+
+    const tail = await svc.getItem('02007458', createMockContext(), window(550, 100));
+    expect(tail.pages).toHaveLength(32);
+    expect(tail.pages.at(-1)!.page_url).toMatch(/\?sp=582$/);
+    expect(tail).not.toHaveProperty('next_page_offset');
+  });
+
+  it('returns an empty window past the last page, with the total', async () => {
+    serve(BOOK_ITEM_02007458);
+
+    const result = await getLocApiService().getItem(
+      '02007458',
+      createMockContext(),
+      window(582, 50),
+    );
+
+    expect(result.pages).toEqual([]);
+    expect(result.page_total).toBe(582);
+    expect(result).not.toHaveProperty('next_page_offset');
+  });
+
+  it('marks has_text from a text/plain entry and lists the url of every file on request', async () => {
+    // Diary pages 5 and 72 carry no transcription.
+    serve(MANUSCRIPT_ITEM_MM77093930);
+
+    const result = await getLocApiService().getItem(
+      'mm77093930',
+      createMockContext(),
+      window(0, 100, true),
+    );
+
+    expect(result.page_total).toBe(122);
+    expect(result.pages[2]!.page_url).toBe(
+      'https://www.loc.gov/resource/mss93930.mss93930-001/?sp=3',
+    );
+    expect(result.pages.filter((p) => !p.has_text).map((p) => p.page_url)).toEqual([
+      'https://www.loc.gov/resource/mss93930.mss93930-001/?sp=5',
+      'https://www.loc.gov/resource/mss93930.mss93930-001/?sp=72',
+    ]);
+    expect(result.pages[2]!.files).toEqual([
+      'https://tile.loc.gov/image-services/iiif/service:mss:mss93930:mss93930-001:0000:0003/full/pct:100/0/default.jpg',
+      'https://tile.loc.gov/storage-services/service/mss/mss93930/mss93930-001/0000/0003.jp2',
+      'https://tile.loc.gov/storage-services/master/mss/mss93930/mss93930-001/0000/0003.tif',
+      'https://tile.loc.gov/storage-services/service/gdc/gdccrowd/mss/mss93930/mss93930-001/0000/0003.txt',
+    ]);
+    // An untranscribed page lists its images only.
+    expect(result.pages[4]!.files).toHaveLength(3);
+  });
+
+  it('runs the window across resources, addressing one-page resources by their bare url', async () => {
+    // The card has a front and a back resource, one page each.
+    serve(BASEBALL_CARD_ITEM_2008676581);
+    const svc = getLocApiService();
+
+    const both = await svc.getItem('2008676581', createMockContext());
+    expect(both.pages.map((p) => p.page_url)).toEqual([
+      'https://www.loc.gov/resource/bbc.0941f/',
+      'https://www.loc.gov/resource/bbc.0941b/',
+    ]);
+    expect(both.resources.map((r) => r.page_count)).toEqual([1, 1]);
+
+    const back = await svc.getItem('2008676581', createMockContext(), window(1, 1, true));
+    expect(back.pages).toEqual([
+      {
+        page_url: 'https://www.loc.gov/resource/bbc.0941b/',
+        has_text: false,
+        files: [
+          'https://tile.loc.gov/storage-services/master/pnp/bbc/0900/0940/0941bu.tif',
+          'https://tile.loc.gov/storage-services/service/pnp/bbc/0900/0940/0941bv.jpg',
+        ],
+      },
+    ]);
+    expect(back).not.toHaveProperty('next_page_offset');
+  });
+
+  it("lists a recording's MP3 under its resource's audio", async () => {
+    serve(AUDIO_ITEM_JUKEBOX_68453);
+
+    const result = await getLocApiService().getItem('jukebox-68453', createMockContext());
+
+    expect(result.resources[0]).toEqual({
+      url: 'https://www.loc.gov/resource/jukebox-68453.0',
+      page_count: 1,
+      audio: AUDIO_ITEM_JUKEBOX_68453.resources[0]!.audio,
+    });
+    expect(result.resources[1]).toMatchObject({ page_count: 1, image: expect.any(String) });
+  });
+
+  it('addresses newspaper pages by the issue resource plus ?sp=N, every page with text', async () => {
+    serve(NEWSPAPER_ISSUE_SN83030214_1912_04_16);
+
+    const result = await getLocApiService().getItem(
+      'sn83030214/1912-04-16/ed-1',
+      createMockContext(),
+    );
+
+    expect(result.page_total).toBe(14);
+    expect(result.pages.every((p) => p.has_text)).toBe(true);
+    expect(result.pages[13]!.page_url).toBe(
+      'https://www.loc.gov/resource/sn83030214/1912-04-16/ed-1/?sp=14',
+    );
+  });
 });
 
 describe('LocApiService.searchNewspapers', () => {
   beforeEach(async () => {
+    // A test that forgets its stub fails here instead of reaching LOC, which blocks for an hour.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('unmocked fetch')));
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('maps the whole location_state facet to states, in LOC order (#43)', async () => {
@@ -1086,6 +1456,26 @@ describe('LocApiService.searchNewspapers', () => {
     expect(result.items[2]).not.toHaveProperty('states');
     expect(result.items[3]).not.toHaveProperty('states');
     for (const item of result.items) expect(item).not.toHaveProperty('state');
+  });
+
+  it('sends state as a location_state facet by full name, and dates and title as given (#59, #60)', async () => {
+    const fetchSpy = mockFetch(JSON.stringify({ results: [], pagination: { of: 0, total: 1 } }));
+    vi.stubGlobal('fetch', fetchSpy);
+    await getLocApiService().searchNewspapers(
+      {
+        query: 'titanic',
+        dates: '0000/1912-04-16',
+        state: 'NY',
+        newspaperTitle: 'new-york tribune (new york [n.y.]) 1866-1924',
+      },
+      createMockContext(),
+    );
+
+    const params = new URL(fetchSpy.mock.calls[0]![0] as string).searchParams;
+    expect(params.get('dates')).toBe('0000/1912-04-16');
+    expect(params.get('fa')).toBe(
+      'location_state:new york|partof_title:new-york tribune (new york [n.y.]) 1866-1924',
+    );
   });
 
   it('uses partof_title for newspaper_title, not subject', async () => {
@@ -1368,10 +1758,8 @@ describe('LocApiService.getNewspaperPage', () => {
     // The ?fo=json&at=resource endpoint structurally omits date_issued/sequence — both live only
     // in the page URL (date = path segment after the LCCN, sequence = sp param).
     const resourceBody = JSON.stringify({
-      resource: {
-        url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/',
-        fulltext_file: 'https://tile.loc.gov/text-services/full_text.json',
-      },
+      resource: { url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/' },
+      fulltext_service: 'https://tile.loc.gov/text-services/full_text.json',
     });
     const ocrBody = JSON.stringify({ 'batch/0001.xml': { full_text: 'Hair Falling?' } });
     const fetchSpy = vi
@@ -1396,10 +1784,14 @@ describe('LocApiService.getNewspaperPage', () => {
     expect(result.date).toBe('1912-04-18');
     expect(result.sequence).toBe(12);
     expect(result.ocr_available).toBe(true);
-    expect(result.ocr_text).toContain('Hair Falling');
+    expect(result.ocr_text).toBe('Hair Falling?');
+    // The text comes from the top-level fulltext_service.
+    expect(String(fetchSpy.mock.calls[1]![0])).toBe(
+      'https://tile.loc.gov/text-services/full_text.json',
+    );
   });
 
-  it('requests the item and resource projections together in one call (#42)', async () => {
+  it('requests the item, resource, and fulltext_service projections together in one call (#42, #64)', async () => {
     const fetchSpy = mockFetch(
       JSON.stringify({ resource: { url: 'https://www.loc.gov/resource/sn000/1900-01-01/ed-1/' } }),
     );
@@ -1411,7 +1803,7 @@ describe('LocApiService.getNewspaperPage', () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const calledUrl = new URL(fetchSpy.mock.calls[0]![0] as string);
-    expect(calledUrl.searchParams.get('at')).toBe('item,resource');
+    expect(calledUrl.searchParams.get('at')).toBe('item,resource,fulltext_service');
     expect(calledUrl.searchParams.get('sp')).toBe('2');
   });
 
@@ -1521,10 +1913,8 @@ describe('LocApiService.getNewspaperPage', () => {
     // The OCR fetch (tile.loc.gov) is a bare fetch the issue flagged as easy to miss — it now
     // carries the same retry + timeout as the primary path. Real timers (one ~1.1s backoff).
     const resourceBody = JSON.stringify({
-      resource: {
-        url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/',
-        fulltext_file: 'https://tile.loc.gov/text-services/full_text.json',
-      },
+      resource: { url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/' },
+      fulltext_service: 'https://tile.loc.gov/text-services/full_text.json',
     });
     const ocrBody = JSON.stringify({ 'batch/0001.xml': { full_text: 'Recovered OCR text' } });
     const fetchSpy = vi
@@ -1551,7 +1941,7 @@ describe('LocApiService.getNewspaperPage', () => {
     // 3 fetches: resource (1) + OCR transient failure (2) + OCR retry success (3).
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     expect(result.ocr_available).toBe(true);
-    expect(result.ocr_text).toContain('Recovered OCR text');
+    expect(result.ocr_text).toBe('Recovered OCR text');
   });
 });
 
@@ -1578,11 +1968,16 @@ describe('LocApiService out-of-range 404 (#40)', () => {
     page: number,
   ) => Promise<{ items: unknown[]; pagination: LocPagination }>;
 
-  const endpoints: { name: string; path: string; call: SearchCall }[] = [
+  /** An item search that asks for facets gets empty ones on a page LOC will not serve. */
+  const noFacets = { facets: { subject: [], location: [] } };
+
+  const endpoints: { name: string; path: string; call: SearchCall; extra?: object }[] = [
     {
-      name: 'bare search',
+      name: 'bare search with facets',
       path: '/search/',
-      call: (svc, ctx, page) => svc.search({ query: 'zyzzyva', limit: 3, page }, ctx),
+      call: (svc, ctx, page) =>
+        svc.search({ query: 'zyzzyva', includeFacets: true, limit: 3, page }, ctx),
+      extra: noFacets,
     },
     {
       name: 'format search',
@@ -1608,7 +2003,7 @@ describe('LocApiService out-of-range 404 (#40)', () => {
     },
   ];
 
-  describe.each(endpoints)('$name', ({ path, call }) => {
+  describe.each(endpoints)('$name', ({ path, call, extra }) => {
     it.each([2, 900, 9999])(
       'reads a 404 on page %i as an out-of-range page, in one request',
       async (page) => {
@@ -1626,6 +2021,7 @@ describe('LocApiService out-of-range 404 (#40)', () => {
             hasNext: false,
             ceilingReached: false,
           },
+          ...extra,
         });
         expect(fetchSpy).toHaveBeenCalledTimes(1);
         const calledUrl = String(fetchSpy.mock.calls[0]![0]);
@@ -1707,6 +2103,239 @@ describe('LocApiService retry', () => {
     });
     // A 5xx is status-derived, not a transient network fault — fail fast, no retry.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('LocApiService upstream text (#65)', () => {
+  /** A semicolon-closed character reference — what no normalized string may still carry. */
+  const CHARACTER_REFERENCE = /&(?:[A-Za-z][A-Za-z0-9]*|#\d+|#[xX][0-9A-Fa-f]+);/;
+
+  /** Answers www.loc.gov with `page` and, when given, tile.loc.gov with `text`. */
+  const serveHosts = (page: unknown, text?: unknown) =>
+    serveByHost({ 'www.loc.gov': page, ...(text !== undefined && { 'tile.loc.gov': text }) });
+
+  beforeEach(async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+    initLocApiService(config, await createInMemoryStorage());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('decodes the references in captured search descriptions, once', async () => {
+    serveHosts({
+      results: [
+        ...JAZZ_ENTITY_ROWS,
+        {
+          id: 'escaped',
+          title: 'P&amp;P &amp;lt;b&amp;gt;',
+          url: 'https://www.loc.gov/item/escaped/',
+        },
+      ],
+      pagination: { of: 4, perpage: 25, pages: 1 },
+    });
+    const { items } = await getLocApiService().search({ query: 'jazz' }, createMockContext());
+
+    for (const item of items.slice(0, 3)) {
+      expect(JSON.stringify(item)).not.toMatch(CHARACTER_REFERENCE);
+    }
+    expect(items[0]!.description).toMatch(
+      /^  Thanks to .* the Library’s jazz collections .* the …$/,
+    );
+    expect(items[1]!.description).toContain('entitled “I Hate Jazz” and');
+    expect(items[2]!.description).toContain(
+      'lead.  Today, January 26, is the birthday of Stèphane',
+    );
+    expect(items[3]!.title).toBe('P&P &lt;b&gt;');
+    // Identifiers and URLs are read as before.
+    expect(items[1]).toMatchObject({
+      id: 'loc/2014/01/all-that-jazz',
+      url: 'https://blogs.loc.gov/loc/2014/01/all-that-jazz/',
+      date: '2014-01-31',
+      format: 'web page',
+    });
+  });
+
+  it('decodes facet values', async () => {
+    serveHosts({
+      results: [{ id: 'a', title: 'A', url: 'https://www.loc.gov/item/a/' }],
+      pagination: { of: 1, perpage: 25, pages: 1 },
+      facets: [
+        { type: 'subject', filters: [{ value: 'arts &amp; crafts', count: 3 }] },
+        { type: 'location', filters: [{ value: 'saint-&#xE9;tienne', count: 1 }] },
+      ],
+    });
+    const { facets } = await getLocApiService().search(
+      { query: 'crafts', includeFacets: true },
+      createMockContext(),
+    );
+    expect(facets).toEqual({
+      subject: [{ value: 'arts & crafts', count: 3 }],
+      location: [{ value: 'saint-étienne', count: 1 }],
+    });
+  });
+
+  it('reduces the captured HTML item.rights to plain text when rights_information is absent', async () => {
+    serveHosts({
+      item: { ...MANUSCRIPT_ITEM_MM77093930.item, rights: MANUSCRIPT_RIGHTS_MM77093930 },
+      resources: [],
+    });
+    const result = await getLocApiService().getItem('mm77093930', createMockContext());
+    expect(result.rights_information).toBe(
+      'The contents of the Library of Congress Betty Herndon Maury Maury collection are in the public domain and are free to use and reuse. Credit Line: Library of Congress, Manuscript Division, Betty Herndon Maury Maury Diary. More about Copyright and other Restrictions (https://www.loc.gov/legal/). For guidance about compiling full citations consult Citing Primary Sources (https://www.loc.gov/teachers/usingprimarysources/citing.html).',
+    );
+  });
+
+  it('decodes item.rights once: an escaped tag stays text, never a tag to strip', async () => {
+    serveHosts({
+      item: {
+        title: 'Map',
+        rights: ['<p>P&amp;P &amp;lt;b&amp;gt; &lt;i&gt;</p>', '<p>Second.</p>'],
+        url: 'https://www.loc.gov/item/map/',
+      },
+    });
+    const result = await getLocApiService().getItem('map', createMockContext());
+    expect(result.rights_information).toBe('P&P &lt;b&gt; <i> Second.');
+  });
+
+  it('decodes rights_information without stripping it, and prefers it over item.rights', async () => {
+    serveHosts({
+      item: {
+        title: 'Photo',
+        rights_information: 'No known restrictions on publication &amp; reuse. Not 1866-<1899>.',
+        rights: MAP_RIGHTS_98688514,
+        url: 'https://www.loc.gov/item/photo/',
+      },
+    });
+    const result = await getLocApiService().getItem('photo', createMockContext());
+    expect(result.rights_information).toBe(
+      'No known restrictions on publication & reuse. Not 1866-<1899>.',
+    );
+  });
+
+  it('keeps the literal catalog brackets in notes', async () => {
+    serveHosts({
+      item: { ...NEWSPAPER_ISSUE_SN83030214_1912_04_16.item, notes: NEWSPAPER_NOTES_SN83030214 },
+    });
+    const result = await getLocApiService().getItem(
+      'sn83030214/1912-04-16/ed-1',
+      createMockContext(),
+    );
+    expect(result.notes).toEqual([
+      'Semiweekly ed.: New-York tribune (New York, N.Y. : 1866 : Semiweekly), 1866-<1899>.',
+      'Triweekly eds.: New-York tri-weekly tribune, <1900>-1903, and: New York tribune (New York, N.Y. : 1903), 1903-<1909>.',
+      'Weekly ed.: New-York tribune (New York, N.Y. : 1866 : Weekly), 1866-<1906>.',
+    ]);
+  });
+
+  it('decodes every item text field and a related record known only by title', async () => {
+    serveHosts({
+      item: {
+        title: 'Caf&eacute; &amp; bar',
+        created_published_date: 'c1915 &ndash; 1916',
+        contributor_names: ['Ch&acirc;telet, Th&eacute;&acirc;tre (Publisher)'],
+        subject_headings: ['Arts &amp; crafts--France'],
+        subject: ['arts &amp; crafts'],
+        notes: ['Gift of &quot;A. Smith&quot;.'],
+        summary: ['First &hellip;', 'second.'],
+        medium: ['1 print &times; 2'],
+        call_number: ['LOT 6668 <item> [P&amp;P]'],
+        language: ['fran&ccedil;ais'],
+        location: ['saint-&#xE9;tienne'],
+        original_format: ['photo, print &amp; drawing'],
+        online_format: ['image'],
+        related_items: [{ title: 'Les Caf&eacute;s' }],
+        url: 'https://www.loc.gov/item/cafe/',
+      },
+    });
+    const result = await getLocApiService().getItem('cafe', createMockContext());
+    expect(JSON.stringify(result)).not.toMatch(CHARACTER_REFERENCE);
+    expect(result).toMatchObject({
+      title: 'Café & bar',
+      date: 'c1915 – 1916',
+      contributors: ['Châtelet, Théâtre (Publisher)'],
+      subject_headings: ['Arts & crafts--France'],
+      subject_terms: ['arts & crafts'],
+      notes: ['Gift of "A. Smith".'],
+      summary: 'First … second.',
+      physical_description: '1 print × 2',
+      call_number: 'LOT 6668 <item> [P&P]',
+      languages: ['français'],
+      locations: ['saint-étienne'],
+      original_formats: ['photo, print & drawing'],
+      related_items: ['Les Cafés'],
+    });
+  });
+
+  it('decodes newspaper rows before the excerpt is cut, so no reference is split', async () => {
+    // The raw reference straddles character 500; cut first, it would leave "&#82".
+    const description = `${'x'.repeat(497)}&#8217;s more text`;
+    serveHosts({
+      results: [
+        {
+          url: 'https://www.loc.gov/resource/sn1/1912-04-16/ed-1/?sp=1',
+          title: 'Image 1 of The S&amp;B herald',
+          description: [description],
+          partof_title: ['the s&amp;b herald (smith&#8217;s ferry, idaho) 1910-1920'],
+          location_state: ['idaho'],
+          date: '1912-04-16',
+        },
+      ],
+      pagination: { of: 1, perpage: 25, pages: 1 },
+    });
+    const { items } = await getLocApiService().searchNewspapers(
+      { query: 'herald' },
+      createMockContext(),
+    );
+    expect(items[0]).toMatchObject({
+      title: 'Image 1 of The S&B herald',
+      newspaper_title: 'the s&b herald (smith’s ferry, idaho) 1910-1920',
+      description: `${'x'.repeat(497)}’s `,
+    });
+  });
+
+  it('decodes page metadata and passes the page text through verbatim', async () => {
+    // tile.loc.gov text is not HTML-escaped — it carries raw `<` (`p<ured`) and bare `&` — so a
+    // `&name;` sequence in it is the page's own text, never a reference to decode.
+    const ocr = `Smith & Co. paid &amp; signed\n${TITANIC_OCR_EXCERPT}`;
+    serveHosts(
+      {
+        item: {
+          newspaper_title: ['The S&amp;B herald'],
+          place_of_publication: 'Smith&#8217;s Ferry, Idaho',
+          location_state: ['idaho'],
+        },
+        resource: { url: 'https://www.loc.gov/resource/sn1/1912-04-16/ed-1/' },
+        fulltext_service:
+          'https://tile.loc.gov/text-services/word-coordinates-service?segment=/x.xml',
+      },
+      { '/x.xml': { full_text: ocr } },
+    );
+    const result = await getLocApiService().getNewspaperPage(
+      'https://www.loc.gov/resource/sn1/1912-04-16/ed-1/?sp=1',
+      createMockContext(),
+    );
+    expect(result).toMatchObject({
+      newspaper_title: 'The S&B herald',
+      place_of_publication: 'Smith’s Ferry, Idaho',
+      ocr_text: ocr,
+    });
+  });
+
+  it('decodes the captured collection descriptions', async () => {
+    serveHosts({ results: COLLECTION_ENTITY_ROWS, pagination: { of: 2, perpage: 25, pages: 1 } });
+    const { items } = await getLocApiService().browseCollections({}, createMockContext());
+    for (const item of items) expect(JSON.stringify(item)).not.toMatch(CHARACTER_REFERENCE);
+    expect(items[0]!.description).toMatch(
+      /^This collection highlights the history of the hymn “Amazing Grace” from/,
+    );
+    expect(items[1]!.description).toContain('at the Théâtre du Châtelet in May of 1909');
+    expect(items[1]!.description).toContain(
+      'Schéhérazade, Firebird, Petrouchka, L’Après-midi d’un Faune',
+    );
+    expect(items[1]!.slug).toBe('ballets-russes-de-serge-diaghilev');
   });
 });
 

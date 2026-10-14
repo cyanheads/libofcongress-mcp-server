@@ -5,7 +5,9 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
+import { noticeWriter, pageSizeClampNotice } from '@/mcp-server/tools/notices.js';
+import { inlineText, lineText } from '@/mcp-server/tools/render-text.js';
+import { getLocApiService, LOC_MAX_PAGE_SIZE } from '@/services/loc-api/loc-api-service.js';
 
 export const locBrowseCollections = tool('libofcongress_browse_collections', {
   title: 'Browse LOC Collections',
@@ -23,9 +25,11 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
       .number()
       .int()
       .min(1)
-      .max(100)
+      .max(1000)
       .default(25)
-      .describe('Maximum number of collections to return. Default 25, max 100.'),
+      .describe(
+        'Maximum number of collections to return. Default 25. A page holds at most 100 collections: a larger limit (up to 1000) is served as a 100-collection page, and page then counts 100-collection pages.',
+      ),
     page: z
       .number()
       .int()
@@ -73,11 +77,17 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
     totalCount: z
       .number()
       .describe('Total matching collections — mirrors output.total for agent reasoning.'),
+    effectiveLimit: z
+      .number()
+      .optional()
+      .describe(
+        'The page size actually served when limit exceeded the per-call cap of 100. Absent when limit was within the cap.',
+      ),
     notice: z
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty or a page is out of range — suggests broadening the keyword or removing filters. Absent on successful result pages.',
+        'Recovery hint when results are empty or a page is out of range — suggests broadening the keyword or removing filters — plus disclosure of a capped limit. Absent on ordinary result pages.',
       ),
   },
 
@@ -105,18 +115,27 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
       recovery:
         'Retry with a more specific query keyword, or retry in a few minutes; the Library of Congress is responding slowly.',
     },
+    {
+      reason: 'upstream_unavailable',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      thrownBy: 'service',
+      when: 'The Library of Congress could not be reached, or answered with an error status, a bot challenge or other HTML page, or an unreadable response instead of its JSON.',
+      recovery: 'Retry in a few minutes; the Library of Congress is temporarily unavailable.',
+    },
   ],
 
   async handler(input, ctx) {
     ctx.log.info('libofcongress_browse_collections', { query: input.query, page: input.page });
     const query = input.query?.trim();
+    // A limit past the per-call cap is a workload request, not an error: serve one capped page.
+    const effectiveLimit = Math.min(input.limit, LOC_MAX_PAGE_SIZE);
     const svc = getLocApiService();
     let result: Awaited<ReturnType<typeof svc.browseCollections>>;
     try {
       result = await svc.browseCollections(
         {
           ...(query && { query }),
-          limit: input.limit,
+          limit: effectiveLimit,
           page: input.page,
         },
         ctx,
@@ -139,23 +158,30 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
     }
 
     const { total, page, pages, hasNext } = result.pagination;
+    const addNotice = noticeWriter(ctx);
 
     // Mirror the upstream total for agent reasoning. The empty-result branches below return
     // total: 0 and re-enrich with 0 so totalCount never contradicts the returned total — LOC
     // reports a nonzero pagination.total even for no-match keywords. Last write wins.
     ctx.enrich.total(total);
+    if (effectiveLimit < input.limit) {
+      ctx.enrich({ effectiveLimit });
+      addNotice(
+        pageSizeClampNotice(input.limit, effectiveLimit, page, result.items.length > 0 && hasNext),
+      );
+    }
 
     if (result.items.length === 0) {
       // pages === 0 is the service's sentinel for a page LOC would not serve (404, 400, or 520);
       // page > 1 separates it from a genuine empty result.
       if (page > 1 && pages === 0) {
-        ctx.enrich.notice(
+        addNotice(
           `Page ${page} is out of range for the collection list${query ? ` matching "${query}"` : ''}. Re-run with page 1 to see the total collection count and page count, then request a page within that range.`,
         );
         ctx.enrich.total(0);
         return { collections: [], total: 0, page, pages: 0, has_next: false };
       }
-      ctx.enrich.notice(
+      addNotice(
         query
           ? `No collections matched "${query}". Try a broader keyword or call without a query to list all LOC digital collections.`
           : 'No collections found. The LOC collections endpoint may be temporarily unavailable.',
@@ -182,11 +208,12 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
     lines.push(
       `**Total:** ${result.total} | **Page:** ${result.page} of ${result.pages} | **has_next:** ${result.has_next}`,
     );
+    // Catalog text goes through inlineText; the slug and URL render as sent.
     for (const col of result.collections) {
-      lines.push(`\n## ${col.title}`);
+      lines.push(`\n## ${inlineText(col.title)}`);
       lines.push(`**Slug:** ${col.slug}`);
       if (col.item_count !== undefined) lines.push(`**Items:** ${col.item_count}`);
-      if (col.description) lines.push(col.description);
+      if (col.description) lines.push(lineText(col.description));
       lines.push(`**URL:** ${col.url}`);
     }
     return [{ type: 'text', text: lines.join('\n') }];

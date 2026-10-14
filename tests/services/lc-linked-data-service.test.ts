@@ -1,41 +1,64 @@
 /**
- * @fileoverview Tests for the LcLinkedDataService — init/accessor guard, suggest API
- * normalization, error classification, and security invariants.
+ * @fileoverview Tests for the LcLinkedDataService — init/accessor guard, the id.loc.gov
+ * `suggest2` keyword search and its left-anchored fallback, hit normalization, the shared call
+ * budget across both requests, error classification, and security invariants.
  * @module tests/services/lc-linked-data-service.test
  */
 
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
+import { getServerConfig } from '@/config/server-config.js';
 import {
   getLcLinkedDataService,
   initLcLinkedDataService,
   LcLinkedDataService,
-  SUGGEST_MAX_COUNT,
 } from '@/services/lc-linked-data/lc-linked-data-service.js';
+import {
+  AERIAL_PHOTOG_KEYWORD,
+  AERIAL_PHOTOG_LEFT_ANCHORED,
+  CIVIL_WAR_KEYWORD,
+  CIVIL_WAR_LEFT_ANCHORED,
+  WORLD_WAR_1939_KEYWORD,
+} from '../fixtures/lc-subject-suggest.js';
 
-function mockFetch(body: string, status = 200) {
-  return vi.fn().mockResolvedValue(
-    new Response(body, {
-      status,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  );
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/x-suggestions+json; charset=utf-8' },
+  });
+
+/** A suggest2 page with no hits, as the endpoint answers an unmatched query. */
+const noHits = (searchtype: 'keyword' | 'left-anchored') => ({
+  q: 'xyzzy',
+  count: 0,
+  pagesize: 10,
+  start: 1,
+  sortmethod: searchtype === 'keyword' ? 'rank' : 'alpha',
+  searchtype,
+  directory: '/authorities/subjects/',
+  hits: [],
+});
+
+/** Never answers; rejects with the signal's reason once the request's signal aborts. */
+function hangUntilAborted(_url: string | URL | Request, init?: RequestInit): Promise<Response> {
+  return new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+  });
 }
 
-/**
- * Minimal well-formed 4-tuple suggest response: [query, labels[], descriptions[], uris[]].
- * The third array is a per-suggestion description string ("1 result") — defaulted to the live form.
- */
-function makeSuggest(entries: Array<{ label: string; uri: string; description?: string }>) {
-  return JSON.stringify([
-    'query',
-    entries.map((e) => e.label),
-    entries.map((e) => e.description ?? '1 result'),
-    entries.map((e) => e.uri),
-  ]);
+/** Routes id.loc.gov requests by search type: keyword when `searchtype=keyword`, else left-anchored. */
+function routeBySearchType(keyword: () => Response, leftAnchored: () => Response) {
+  return async (url: string | URL | Request) => {
+    const parsed = new URL(String(url));
+    if (parsed.hostname !== 'id.loc.gov') throw new Error(`unexpected host ${parsed.hostname}`);
+    return parsed.searchParams.get('searchtype') === 'keyword' ? keyword() : leftAnchored();
+  };
 }
+
+const requestUrl = (spy: MockInstance<typeof fetch>, call: number) =>
+  new URL(String(spy.mock.calls[call]![0]));
 
 describe('LcLinkedDataService init/accessor', () => {
   it('getLcLinkedDataService() returns the initialized instance', async () => {
@@ -47,289 +70,347 @@ describe('LcLinkedDataService init/accessor', () => {
 });
 
 describe('LcLinkedDataService.searchSubjects', () => {
+  let fetchSpy: MockInstance<typeof fetch>;
+
   beforeEach(async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
     const storage = await createInMemoryStorage();
     initLcLinkedDataService(config, storage);
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it('maps the 4-tuple suggest response to LcSubjectHeading records', async () => {
-    vi.stubGlobal(
-      'fetch',
-      mockFetch(
-        makeSuggest([
-          {
-            label: 'World War, 1939-1945',
-            uri: 'http://id.loc.gov/authorities/subjects/sh85148273',
-          },
-        ]),
-      ),
-    );
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects: results } = await svc.searchSubjects('world war', 10, ctx);
+  it('sends a keyword search to the subject-scoped suggest2 endpoint for at least 50 headings', async () => {
+    fetchSpy.mockResolvedValue(json(WORLD_WAR_1939_KEYWORD));
 
-    expect(results).toEqual([
-      { label: 'World War, 1939-1945', uri: 'http://id.loc.gov/authorities/subjects/sh85148273' },
-    ]);
+    await getLcLinkedDataService().searchSubjects('world war 1939', 7, createMockContext());
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const url = requestUrl(fetchSpy, 0);
+    expect(url.origin).toBe('https://id.loc.gov');
+    expect(url.pathname).toBe('/authorities/subjects/suggest2/');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      q: 'world war 1939',
+      searchtype: 'keyword',
+      count: '50',
+    });
   });
 
-  it('carries no count from the description column, which tallies authority records (#41)', async () => {
-    // Live `aerial photography` descriptions: "1 result", "2 results" — a count of matching
-    // authority records, not of LOC items. Nothing numeric may leak into the heading record.
-    vi.stubGlobal(
-      'fetch',
-      mockFetch(
-        makeSuggest([
-          {
-            label: 'Aerial photography in agriculture',
-            uri: 'http://id.loc.gov/authorities/subjects/sh85001254',
-            description: '1 result',
-          },
-          {
-            label: 'Photography, Aerial',
-            uri: 'http://id.loc.gov/authorities/subjects/sh85101360',
-            description: '2 results',
-          },
-        ]),
-      ),
+  it('promotes an exact label ranked past limit, then cuts the page to limit', async () => {
+    // suggest2 returns at most `count` hits. Live `civil war`: the exact `Civil war` ranks 10th,
+    // so a page of only `limit` (3) hits never holds it.
+    fetchSpy.mockImplementation(async (url) => {
+      const count = Number(new URL(String(url)).searchParams.get('count'));
+      return json({ ...CIVIL_WAR_KEYWORD, hits: CIVIL_WAR_KEYWORD.hits.slice(0, count) });
+    });
+
+    const result = await getLcLinkedDataService().searchSubjects(
+      'civil war',
+      3,
+      createMockContext(),
     );
+
+    expect(result.subjects.map((s) => s.label)).toEqual([
+      'Civil war',
+      'Border States (U.S. Civil War)',
+      'War of the Castilian Succession, 1475-1479',
+    ]);
+    // Truncation still reads the upstream total, not the over-fetched page.
+    expect(result.matchCount).toBe(488);
+  });
+
+  it('asks for limit headings when limit is above 50', async () => {
+    fetchSpy.mockResolvedValue(json(WORLD_WAR_1939_KEYWORD));
+
+    await getLcLinkedDataService().searchSubjects('world war 1939', 80, createMockContext());
+
+    expect(requestUrl(fetchSpy, 0).searchParams.get('count')).toBe('80');
+  });
+
+  it('maps keyword hits to { label, uri } and reports the upstream match count', async () => {
+    fetchSpy.mockResolvedValue(json(WORLD_WAR_1939_KEYWORD));
+
+    const result = await getLcLinkedDataService().searchSubjects(
+      'world war 1939',
+      5,
+      createMockContext(),
+    );
+
+    expect(result.matchCount).toBe(1341);
+    expect(result.subjects[0]).toEqual({
+      label: 'World War, 1939-1945',
+      uri: 'http://id.loc.gov/authorities/subjects/sh85148273',
+    });
+    expect(result.subjects.map((s) => s.label)).toEqual(
+      WORLD_WAR_1939_KEYWORD.hits.map((h) => h.aLabel),
+    );
+    // No upstream rank or tally leaks into a heading record (#41).
+    for (const s of result.subjects) expect(Object.keys(s).sort()).toEqual(['label', 'uri']);
+  });
+
+  it('moves a hit whose label equals the query (case-insensitive) to the top, keeping the rest in rank order', async () => {
+    // Live `civil war` keyword ranking: the exact heading `Civil war` sits 10th.
+    fetchSpy.mockResolvedValue(json(CIVIL_WAR_KEYWORD));
+
     const { subjects } = await getLcLinkedDataService().searchSubjects(
-      'aerial photography',
+      '  Civil War ',
       10,
       createMockContext(),
     );
 
-    expect(subjects).toHaveLength(2);
-    for (const s of subjects) expect(Object.keys(s).sort()).toEqual(['label', 'uri']);
+    expect(subjects[0]).toEqual({
+      label: 'Civil war',
+      uri: 'http://id.loc.gov/authorities/subjects/sh85026421',
+    });
+    const ranked = CIVIL_WAR_KEYWORD.hits.map((h) => h.aLabel).filter((l) => l !== 'Civil war');
+    expect(subjects.slice(1).map((s) => s.label)).toEqual(ranked);
+    expect(subjects).toHaveLength(10);
   });
 
-  it('returns empty array when suggest response has fewer than 4 elements', async () => {
-    vi.stubGlobal('fetch', mockFetch(JSON.stringify(['query', [], []])));
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects: results } = await svc.searchSubjects('short', 10, ctx);
-    expect(results).toHaveLength(0);
+  it('leaves the ranking untouched when no hit equals the query', async () => {
+    fetchSpy.mockResolvedValue(json(WORLD_WAR_1939_KEYWORD));
+
+    const { subjects } = await getLcLinkedDataService().searchSubjects(
+      'world war 1939',
+      5,
+      createMockContext(),
+    );
+
+    expect(subjects.map((s) => s.uri)).toEqual(WORLD_WAR_1939_KEYWORD.hits.map((h) => h.uri));
   });
 
-  it('skips entries where label or uri is empty/falsy', async () => {
-    vi.stubGlobal(
-      'fetch',
-      mockFetch(
-        JSON.stringify([
-          'query',
-          ['Valid Label', '', 'Another Valid'],
-          ['', '', ''],
-          [
-            'http://id.loc.gov/authorities/subjects/sh1',
-            'http://id.loc.gov/authorities/subjects/sh2',
-            'http://id.loc.gov/authorities/subjects/sh3',
-          ],
-        ]),
+  it('sends one request when the keyword search matches', async () => {
+    fetchSpy.mockImplementation(
+      routeBySearchType(
+        () => json(CIVIL_WAR_KEYWORD),
+        () => json(CIVIL_WAR_LEFT_ANCHORED),
       ),
     );
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects: results } = await svc.searchSubjects('test', 10, ctx);
-    // Entry with empty label should be skipped
-    expect(results.every((r) => r.label !== '')).toBe(true);
+
+    await getLcLinkedDataService().searchSubjects('civil war', 10, createMockContext());
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('drops non-LCSH records, keeping only /authorities/subjects/ URIs', async () => {
-    // memberOf is ignored by the suggest endpoint, which interleaves name-authority and
-    // childrensSubjects records — only true subject headings may survive.
-    vi.stubGlobal(
-      'fetch',
-      mockFetch(
-        makeSuggest([
-          {
-            label: 'World War 1 Impact on Palestine (Conference)',
-            uri: 'http://id.loc.gov/authorities/names/no2016139038',
-          },
-          {
-            label: 'Aerial photography in wildlife conservation',
-            uri: 'http://id.loc.gov/authorities/childrensSubjects/sj2021051581',
-          },
-          {
-            label: 'Photography, Aerial',
-            uri: 'http://id.loc.gov/authorities/subjects/sh85101360',
-            description: '2 results',
-          },
-          {
-            label: 'Aerial photography',
-            uri: 'http://id.loc.gov/authorities/subjects/sh2007001301',
-          },
-        ]),
+  it('retries once left-anchored on the same endpoint when the keyword search matches nothing', async () => {
+    // Live `aerial photog`: a partial word — 0 by keyword, 45 left-anchored.
+    fetchSpy.mockImplementation(
+      routeBySearchType(
+        () => json(AERIAL_PHOTOG_KEYWORD),
+        () => json(AERIAL_PHOTOG_LEFT_ANCHORED),
       ),
     );
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects: results } = await svc.searchSubjects('aerial photography', 10, ctx);
 
-    expect(results).toHaveLength(2);
-    expect(results.every((r) => r.uri.startsWith('http://id.loc.gov/authorities/subjects/'))).toBe(
-      true,
+    const result = await getLcLinkedDataService().searchSubjects(
+      'aerial photog',
+      3,
+      createMockContext(),
     );
-    expect(results.map((r) => r.uri)).toEqual([
-      'http://id.loc.gov/authorities/subjects/sh85101360',
-      'http://id.loc.gov/authorities/subjects/sh2007001301',
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const retry = requestUrl(fetchSpy, 1);
+    expect(retry.pathname).toBe('/authorities/subjects/suggest2/');
+    expect(Object.fromEntries(retry.searchParams)).toEqual({ q: 'aerial photog', count: '50' });
+    expect(result.matchCount).toBe(45);
+    expect(result.subjects.map((s) => s.label)).toEqual(
+      AERIAL_PHOTOG_LEFT_ANCHORED.hits.map((h) => h.aLabel).slice(0, 3),
+    );
+  });
+
+  it('labels a left-anchored cross-reference with its authorized heading (aLabel), not the variant', async () => {
+    fetchSpy.mockImplementation(
+      routeBySearchType(
+        () => json(noHits('keyword')),
+        () => json(CIVIL_WAR_LEFT_ANCHORED),
+      ),
+    );
+
+    const { subjects } = await getLcLinkedDataService().searchSubjects(
+      'civil war',
+      10,
+      createMockContext(),
+    );
+
+    const crossRef = subjects.find(
+      (s) => s.uri === 'http://id.loc.gov/authorities/subjects/sh2009001090',
+    );
+    expect(crossRef).toEqual({
+      label: 'Soldiers and Sailors Monument (Portland, Me.)',
+      uri: 'http://id.loc.gov/authorities/subjects/sh2009001090',
+    });
+    expect(subjects.some((s) => s.label.includes('(USE '))).toBe(false);
+    // The exact heading also leads a left-anchored page.
+    expect(subjects[0]!.label).toBe('Civil war');
+  });
+
+  it('returns no headings and a zero count when both searches match nothing', async () => {
+    fetchSpy.mockImplementation(
+      routeBySearchType(
+        () => json(noHits('keyword')),
+        () => json(noHits('left-anchored')),
+      ),
+    );
+
+    const result = await getLcLinkedDataService().searchSubjects('xyzzy', 10, createMockContext());
+
+    expect(result).toEqual({ subjects: [], matchCount: 0 });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips hits whose authorized label or uri is empty', async () => {
+    fetchSpy.mockResolvedValue(
+      json({
+        ...WORLD_WAR_1939_KEYWORD,
+        hits: [
+          { ...WORLD_WAR_1939_KEYWORD.hits[0], aLabel: '' },
+          { ...WORLD_WAR_1939_KEYWORD.hits[1], uri: '' },
+          WORLD_WAR_1939_KEYWORD.hits[2],
+        ],
+      }),
+    );
+
+    const { subjects } = await getLcLinkedDataService().searchSubjects(
+      'world war 1939',
+      10,
+      createMockContext(),
+    );
+
+    expect(subjects).toEqual([
+      {
+        label: 'World War, 1939-1945, on postage stamps',
+        uri: 'http://id.loc.gov/authorities/subjects/sh93003336',
+      },
     ]);
   });
 
-  it('returns empty when the suggest response contains only name-authority records', async () => {
-    vi.stubGlobal(
-      'fetch',
-      mockFetch(
-        makeSuggest([
-          {
-            label: 'World War 1 Impact on Palestine (2014 : London, England)',
-            uri: 'http://id.loc.gov/authorities/names/no2017117310',
-          },
-          {
-            label: 'World War 100 Mirror collection',
-            uri: 'http://id.loc.gov/authorities/names/no2015079945',
-          },
-        ]),
+  it('runs both requests inside one 50 s budget — a slow empty keyword leg leaves the retry the remainder', async () => {
+    vi.useFakeTimers();
+    fetchSpy.mockImplementation((url, init) =>
+      new URL(String(url)).searchParams.get('searchtype') === 'keyword'
+        ? new Promise((resolve) => setTimeout(() => resolve(json(noHits('keyword'))), 45_000))
+        : hangUntilAborted(url, init),
+    );
+
+    const settled = getLcLinkedDataService()
+      .searchSubjects('aerial photog', 10, createMockContext())
+      .catch((e: unknown) => e);
+    let error: unknown;
+    void settled.then((e) => {
+      error = e;
+    });
+    await vi.advanceTimersByTimeAsync(50_100);
+
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      message:
+        'The Library of Congress subject heading service did not respond within the 50-second request budget.',
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails the left-anchored retry leg as upstream_unavailable when it answers 503', async () => {
+    fetchSpy.mockImplementation(
+      routeBySearchType(
+        () => json(noHits('keyword')),
+        () => new Response('Service Unavailable', { status: 503 }),
       ),
     );
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects: results } = await svc.searchSubjects('world war', 3, ctx);
-    expect(results).toHaveLength(0);
-  });
 
-  it('requests the full candidate cap regardless of limit, then slices to limit', async () => {
-    const fetchSpy = mockFetch(
-      makeSuggest(
-        Array.from({ length: 12 }, (_, i) => ({
-          label: `Subject ${i}`,
-          uri: `http://id.loc.gov/authorities/subjects/sh${i}`,
-        })),
-      ),
-    );
-    vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects, matchCount } = await svc.searchSubjects('test', 5, ctx);
-
-    // Request size is decoupled from `limit` — always the endpoint's 50-candidate cap — so a
-    // heading ranked deep in the pool is fetched, not missed by a limit-scaled window (issue #25).
-    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
-    expect(calledUrl).toContain('count=50');
-    // Sliced to the requested limit; matchCount reflects the full filtered pool.
-    expect(subjects).toHaveLength(5);
-    expect(matchCount).toBe(12);
-  });
-
-  it('surfaces a valid heading ranked below a small limit — no false empty (issue #25)', async () => {
-    // Mirrors the live `civil war`, limit:2 repro — six name-authority records rank ahead of the one
-    // real LCSH heading. The old limit-scaled fetch (count=6) surfaced the heading only against a
-    // mock; the cap-sized request (count=50) reaches it against the real endpoint's ranked pool.
-    const entries = [
-      ...Array.from({ length: 6 }, (_, i) => ({
-        label: `Civil war name authority ${i}`,
-        uri: `http://id.loc.gov/authorities/names/no${i}`,
-      })),
-      {
-        label: 'Civil War Campaign Medal',
-        uri: 'http://id.loc.gov/authorities/subjects/sh90004165',
-      },
-    ];
-    const fetchSpy = mockFetch(makeSuggest(entries));
-    vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects, matchCount, poolCapReached } = await svc.searchSubjects('civil war', 2, ctx);
-
-    expect((fetchSpy.mock.calls[0]![0] as string) ?? '').toContain('count=50');
-    expect(subjects).toHaveLength(1);
-    expect(subjects[0]!.uri).toBe('http://id.loc.gov/authorities/subjects/sh90004165');
-    expect(matchCount).toBe(1);
-    // Seven candidates in the pool (< 50 cap) — the heading is genuinely present, not cut off.
-    expect(poolCapReached).toBe(false);
-  });
-
-  it('reports poolCapReached when the endpoint returns its full cap of non-subject records', async () => {
-    // 50 name-authority records, zero real headings — the candidate cap was hit, so a heading may
-    // rank beyond it; distinct from a topic with no LCSH coverage at all.
-    const entries = Array.from({ length: SUGGEST_MAX_COUNT }, (_, i) => ({
-      label: `Name authority ${i}`,
-      uri: `http://id.loc.gov/authorities/names/no${i}`,
-    }));
-    vi.stubGlobal('fetch', mockFetch(makeSuggest(entries)));
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects, matchCount, poolCapReached } = await svc.searchSubjects('world war', 3, ctx);
-
-    expect(subjects).toHaveLength(0);
-    expect(matchCount).toBe(0);
-    expect(poolCapReached).toBe(true);
-  });
-
-  it('throws ServiceUnavailable on non-OK HTTP status', async () => {
-    vi.stubGlobal('fetch', mockFetch('Service Error', 503));
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    await expect(svc.searchSubjects('test', 10, ctx)).rejects.toMatchObject({
+    await expect(
+      getLcLinkedDataService().searchSubjects('aerial photog', 10, createMockContext()),
+    ).rejects.toMatchObject({
       code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { status: 503, reason: 'upstream_unavailable' },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws ServiceUnavailable carrying upstream_unavailable and the bare status on non-OK HTTP status', async () => {
+    fetchSpy.mockResolvedValue(new Response('Service Error', { status: 503 }));
+    await expect(
+      getLcLinkedDataService().searchSubjects('test', 10, createMockContext()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'LC Linked Data returned HTTP 503',
+      data: { status: 503, reason: 'upstream_unavailable' },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws ServiceUnavailable carrying upstream_unavailable on HTML response (outage), sent once', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('<!DOCTYPE html><html><body>Maintenance</body></html>', { status: 200 }),
+    );
+    await expect(
+      getLcLinkedDataService().searchSubjects('test', 10, createMockContext()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'LC Linked Data returned HTML — temporarily unavailable.',
+      data: { reason: 'upstream_unavailable' },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws ServiceUnavailable carrying upstream_unavailable on a truncated 200 body, sent once', async () => {
+    fetchSpy.mockResolvedValue(new Response('{"q":"jazz*","count":229,"hits":[{"aLab'));
+    await expect(
+      getLcLinkedDataService().searchSubjects('jazz', 10, createMockContext()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message:
+        'The Library of Congress subject heading service returned an incomplete or malformed response.',
+      data: { reason: 'upstream_unavailable' },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws upstream_unavailable on JSON that is not a suggest2 page, without a fallback request', async () => {
+    // The retired /suggest/ 4-tuple, valid JSON in the wrong shape.
+    fetchSpy.mockResolvedValue(json(['jazz', ['Jazz'], ['1 result'], ['http://x']]));
+    await expect(
+      getLcLinkedDataService().searchSubjects('jazz', 10, createMockContext()),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'The Library of Congress subject heading service returned an unexpected response.',
+      data: { reason: 'upstream_unavailable' },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('percent-encodes the query, so markup and query-string syntax in it reach id.loc.gov as the q value only', async () => {
+    fetchSpy.mockImplementation(async () => json(noHits('keyword')));
+    const injection = '<script>alert(1)</script>&searchtype=left&count=1#frag';
+
+    await getLcLinkedDataService().searchSubjects(injection, 10, createMockContext());
+
+    const sent = String(fetchSpy.mock.calls[0]![0]);
+    expect(sent).not.toMatch(/[<>#]/);
+    expect(Object.fromEntries(new URL(sent).searchParams)).toEqual({
+      q: injection,
+      searchtype: 'keyword',
+      count: '50',
     });
   });
 
-  it('throws ServiceUnavailable on HTML response (outage)', async () => {
-    vi.stubGlobal('fetch', mockFetch('<!DOCTYPE html><html><body>Maintenance</body></html>'));
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    await expect(svc.searchSubjects('test', 10, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.ServiceUnavailable,
-    });
-  });
+  it('sends the configured User-Agent and keeps it out of the result and of error data', async () => {
+    const userAgent = getServerConfig().userAgent;
+    fetchSpy.mockResolvedValueOnce(json(WORLD_WAR_1939_KEYWORD));
+    const result = await getLcLinkedDataService().searchSubjects('war', 10, createMockContext());
 
-  it('passes count param capped at 50 to the suggest endpoint', async () => {
-    const fetchSpy = mockFetch(makeSuggest([]));
-    vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    await svc.searchSubjects('jazz', 200, ctx); // limit of 200 exceeds cap
-    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
-    expect(calledUrl).toContain('count=50');
-    expect(calledUrl).not.toContain('count=200');
-  });
+    const init = fetchSpy.mock.calls[0]![1];
+    expect(new Headers(init?.headers).get('user-agent')).toBe(userAgent);
+    expect(JSON.stringify(result)).not.toContain(userAgent);
 
-  it('injection string in query is percent-encoded in the request URL', async () => {
-    const fetchSpy = mockFetch(makeSuggest([]));
-    vi.stubGlobal('fetch', fetchSpy);
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const injection = '<script>alert(1)</script>';
-    await svc.searchSubjects(injection, 10, ctx);
-    const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
-    // Raw angle brackets must not appear unencoded
-    expect(calledUrl).not.toContain('<script>');
-  });
-
-  it('userAgent env var value is never surfaced in subject result data', async () => {
-    const secretAgent = 'my-secret-subject-agent';
-    process.env.LOC_USER_AGENT = secretAgent;
-    vi.stubGlobal(
-      'fetch',
-      mockFetch(
-        makeSuggest([
-          {
-            label: 'World War, 1939-1945',
-            uri: 'http://id.loc.gov/authorities/subjects/sh85148273',
-          },
-        ]),
-      ),
-    );
-    const ctx = createMockContext();
-    const svc = getLcLinkedDataService();
-    const { subjects: results } = await svc.searchSubjects('war', 10, ctx);
-
-    const resultStr = JSON.stringify(results);
-    expect(resultStr).not.toContain(secretAgent);
-    delete process.env.LOC_USER_AGENT;
+    fetchSpy.mockResolvedValueOnce(new Response('Service Error', { status: 503 }));
+    const err = await getLcLinkedDataService()
+      .searchSubjects('war', 10, createMockContext())
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ data: { reason: 'upstream_unavailable' } });
+    expect(
+      `${(err as Error).message} ${JSON.stringify((err as { data?: unknown }).data)}`,
+    ).not.toContain(userAgent);
   });
 });

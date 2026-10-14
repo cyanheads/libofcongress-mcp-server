@@ -13,6 +13,19 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locGetItem } from '@/mcp-server/tools/definitions/libofcongress-get-item.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
+import { htmlToText } from '@/services/loc-api/loc-text.js';
+import {
+  AUDIO_ITEM_JUKEBOX_68453,
+  BASEBALL_CARD_ITEM_2008676581,
+  BOOK_ITEM_02007458,
+  MANUSCRIPT_ITEM_MM77093930,
+  MAP_ITEM_98688514,
+  NEWSPAPER_ISSUE_SN83030214_1912_04_16,
+  PHOTO_ITEM_2017760320,
+} from '../fixtures/loc-items.js';
+import { MAP_ITEM_77694805 } from '../fixtures/loc-subjects.js';
+import { MANUSCRIPT_RIGHTS_MM77093930, NEWSPAPER_NOTES_SN83030214 } from '../fixtures/loc-text.js';
+import { serveByHost } from '../helpers/loc-fetch.js';
 import { contentText, contractRecovery, structured, wireError } from '../helpers/tool-result.js';
 
 /** Full LOC item response fixture */
@@ -29,7 +42,10 @@ function makeItemResponse(overrides: Record<string, unknown> = {}) {
         { 'smith, john': 'https://www.loc.gov/search/?fa=contributor:smith,+john&fo=json' },
         { 'jones, mary': 'https://www.loc.gov/search/?fa=contributor:jones,+mary&fo=json' },
       ],
-      subject: ['Portraits', 'Men -- Photographs'],
+      // Live item JSON: `subject` holds the lowercase facet terms, `subject_headings` the LCSH
+      // headings the terms were split from.
+      subject: ['portraits', 'men', 'photographs'],
+      subject_headings: ['Portraits', 'Men--Photographs'],
       notes: ['From the Bain collection.'],
       rights_information: 'No known restrictions.',
       physical_description: '1 photograph : silver gelatin ; 5 x 4 in.',
@@ -56,8 +72,96 @@ function mockFetch(body: string, status = 200) {
   );
 }
 
+describe('locGetItem upstream text (#65)', () => {
+  beforeEach(async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unmocked fetch'));
+    initLocApiService(config, await createInMemoryStorage());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('returns the captured HTML rights as plain text on both surfaces', async () => {
+    serveByHost({
+      'www.loc.gov': {
+        item: { ...MANUSCRIPT_ITEM_MM77093930.item, rights: MANUSCRIPT_RIGHTS_MM77093930 },
+        resources: [],
+      },
+    });
+    const result = await runToolContract(locGetItem, { item_id: 'mm77093930' });
+    // The HTML-to-text reduction is tabled in loc-text.test.ts; this proves item.rights reaches it.
+    const rights = htmlToText(MANUSCRIPT_RIGHTS_MM77093930.join(' '));
+    expect(structured(result).rights_information).toBe(rights);
+    expect(contentText(result)).toContain(`\n**Rights:** ${rights}\n`);
+  });
+
+  it('escapes markup in catalog text in content[] only; notes keep their catalog brackets', async () => {
+    serveByHost({
+      'www.loc.gov': {
+        item: {
+          title: 'Diary &lt;i&gt;draft&lt;/i&gt;',
+          created_published_date: '1861 <Apr.>',
+          contributor_names: ['Maury, Betty &lt;b&gt;'],
+          subject_headings: ['Diaries\r\n--Virginia'],
+          subject: ['diaries <i>'],
+          summary: ['A diary &amp;lt;b&amp;gt;.'],
+          medium: ['1 v. <u>'],
+          call_number: ['LOT 6668 <item> [P&amp;P]'],
+          language: ['english <x>'],
+          location: ['virginia <y>'],
+          original_format: ['manuscript/mixed material'],
+          online_format: ['image <z>'],
+          notes: [...NEWSPAPER_NOTES_SN83030214, 'Gift &lt;b&gt;', '1898. Gift of the family.'],
+          number_former_id: ['https://hdl.loc.gov/loc.mss/mm.77093930?a=1&b=2'],
+          related_items: [{ title: 'Related &lt;i&gt;' }, 'Related string &lt;u&gt;'],
+          rights_information: ['Public domain &lt;b&gt;.'],
+          url: 'https://www.loc.gov/item/mm77093930/',
+        },
+      },
+    });
+    const result = await runToolContract(locGetItem, { item_id: 'mm77093930' });
+    expect(structured(result)).toMatchObject({
+      title: 'Diary <i>draft</i>',
+      call_number: 'LOT 6668 <item> [P&P]',
+      subject_headings: ['Diaries\r\n--Virginia'],
+      summary: 'A diary &lt;b&gt;.',
+      notes: [...NEWSPAPER_NOTES_SN83030214, 'Gift <b>', '1898. Gift of the family.'],
+      rights_information: 'Public domain <b>.',
+      related_items: ['Related <i>', 'Related string <u>'],
+    });
+    const text = contentText(result);
+    for (const line of [
+      '# Diary \\<i>draft\\</i>\n',
+      '**Date:** 1861 \\<Apr.>\n',
+      '**Contributors:** Maury, Betty \\<b>\n',
+      '**Subject headings:** Diaries --Virginia\n',
+      '**Subject terms:** diaries \\<i>\n',
+      '**Languages:** english \\<x>\n',
+      '**Locations:** virginia \\<y>\n',
+      '**Summary:** A diary \\&lt;b\\&gt;.\n',
+      '**Physical description:** 1 v. \\<u>\n',
+      '**Original format:** manuscript/mixed material\n',
+      '**Online format:** image \\<z>\n',
+      '**Call number:** LOT 6668 \\<item> [P&P]\n',
+      '**Former IDs:** https://hdl.loc.gov/loc.mss/mm.77093930?a=1&b=2\n',
+      '- Semiweekly ed.: New-York tribune (New York, N.Y. : 1866 : Semiweekly), 1866-<1899>.\n',
+      '- Gift \\<b>\n',
+      '- 1898\\. Gift of the family.\n',
+      '**Rights:** Public domain \\<b>.\n',
+      '**Related items:** Related \\<i>, Related string \\<u>\n',
+      '**URL:** https://www.loc.gov/item/mm77093930/',
+    ]) {
+      expect(text).toContain(line);
+    }
+  });
+});
+
 describe('locGetItem', () => {
   beforeEach(async () => {
+    // A test that forgets its stub fails here instead of reaching LOC, which blocks for an hour.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('unmocked fetch')));
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
   });
@@ -76,11 +180,12 @@ describe('locGetItem', () => {
     expect(result.title).toBe('Portrait of a man');
     expect(result.date).toBe('1920');
     expect(result.contributors).toEqual(['Smith, John (Photographer)', 'Jones, Mary (Publisher)']);
-    expect(result.subject_headings).toContain('Portraits');
+    expect(result.subject_headings).toEqual(['Portraits', 'Men--Photographs']);
+    expect(result.subject_terms).toEqual(['portraits', 'men', 'photographs']);
     expect(result.notes).toContain('From the Bain collection.');
     expect(result.rights_information).toBe('No known restrictions.');
     expect(result.physical_description).toBe('1 photograph : silver gelatin ; 5 x 4 in.');
-    expect(result.resource_links.length).toBeGreaterThan(0);
+    expect(result.resources).toHaveLength(1);
     expect(result.url).toBe('https://www.loc.gov/item/2009632251/');
   });
 
@@ -105,8 +210,12 @@ describe('locGetItem', () => {
 
     expect(result.contributors).toEqual([]);
     expect(result.subject_headings).toEqual([]);
+    expect(result.subject_terms).toEqual([]);
     expect(result.notes).toEqual([]);
-    expect(result.resource_links).toEqual([]);
+    expect(result.resources).toEqual([]);
+    expect(result.pages).toEqual([]);
+    expect(result.page_total).toBe(0);
+    expect(result.next_page_offset).toBeUndefined();
     expect(result.related_items).toEqual([]);
     expect(result.date).toBeUndefined();
     expect(result.rights_information).toBeUndefined();
@@ -181,7 +290,7 @@ describe('locGetItem', () => {
     expect((err as Error).message).not.toContain('www.loc.gov');
   });
 
-  it('deduplicates resource_links', async () => {
+  it('lists each resource once, its url and image as separate fields (#63)', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch(
@@ -197,8 +306,13 @@ describe('locGetItem', () => {
     const ctx = createMockContext({ errors: locGetItem.errors });
     const input = locGetItem.input.parse({ item_id: 'dup' });
     const result = await locGetItem.handler(input, ctx);
-    const unique = new Set(result.resource_links);
-    expect(unique.size).toBe(result.resource_links.length);
+    expect(result.resources).toEqual([
+      {
+        url: 'https://tile.loc.gov/same.jpg',
+        page_count: 0,
+        image: 'https://tile.loc.gov/same.jpg',
+      },
+    ]);
   });
 
   it('format() renders title, ID, subjects, and URL', () => {
@@ -207,14 +321,17 @@ describe('locGetItem', () => {
       title: 'Portrait of Abraham Lincoln',
       date: '1865',
       contributors: ['Brady, Mathew B.'],
-      subject_headings: ['Presidents -- United States -- Portraits'],
+      subject_headings: ['Presidents--United States--Portraits', 'Lincoln, Abraham, 1809-1865'],
+      subject_terms: ['presidents', 'united states', 'portraits', 'lincoln, abraham'],
       notes: [],
       languages: [],
       locations: [],
       former_ids: [],
       original_formats: [],
       online_formats: [],
-      resource_links: ['https://tile.loc.gov/lincoln.jpg'],
+      resources: [{ url: 'https://www.loc.gov/resource/ppmsc.02404/', page_count: 1 }],
+      pages: [{ page_url: 'https://www.loc.gov/resource/ppmsc.02404/', has_text: false }],
+      page_total: 1,
       related_items: [],
       url: 'https://www.loc.gov/item/loc.pnp.ppmsc.02404/',
     });
@@ -224,8 +341,234 @@ describe('locGetItem', () => {
     expect(text).toContain('loc.pnp.ppmsc.02404');
     expect(text).toContain('Portrait of Abraham Lincoln');
     expect(text).toContain('Brady, Mathew B.');
-    expect(text).toContain('Presidents -- United States -- Portraits');
+    // Headings carry commas, so they are joined with semicolons.
+    expect(text).toContain(
+      '**Subject headings:** Presidents--United States--Portraits; Lincoln, Abraham, 1809-1865',
+    );
+    expect(text).toContain(
+      '**Subject terms:** presidents; united states; portraits; lincoln, abraham',
+    );
     expect(text).toContain('https://www.loc.gov/item/loc.pnp.ppmsc.02404/');
+  });
+
+  it('returns the LCSH headings and the facet terms as separate fields on both surfaces (#57)', async () => {
+    // Live 77694805: the facet terms the old subject_headings carried are now subject_terms.
+    vi.stubGlobal('fetch', mockFetch(JSON.stringify(MAP_ITEM_77694805)));
+
+    const result = await runToolContract(locGetItem, { item_id: '77694805' });
+
+    const sc = structured(result);
+    expect(sc.subject_headings).toEqual([
+      'Transportation--Oklahoma--Maps',
+      'Railroads--Oklahoma--Maps',
+      'United States--Oklahoma',
+    ]);
+    expect(sc.subject_terms).toEqual([
+      'maps',
+      'transportation',
+      'united states',
+      'railroads',
+      'oklahoma',
+    ]);
+    const text = contentText(result);
+    expect(text).toContain(
+      '**Subject headings:** Transportation--Oklahoma--Maps; Railroads--Oklahoma--Maps; United States--Oklahoma',
+    );
+    expect(text).toContain(
+      '**Subject terms:** maps; transportation; united states; railroads; oklahoma',
+    );
+  });
+
+  describe('date as cataloged (#62)', () => {
+    /** Answers www.loc.gov item requests with `body`; anything else stays unmocked. */
+    const serveItem = (body: unknown) =>
+      vi.fn(async (url: string | URL | Request) => {
+        if (new URL(String(url)).hostname !== 'www.loc.gov') throw new Error('unmocked fetch');
+        return new Response(JSON.stringify(body), { status: 200 });
+      });
+
+    it.each([
+      { name: 'FSA photo', id: '2017760320', body: PHOTO_ITEM_2017760320, date: '1936 Apr.' },
+      {
+        name: 'baseball card',
+        id: '2008676581',
+        body: BASEBALL_CARD_ITEM_2008676581,
+        date: '1909-1911.',
+      },
+      { name: 'book', id: '02007458', body: BOOK_ITEM_02007458, date: '1894' },
+      { name: 'map', id: '98688514', body: MAP_ITEM_98688514, date: '1894' },
+      { name: 'manuscript', id: 'mm77093930', body: MANUSCRIPT_ITEM_MM77093930, date: '1861' },
+      {
+        name: 'sound recording',
+        id: 'jukebox-68453',
+        body: AUDIO_ITEM_JUKEBOX_68453,
+        date: '1923-11-07',
+      },
+      {
+        name: 'newspaper issue',
+        id: 'sn83030214/1912-04-16/ed-1',
+        body: NEWSPAPER_ISSUE_SN83030214_1912_04_16,
+        date: '1912-04-16',
+      },
+    ])('returns the $name date LOC catalogs on both surfaces', async ({ id, body, date }) => {
+      vi.stubGlobal('fetch', serveItem(body));
+
+      const result = await runToolContract(locGetItem, { item_id: id });
+
+      expect(structured(result).date).toBe(date);
+      expect(contentText(result)).toContain(`**Date:** ${date}\n`);
+    });
+
+    it('describes date as the cataloged value', () => {
+      expect(locGetItem.output.shape.date.description).toMatch(/as LOC catalogs it/);
+    });
+  });
+
+  describe('page window (#63)', () => {
+    const serveItem = (body: unknown) => {
+      const spy = vi.fn(async (url: string | URL | Request) => {
+        if (new URL(String(url)).hostname !== 'www.loc.gov') throw new Error('unmocked fetch');
+        return new Response(JSON.stringify(body), { status: 200 });
+      });
+      vi.stubGlobal('fetch', spy);
+      return spy;
+    };
+    const bytes = (value: unknown) =>
+      Buffer.byteLength(typeof value === 'string' ? value : JSON.stringify(value));
+
+    it('lists 50 of 582 book pages with next_page_offset, each surface under 8 KB', async () => {
+      serveItem(BOOK_ITEM_02007458);
+
+      const result = await runToolContract(locGetItem, { item_id: '02007458' });
+
+      const sc = structured(result);
+      expect(sc).toMatchObject({ page_total: 582, next_page_offset: 50 });
+      expect(sc.pages).toHaveLength(50);
+      expect(sc).not.toHaveProperty('resource_links');
+      expect((sc.pages as Array<Record<string, unknown>>)[0]).toEqual({
+        page_url: 'https://www.loc.gov/resource/gdcmassbookdig.popularhistoryof00chen/?sp=1',
+        has_text: true,
+      });
+      const text = contentText(result);
+      expect(text).toContain('**Pages 1–50 of 582 — next_page_offset: 50:**');
+      expect(text).toContain(
+        '- https://www.loc.gov/resource/gdcmassbookdig.popularhistoryof00chen/?sp=50 (has text)',
+      );
+      expect(text).not.toContain('?sp=51');
+      expect(text).toContain(BOOK_ITEM_02007458.resources[0]!.pdf);
+      expect(bytes(sc)).toBeLessThan(8_000);
+      expect(bytes(text)).toBeLessThan(8_000);
+      expect(sc).not.toHaveProperty('notice');
+    });
+
+    it('adds each page file on include_files, scoped to the window', async () => {
+      serveItem(BOOK_ITEM_02007458);
+
+      const result = await runToolContract(locGetItem, {
+        item_id: '02007458',
+        page_offset: 10,
+        page_limit: 2,
+        include_files: true,
+      });
+
+      const pages = structured(result).pages as Array<{ page_url: string; files: string[] }>;
+      expect(pages.map((p) => p.page_url)).toEqual([
+        'https://www.loc.gov/resource/gdcmassbookdig.popularhistoryof00chen/?sp=11',
+        'https://www.loc.gov/resource/gdcmassbookdig.popularhistoryof00chen/?sp=12',
+      ]);
+      // The text/plain entry has no url of its own, so six of the seven entries list.
+      expect(pages[0]!.files).toHaveLength(6);
+      expect(pages[0]!.files[0]).toBe(
+        'https://tile.loc.gov/storage-services/public/gdcmassbookdig/popularhistoryof00chen/popularhistoryof00chen_0011.alto.xml',
+      );
+      const text = contentText(result);
+      expect(text).toContain('**Pages 11–12 of 582 — next_page_offset: 12:**');
+      for (const file of [...pages[0]!.files, ...pages[1]!.files])
+        expect(text).toContain(`  - ${file}`);
+      expect(text).not.toContain('popularhistoryof00chen_0013');
+    });
+
+    it('serves a page_limit past 100 as 100 pages and discloses it on both surfaces', async () => {
+      serveItem(BOOK_ITEM_02007458);
+
+      const result = await runToolContract(locGetItem, { item_id: '02007458', page_limit: 300 });
+
+      const sc = structured(result);
+      expect(sc.pages).toHaveLength(100);
+      expect(sc).toMatchObject({ effectivePageLimit: 100, next_page_offset: 100 });
+      const notice =
+        'Requested page_limit 300 exceeds the per-call cap of 100; this response lists up to 100 pages. Request page_offset 100 for the next pages.';
+      expect(sc.notice).toBe(notice);
+      expect(contentText(result)).toContain(notice);
+    });
+
+    it('rejects a page_limit above 1000 and a negative page_offset at the schema', () => {
+      expect(() => locGetItem.input.parse({ item_id: '1', page_limit: 1001 })).toThrow();
+      expect(() => locGetItem.input.parse({ item_id: '1', page_limit: 0 })).toThrow();
+      expect(() => locGetItem.input.parse({ item_id: '1', page_offset: -1 })).toThrow();
+    });
+
+    it('returns an empty page list with a notice for an offset past the last page', async () => {
+      serveItem(BOOK_ITEM_02007458);
+
+      const result = await runToolContract(locGetItem, { item_id: '02007458', page_offset: 600 });
+
+      const sc = structured(result);
+      expect(sc).toMatchObject({ pages: [], page_total: 582 });
+      expect(sc).not.toHaveProperty('next_page_offset');
+      const notice =
+        'page_offset 600 is past the last page: this item has 582 page(s). Use a page_offset from 0 to 581.';
+      expect(sc.notice).toBe(notice);
+      const text = contentText(result);
+      expect(text).toContain(notice);
+      expect(text).toContain('**Pages:** none listed of 582');
+    });
+
+    it('keeps both notices when a capped page_limit also lands past the last page', async () => {
+      serveItem(BASEBALL_CARD_ITEM_2008676581);
+
+      const sc = structured(
+        await runToolContract(locGetItem, {
+          item_id: '2008676581',
+          page_offset: 5,
+          page_limit: 500,
+        }),
+      );
+
+      expect(sc.notice).toBe(
+        'Requested page_limit 500 exceeds the per-call cap of 100; this response lists up to 100 pages. page_offset 5 is past the last page: this item has 2 page(s). Use a page_offset from 0 to 1.',
+      );
+    });
+
+    it("lists a recording's MP3 as its resource audio on both surfaces", async () => {
+      serveItem(AUDIO_ITEM_JUKEBOX_68453);
+
+      const result = await runToolContract(locGetItem, { item_id: 'jukebox-68453' });
+
+      const mp3 = AUDIO_ITEM_JUKEBOX_68453.resources[0]!.audio;
+      expect((structured(result).resources as Array<{ audio?: string }>)[0]!.audio).toBe(mp3);
+      expect(contentText(result)).toContain(
+        `- https://www.loc.gov/resource/jukebox-68453.0 — 1 page(s); audio: ${mp3}`,
+      );
+    });
+
+    it('lists the diary page 3 url with has_text for the page reader', async () => {
+      serveItem(MANUSCRIPT_ITEM_MM77093930);
+
+      const sc = structured(await runToolContract(locGetItem, { item_id: 'mm77093930' }));
+
+      expect((sc.pages as unknown[])[2]).toEqual({
+        page_url: 'https://www.loc.gov/resource/mss93930.mss93930-001/?sp=3',
+        has_text: true,
+      });
+      expect((sc.pages as unknown[])[4]).toMatchObject({ has_text: false });
+    });
+  });
+
+  it('describes subject_terms as values the search subject filter accepts', () => {
+    expect(locGetItem.output.shape.subject_terms.description).toMatch(
+      /libofcongress_search_items subject filter/,
+    );
   });
 
   it('format() renders sparse item without optional fields', () => {
@@ -234,13 +577,16 @@ describe('locGetItem', () => {
       title: 'Sparse Item',
       contributors: [],
       subject_headings: [],
+      subject_terms: [],
       notes: [],
       languages: [],
       locations: [],
       former_ids: [],
       original_formats: [],
       online_formats: [],
-      resource_links: [],
+      resources: [],
+      pages: [],
+      page_total: 0,
       related_items: [],
       url: 'https://www.loc.gov/item/sparse-id/',
     });
@@ -262,6 +608,7 @@ describe('locGetItem', () => {
       summary: 'A political cartoon commenting on the 1884 election.',
       contributors: [],
       subject_headings: [],
+      subject_terms: [],
       notes: [],
       languages: ['english'],
       locations: ['united states'],
@@ -270,7 +617,9 @@ describe('locGetItem', () => {
       original_formats: ['photo, print, drawing'],
       online_formats: ['image'],
       access_restricted: true,
-      resource_links: [],
+      resources: [],
+      pages: [],
+      page_total: 0,
       related_items: [],
       url: 'https://www.loc.gov/item/2005680380/',
     });
@@ -291,6 +640,7 @@ describe('locGetItem', () => {
       title: 'Open Item',
       contributors: [],
       subject_headings: [],
+      subject_terms: [],
       notes: [],
       languages: [],
       locations: [],
@@ -298,7 +648,9 @@ describe('locGetItem', () => {
       original_formats: [],
       online_formats: [],
       access_restricted: false,
-      resource_links: [],
+      resources: [],
+      pages: [],
+      page_total: 0,
       related_items: [],
       url: 'https://www.loc.gov/item/open-item/',
     });
@@ -323,13 +675,16 @@ describe('locGetItem', () => {
       title: 'Item with many related',
       contributors: [],
       subject_headings: [],
+      subject_terms: [],
       notes: [],
       languages: [],
       locations: [],
       former_ids: [],
       original_formats: [],
       online_formats: [],
-      resource_links: [],
+      resources: [],
+      pages: [],
+      page_total: 0,
       related_items: related,
       url: 'https://www.loc.gov/item/many-related/',
     });
@@ -339,52 +694,79 @@ describe('locGetItem', () => {
     expect(text).not.toContain('more');
   });
 
-  it('format() renders every resource_links entry, not a truncated head', () => {
-    const links = Array.from({ length: 8 }, (_, i) => `https://tile.loc.gov/file${i}.jpg`);
+  it('format() renders every resource field, not a truncated head (#63)', () => {
+    const resources = Array.from({ length: 8 }, (_, i) => ({
+      url: `https://www.loc.gov/resource/multi.${i}/`,
+      page_count: i,
+      image: `https://tile.loc.gov/multi/${i}.jpg`,
+      pdf: `https://tile.loc.gov/multi/${i}.pdf`,
+      audio: `https://tile.loc.gov/multi/${i}.mp3`,
+    }));
     const output = locGetItem.output.parse({
       item_id: 'multi-resource',
       title: 'Item with many resources',
       contributors: [],
       subject_headings: [],
+      subject_terms: [],
       notes: [],
       languages: [],
       locations: [],
       former_ids: [],
       original_formats: [],
       online_formats: [],
-      resource_links: links,
+      resources,
+      pages: [],
+      page_total: 0,
       related_items: [],
       url: 'https://www.loc.gov/item/multi-resource/',
     });
     const blocks = locGetItem.format!(output);
     const text = (blocks[0] as { type: 'text'; text: string }).text;
-    for (const link of links) expect(text).toContain(link);
-    expect(text).toContain('**Digital resources (8):**');
-    expect(text).not.toContain('more');
+    for (const r of resources) {
+      for (const value of [r.url, r.image, r.pdf, r.audio, `${r.page_count} page(s)`])
+        expect(text).toContain(value);
+    }
+    expect(text).toContain('**Resources (8):**');
+    expect(text).toContain('**Pages:** none listed of 0');
   });
 
-  it('format() reaches every structuredContent array value on a dense item', () => {
-    // Live worst case measured on item mgw1b.721 (342 resource_links); 342 entries here
-    // keeps the reachability contract honest at the size that motivated the cap.
-    const links = Array.from({ length: 342 }, (_, i) => `https://tile.loc.gov/mgw1b.721/${i}.jp2`);
+  it('format() reaches every structuredContent array value on a full window with files (#63)', () => {
+    // A full window: the 100-page cap, each page with its files, plus related items.
+    const pages = Array.from({ length: 100 }, (_, i) => ({
+      page_url: `https://www.loc.gov/resource/mgw1b.721/?sp=${i + 201}`,
+      has_text: i % 2 === 0,
+      files: [
+        `https://tile.loc.gov/mgw1b.721/${i + 201}.jp2`,
+        `https://tile.loc.gov/mgw1b.721/${i + 201}.txt`,
+      ],
+    }));
     const related = Array.from({ length: 6 }, (_, i) => `https://www.loc.gov/item/rel${i}/`);
     const output = locGetItem.output.parse({
       item_id: 'mgw1b.721',
       title: 'Diary, January 1 - December 31, 1772',
       contributors: [],
       subject_headings: [],
+      subject_terms: [],
       notes: [],
       languages: [],
       locations: [],
       former_ids: [],
       original_formats: [],
       online_formats: [],
-      resource_links: links,
+      resources: [{ url: 'https://www.loc.gov/resource/mgw1b.721/', page_count: 342 }],
+      pages,
+      page_total: 342,
+      next_page_offset: 300,
       related_items: related,
       url: 'https://www.loc.gov/item/mgw1b.721/',
     });
     const text = (locGetItem.format!(output)[0] as { type: 'text'; text: string }).text;
-    for (const value of [...links, ...related]) expect(text).toContain(value);
+    expect(text).toContain('**Pages 201–300 of 342 — next_page_offset: 300:**');
+    for (const page of pages) {
+      expect(text).toContain(`- ${page.page_url}${page.has_text ? ' (has text)' : ''}\n`);
+      for (const file of page.files) expect(text).toContain(`  - ${file}\n`);
+    }
+    for (const value of related) expect(text).toContain(value);
   });
 
   it('returns an absolute https url when upstream item.url is protocol-relative', async () => {
@@ -425,6 +807,89 @@ describe('locGetItem', () => {
     const calledUrl = (fetchSpy.mock.calls[0]![0] as string) ?? '';
     expect(calledUrl).toContain('/item/sn95047246/1935-09-05/ed-1/');
     expect(calledUrl).not.toContain('%2F');
+  });
+
+  describe('item_id link forms (#66)', () => {
+    /** Serves `body` for www.loc.gov requests; anything else rejects. */
+    const serve = (body: unknown) => {
+      const spy = vi.fn(async (url: string | URL | Request) => {
+        if (new URL(String(url)).hostname !== 'www.loc.gov') throw new Error('unmocked fetch');
+        return new Response(JSON.stringify(body), { status: 200 });
+      });
+      vi.stubGlobal('fetch', spy);
+      return spy;
+    };
+    const requestedPath = (spy: ReturnType<typeof serve>) =>
+      new URL(String(spy.mock.calls[0]![0])).pathname;
+
+    // The accepted and rejected link forms are tabled in loc-urls.test.ts; these prove the tool
+    // requests and returns the id normalizeItemId reads, and fails before any request on none.
+    it('requests the id read from an item link and returns the bare id on both surfaces', async () => {
+      const spy = serve(PHOTO_ITEM_2017760320);
+
+      const result = await runToolContract(locGetItem, {
+        item_id: 'https://www.loc.gov/item/2017760320/?st=gallery#top',
+      });
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(requestedPath(spy)).toBe('/item/2017760320/');
+      expect(structured(result).item_id).toBe('2017760320');
+      expect(contentText(result)).toContain('**ID:** 2017760320\n');
+    });
+
+    it('keeps the slashes of a multi-segment newspaper id given as its item URL', async () => {
+      const spy = serve(NEWSPAPER_ISSUE_SN83030214_1912_04_16);
+
+      const result = await runToolContract(locGetItem, {
+        item_id: 'https://www.loc.gov/item/sn83030214/1912-04-16/ed-1/',
+      });
+
+      expect(requestedPath(spy)).toBe('/item/sn83030214/1912-04-16/ed-1/');
+      expect(structured(result).item_id).toBe('sn83030214/1912-04-16/ed-1');
+    });
+
+    it('requests a non-newspaper multi-segment bare id as given', async () => {
+      const itemId = 'prn-06-092/rare-jazz-recordings-uncovered/2006-04-14';
+      const spy = serve(PHOTO_ITEM_2017760320);
+
+      await runToolContract(locGetItem, { item_id: itemId });
+
+      expect(requestedPath(spy)).toBe(`/item/${itemId}/`);
+    });
+
+    it.each([
+      ['a /resource/ page URL', 'https://www.loc.gov/resource/sn83030214/1912-04-16/ed-1/?sp=1'],
+      ["another host's /item/ URL", 'https://evil.example/item/2017760320/'],
+    ])('rejects %s as invalid_item_id before any request', async (_name, itemId) => {
+      const spy = vi.fn();
+      vi.stubGlobal('fetch', spy);
+
+      const result = await runToolContract(locGetItem, { item_id: itemId });
+
+      const error = wireError(result);
+      const hint = contractRecovery(locGetItem, 'invalid_item_id');
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'invalid_item_id', field: 'item_id', received: itemId, recovery: { hint } },
+      });
+      expect(error.message).toContain('`https://www.loc.gov/item/<id>/`');
+      const text = contentText(result);
+      expect(text).toContain(`Recovery: ${hint}`);
+      // A placeholder outside a code span renders as an HTML tag and vanishes.
+      expect(text.replace(/`[^`]*`/g, '')).not.toMatch(/<[a-z]+>/);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('names the accepted forms in the item_id description and the invalid_item_id contract', () => {
+      const description = String(locGetItem.input.shape.item_id.description);
+      expect(description).toContain('https://www.loc.gov/item/');
+      expect(description).not.toMatch(/do not prepend/);
+      expect(locGetItem.description).not.toMatch(/do not prepend/);
+      const entry = locGetItem.errors!.find((e) => e.reason === 'invalid_item_id')!;
+      expect(entry).toMatchObject({ code: JsonRpcErrorCode.ValidationError, retryable: false });
+      expect(entry.recovery).toContain('https://www.loc.gov/item/');
+      expect(entry.recovery).toContain('libofcongress_get_newspaper_page');
+    });
   });
 
   it('succeeds on both surfaces for an item whose item.related_items holds objects (#39, #47)', async () => {

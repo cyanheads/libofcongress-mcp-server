@@ -6,12 +6,20 @@
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createInMemoryStorage, createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { createWorkerHandler } from '@cyanheads/mcp-ts-core/worker';
 import { ResourceTemplate } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locItemResource } from '@/mcp-server/resources/definitions/libofcongress-item.resource.js';
+import { locGetItem } from '@/mcp-server/tools/definitions/libofcongress-get-item.tool.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 import type { LocItemDetail } from '@/services/loc-api/types.js';
+import {
+  BOOK_ITEM_02007458,
+  MANUSCRIPT_ITEM_MM77093930,
+  PHOTO_ITEM_2017760320,
+} from '../fixtures/loc-items.js';
+import { MANUSCRIPT_RIGHTS_MM77093930, NEWSPAPER_NOTES_SN83030214 } from '../fixtures/loc-text.js';
+import { readItemResourceError } from '../helpers/item-resource-read.js';
+import { serveByHost } from '../helpers/loc-fetch.js';
 import { contractRecovery } from '../helpers/tool-result.js';
 
 function makeItemResponse(overrides: Record<string, unknown> = {}) {
@@ -23,7 +31,10 @@ function makeItemResponse(overrides: Record<string, unknown> = {}) {
       contributors: [
         { 'harris & ewing': 'https://www.loc.gov/search/?fa=contributor:harris+%26+ewing&fo=json' },
       ],
-      subject: ['Legislators -- United States -- Portraits'],
+      // Live item JSON: `subject` holds the lowercase facet terms, `subject_headings` the LCSH
+      // headings the terms were split from.
+      subject: ['legislators', 'united states', 'portraits'],
+      subject_headings: ['Legislators--United States--Portraits'],
       notes: ['From the Harris & Ewing collection.'],
       url: 'https://www.loc.gov/item/2016687584/',
       ...overrides,
@@ -101,62 +112,6 @@ const callItemResource = async (
   ctx: Parameters<typeof locItemResource.handler>[1],
 ): Promise<LocItemDetail> => (await locItemResource.handler(params, ctx)) as LocItemDetail;
 
-const PROTOCOL_VERSION = '2026-07-28';
-
-type WorkerHandler = ReturnType<typeof createWorkerHandler>;
-
-/**
- * Reads `uri` through the production resource factory, served by `createWorkerHandler`, and
- * returns the JSON-RPC `error` the client receives. Calling `handler()` directly skips the
- * factory, which is where a declared `errors[]` recovery hint is filled in.
- */
-async function readItemResourceError(uri: string): Promise<Record<string, unknown>> {
-  const worker = createWorkerHandler({
-    name: 'libofcongress-mcp-server',
-    title: 'libofcongress-mcp-server',
-    resources: [locItemResource],
-  });
-  const response = await worker.fetch(
-    new Request('http://localhost/mcp', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json, text/event-stream',
-        'Content-Type': 'application/json',
-        'MCP-Protocol-Version': PROTOCOL_VERSION,
-        'Mcp-Method': 'resources/read',
-        'Mcp-Name': uri,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'resources/read',
-        params: {
-          uri,
-          _meta: {
-            'io.modelcontextprotocol/protocolVersion': PROTOCOL_VERSION,
-            'io.modelcontextprotocol/clientInfo': { name: 'resource-test', version: '1.0.0' },
-            'io.modelcontextprotocol/clientCapabilities': {},
-          },
-        },
-      }),
-    }),
-    {} as Parameters<WorkerHandler['fetch']>[1],
-    { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as Parameters<
-      WorkerHandler['fetch']
-    >[2],
-  );
-  const text = await response.text();
-  const payload =
-    text.startsWith('event:') || text.startsWith('data:')
-      ? text
-          .split('\n')
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).trim())
-          .join('\n')
-      : text;
-  return (JSON.parse(payload) as { error: Record<string, unknown> }).error;
-}
-
 describe('locItemResource', () => {
   beforeEach(async () => {
     const storage = await createInMemoryStorage();
@@ -177,30 +132,58 @@ describe('locItemResource', () => {
     expect(result.title).toBe('Portrait of a senator');
     expect(result.date).toBe('1915');
     expect(result.contributors).toEqual(['Harris & Ewing (Photographer)']);
-    expect(result.subject_headings).toContain('Legislators -- United States -- Portraits');
+    expect(result.subject_headings).toEqual(['Legislators--United States--Portraits']);
+    expect(result.subject_terms).toEqual(['legislators', 'united states', 'portraits']);
   });
 
-  it('returns the same shape as libofcongress_get_item', async () => {
-    vi.stubGlobal('fetch', mockFetch(makeItemResponse()));
-    const ctx = createResourceContext({ uri: new URL('libofcongress://item/2016687584') });
-    const params = locItemResource.params!.parse({ item_id: '2016687584' });
-    const result = await callItemResource(params, ctx);
+  it('returns the record libofcongress_get_item returns for the same item with its default input', async () => {
+    // A 122-page diary, so the default page window and its next offset are part of the record.
+    serveByHost({ 'www.loc.gov': MANUSCRIPT_ITEM_MM77093930 });
+    const ctx = createResourceContext({ uri: new URL('libofcongress://item/mm77093930') });
 
-    expect(result).toHaveProperty('item_id');
-    expect(result).toHaveProperty('title');
-    expect(result).toHaveProperty('contributors');
-    expect(result).toHaveProperty('subject_headings');
-    expect(result).toHaveProperty('notes');
-    expect(result).toHaveProperty('resource_links');
-    expect(result).toHaveProperty('related_items');
-    expect(result).toHaveProperty('url');
-    // The resource returns getItem()'s record verbatim, so the curated metadata the tool
-    // surfaces has to arrive here too — always-present arrays at minimum.
-    expect(result).toHaveProperty('languages');
-    expect(result).toHaveProperty('locations');
-    expect(result).toHaveProperty('former_ids');
-    expect(result).toHaveProperty('original_formats');
-    expect(result).toHaveProperty('online_formats');
+    const fromResource = await callItemResource(
+      locItemResource.params!.parse({ item_id: 'mm77093930' }),
+      ctx,
+    );
+    const fromTool = await locGetItem.handler(
+      locGetItem.input.parse({ item_id: 'mm77093930' }),
+      createMockContext({ errors: locGetItem.errors }),
+    );
+
+    expect(fromResource).toEqual(fromTool);
+    expect(fromResource).toMatchObject({ item_id: 'mm77093930', page_total: 122 });
+    expect(fromResource).not.toHaveProperty('resource_links');
+  });
+
+  it('returns the default page window with next_page_offset and the cataloged date (#62, #63)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL | Request) => {
+        if (new URL(String(url)).hostname !== 'www.loc.gov') throw new Error('unmocked fetch');
+        return new Response(JSON.stringify(BOOK_ITEM_02007458), { status: 200 });
+      }),
+    );
+    const ctx = createResourceContext({ uri: new URL('libofcongress://item/02007458') });
+    const result = await callItemResource(
+      locItemResource.params!.parse({ item_id: '02007458' }),
+      ctx,
+    );
+
+    expect(result.pages).toHaveLength(50);
+    expect(result.pages.every((p) => !('files' in p))).toBe(true);
+    expect(result).toMatchObject({ page_total: 582, next_page_offset: 50, date: '1894' });
+    expect(locItemResource.description).toMatch(/libofcongress_get_item with page_offset/);
+  });
+
+  it('returns the cataloged date of a Prints & Photographs record (#62)', async () => {
+    vi.stubGlobal('fetch', mockFetch(JSON.stringify(PHOTO_ITEM_2017760320)));
+    const ctx = createResourceContext({ uri: new URL('libofcongress://item/2017760320') });
+    const result = await callItemResource(
+      locItemResource.params!.parse({ item_id: '2017760320' }),
+      ctx,
+    );
+
+    expect(result.date).toBe('1936 Apr.');
   });
 
   it('surfaces the curated metadata fields from a dense upstream record', async () => {
@@ -359,6 +342,7 @@ describe('locItemResource', () => {
 
     expect(result.contributors).toEqual([]);
     expect(result.subject_headings).toEqual([]);
+    expect(result.subject_terms).toEqual([]);
     expect(result.notes).toEqual([]);
     expect(result.date).toBeUndefined();
     expect(result.rights_information).toBeUndefined();
@@ -436,6 +420,73 @@ describe('locItemResource', () => {
       });
     },
   );
+
+  describe('item_id link forms (#66)', () => {
+    it('reads a percent-encoded loc.gov item link as its id', async () => {
+      const fetchSpy = mockFetch(JSON.stringify(PHOTO_ITEM_2017760320));
+      vi.stubGlobal('fetch', fetchSpy);
+      const uri = 'libofcongress://item/https%3A%2F%2Fwww.loc.gov%2Fitem%2F2017760320%2F';
+      const ctx = createResourceContext({ uri: new URL(uri) });
+
+      const result = await callItemResource(
+        locItemResource.params!.parse(itemUriTemplate.match(uri)),
+        ctx,
+      );
+
+      expect(result.item_id).toBe('2017760320');
+      expect(new URL(String(fetchSpy.mock.calls[0]![0])).pathname).toBe('/item/2017760320/');
+    });
+
+    it.each([
+      ['an encoded dot-segment traversal', 'libofcongress://item/%2e%2e%2f%2e%2e%2fcollections'],
+      [
+        'an encoded /resource/ page URL',
+        'libofcongress://item/https%3A%2F%2Fwww.loc.gov%2Fresource%2Fmss93930.mss93930-001%2F',
+      ],
+      ['an encoded foreign host', 'libofcongress://item/https%3A%2F%2Fevil.example%2Fitem%2F1%2F'],
+      ['a malformed percent-escape', 'libofcongress://item/%E0%A4%A'],
+      ['a lone percent sign', 'libofcongress://item/100%'],
+      ['well-formed escapes of bytes that are not UTF-8', 'libofcongress://item/%E0%A4'],
+    ])('rejects %s as invalid_item_id on the wire before any request', async (_name, uri) => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      expect(await readItemResourceError(uri)).toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: {
+          reason: 'invalid_item_id',
+          field: 'item_id',
+          recovery: { hint: contractRecovery(locItemResource, 'invalid_item_id') },
+        },
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it('returns the captured HTML rights as plain text and keeps the notes brackets (#65)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch(
+        JSON.stringify({
+          item: {
+            ...MANUSCRIPT_ITEM_MM77093930.item,
+            rights: MANUSCRIPT_RIGHTS_MM77093930,
+            notes: NEWSPAPER_NOTES_SN83030214,
+          },
+        }),
+      ),
+    );
+    const ctx = createResourceContext({ uri: new URL('libofcongress://item/mm77093930') });
+    const result = await callItemResource(
+      locItemResource.params!.parse({ item_id: 'mm77093930' }),
+      ctx,
+    );
+    // The reduction itself is tabled in loc-text.test.ts; this proves the resource carries it.
+    expect(result.rights_information).toBe(
+      'The contents of the Library of Congress Betty Herndon Maury Maury collection are in the public domain and are free to use and reuse. Credit Line: Library of Congress, Manuscript Division, Betty Herndon Maury Maury Diary. More about Copyright and other Restrictions (https://www.loc.gov/legal/). For guidance about compiling full citations consult Citing Primary Sources (https://www.loc.gov/teachers/usingprimarysources/citing.html).',
+    );
+    expect(result.notes).toEqual(NEWSPAPER_NOTES_SN83030214);
+  });
 
   // Rate-limit test last — sets module-level rateLimitBlockedUntil
   it('forwards the most specific rate-limit hint in the error data: a fresh 429, then the running block (#44)', async () => {

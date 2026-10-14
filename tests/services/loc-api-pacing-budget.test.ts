@@ -17,6 +17,7 @@ import {
   initLocApiService,
   LocApiService,
 } from '@/services/loc-api/loc-api-service.js';
+import { LOC_CHALLENGE_BODY as CHALLENGE_BODY } from '../fixtures/loc-challenge.js';
 
 const SEARCH_BODY = JSON.stringify({
   results: [
@@ -302,10 +303,8 @@ describe('one per-call budget across attempts, body reads, and both newspaper-pa
 
   it('degrades the OCR leg to empty text when the page fetch used most of the shared budget', async () => {
     const pageBody = JSON.stringify({
-      resource: {
-        url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/',
-        fulltext_file: 'https://tile.loc.gov/text-services/full_text.json',
-      },
+      resource: { url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/' },
+      fulltext_service: 'https://tile.loc.gov/text-services/full_text.json',
     });
     const fetchSpy = vi.fn((url: string, init?: RequestInit) =>
       new URL(url).hostname === 'tile.loc.gov'
@@ -324,16 +323,14 @@ describe('one per-call budget across attempts, body reads, and both newspaper-pa
 
     expect(call.done).toBe(true);
     expect(call.error).toBeUndefined();
-    expect(call.value).toMatchObject({ ocr_available: true, ocr_text: '' });
+    expect(call.value).toMatchObject({ ocr_available: true, ocr_text: '', ocrMiss: 'unavailable' });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it('bounds an OCR body that stalls after the headers by the same budget, degrading to empty text', async () => {
     const pageBody = JSON.stringify({
-      resource: {
-        url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/',
-        fulltext_file: 'https://tile.loc.gov/text-services/full_text.json',
-      },
+      resource: { url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/' },
+      fulltext_service: 'https://tile.loc.gov/text-services/full_text.json',
     });
     const stalledOcr = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -358,15 +355,13 @@ describe('one per-call budget across attempts, body reads, and both newspaper-pa
     await vi.advanceTimersByTimeAsync(50_100);
 
     expect(call.done).toBe(true);
-    expect(call.value).toMatchObject({ ocr_available: true, ocr_text: '' });
+    expect(call.value).toMatchObject({ ocr_available: true, ocr_text: '', ocrMiss: 'unavailable' });
   });
 
   it('reports a cancel during the OCR leg as the cancel, not as a degraded page', async () => {
     const pageBody = JSON.stringify({
-      resource: {
-        url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/',
-        fulltext_file: 'https://tile.loc.gov/text-services/full_text.json',
-      },
+      resource: { url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/' },
+      fulltext_service: 'https://tile.loc.gov/text-services/full_text.json',
     });
     vi.stubGlobal(
       'fetch',
@@ -423,11 +418,15 @@ describe('one per-call budget across attempts, body reads, and both newspaper-pa
     await vi.advanceTimersByTimeAsync(20_000);
 
     expect(call.done).toBe(true);
-    expect(call.error).toBeInstanceOf(SyntaxError);
+    expect(call.error).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'The Library of Congress returned an incomplete or malformed response.',
+      data: { reason: 'upstream_unavailable' },
+    });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('retries raw network faults while budget remains, then reports the exhausted ladder', async () => {
+  it('retries raw network faults while budget remains, then reports the exhausted ladder as upstream_unavailable', async () => {
     const fetchSpy = vi.fn(async () => {
       throw new TypeError('The socket connection was closed unexpectedly');
     });
@@ -438,10 +437,186 @@ describe('one per-call budget across attempts, body reads, and both newspaper-pa
 
     expect(call.done).toBe(true);
     expect(fetchSpy).toHaveBeenCalledTimes(4);
-    expect(call.error).not.toBeInstanceOf(McpError);
-    expect((call.error as Error).message).toBe(
+    expect(call.error).toBeInstanceOf(McpError);
+    // The transport text and withRetry's attempt suffix stay on `cause`, never in what the caller reads.
+    expect(call.error).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: 'The Library of Congress could not be reached.',
+    });
+    expect((call.error as McpError).data).toEqual({ reason: 'upstream_unavailable' });
+    expect(((call.error as McpError).cause as Error).message).toBe(
       'The socket connection was closed unexpectedly (failed after 4 attempts)',
     );
+  });
+});
+
+/** The soft-block shapes: the observed challenge, and LOC's documented HTML page on a 200. */
+const softBlocks = [
+  {
+    name: 'a cf-mitigated challenge 403',
+    respond: () =>
+      new Response(CHALLENGE_BODY, {
+        status: 403,
+        headers: {
+          'Content-Type': 'text/html; charset=UTF-8',
+          'cf-mitigated': 'challenge',
+          Server: 'cloudflare',
+        },
+      }),
+  },
+  {
+    name: 'an HTML 200',
+    respond: () =>
+      new Response(CHALLENGE_BODY, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+      }),
+  },
+] as const;
+
+/** The error a call fails with during a soft-block pause that has `seconds` left. */
+const pauseError = (seconds: number) =>
+  expect.objectContaining({
+    code: JsonRpcErrorCode.ServiceUnavailable,
+    message: `The Library of Congress is challenging automated requests; this server holds requests to it for ${seconds} more second(s).`,
+    data: {
+      reason: 'upstream_unavailable',
+      retryAfter: seconds,
+      recovery: { hint: `Wait ${seconds} seconds, then retry.` },
+    },
+  });
+
+describe('www.loc.gov 60 s pause after a soft block', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it.each(softBlocks)(
+    '$name fails its call with retryAfter 60, fails queued and arriving calls without sending, then lifts after 60 s',
+    async ({ respond }) => {
+      let blocked = true;
+      const fetchSpy = vi.fn(async () => (blocked ? respond() : jsonResponse(SEARCH_BODY)));
+      vi.stubGlobal('fetch', fetchSpy);
+      const svc = await pacedService(1_000);
+      const calls = ['a', 'b', 'c'].map((query) =>
+        track(svc.search({ query }, createMockContext())),
+      );
+
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      // The challenged call and both callers queued behind it fail; only one request went out.
+      // The queued callers reach dispatch 1 s and 2 s into the pause, each told the seconds left.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(calls.map((call) => call.error)).toEqual([
+        pauseError(60),
+        pauseError(59),
+        pauseError(58),
+      ]);
+
+      // A call arriving mid-pause fails at once with the seconds left, never queueing.
+      await vi.advanceTimersByTimeAsync(27_000);
+      const arriving = track(svc.search({ query: 'mid-pause' }, createMockContext()));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(arriving.done).toBe(true);
+      expect(arriving.error).toEqual(pauseError(30));
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      // Once 60 s have passed, the next call sends normally.
+      blocked = false;
+      await vi.advanceTimersByTimeAsync(30_000);
+      const after = track(svc.search({ query: 'after' }, createMockContext()));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(after.error).toBeUndefined();
+      expect(after.value?.items).toHaveLength(1);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    {
+      name: 'a 403 without the challenge header',
+      respond: () => new Response('Forbidden', { status: 403 }),
+      status: 403,
+    },
+    {
+      name: 'a 503 HTML error page',
+      respond: () =>
+        new Response('<!DOCTYPE html><html><body>Service Unavailable</body></html>', {
+          status: 503,
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      status: 503,
+    },
+  ])(
+    '$name fails as plain upstream_unavailable and pauses nothing',
+    async ({ respond, status }) => {
+      const fetchSpy = vi
+        .fn()
+        .mockImplementationOnce(async () => respond())
+        .mockImplementation(async () => jsonResponse(SEARCH_BODY));
+      vi.stubGlobal('fetch', fetchSpy);
+      const svc = await pacedService(0);
+
+      const first = await svc.search({ query: 'a' }, createMockContext()).catch((e: unknown) => e);
+      expect(first).toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_unavailable', status },
+      });
+      expect((first as McpError).data).not.toHaveProperty('retryAfter');
+
+      await expect(svc.search({ query: 'b' }, createMockContext())).resolves.toMatchObject({
+        items: [expect.anything()],
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('keeps an out-of-range page a sentinel even when its terminal page is a challenge, pausing nothing', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockImplementationOnce(
+        async () =>
+          new Response(CHALLENGE_BODY, {
+            status: 400,
+            headers: { 'Content-Type': 'text/html', 'cf-mitigated': 'challenge' },
+          }),
+      )
+      .mockImplementation(async () => jsonResponse(SEARCH_BODY));
+    vi.stubGlobal('fetch', fetchSpy);
+    const svc = await pacedService(0);
+
+    const deep = await svc.search({ query: 'a', limit: 100, page: 1001 }, createMockContext());
+    expect(deep.pagination).toMatchObject({ pages: 0, ceilingReached: true });
+    await expect(svc.search({ query: 'b' }, createMockContext())).resolves.toMatchObject({
+      items: [{ id: '2009632251' }],
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the pause per service instance, so a re-initialized service sends at once', async () => {
+    const fetchSpy = vi.fn(async () => softBlocks[0].respond());
+    vi.stubGlobal('fetch', fetchSpy);
+    const challenged = await pacedService(0);
+    await expect(challenged.search({ query: 'a' }, createMockContext())).rejects.toEqual(
+      pauseError(60),
+    );
+
+    fetchSpy.mockImplementation(async () => jsonResponse(SEARCH_BODY));
+    // The challenged instance still refuses without sending; a fresh one sends at once.
+    await expect(challenged.search({ query: 'b' }, createMockContext())).rejects.toEqual(
+      pauseError(60),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const fresh = await pacedService(0);
+    await expect(fresh.search({ query: 'c' }, createMockContext())).resolves.toMatchObject({
+      items: [{ id: '2009632251' }],
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });
 
