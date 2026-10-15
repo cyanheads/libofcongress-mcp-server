@@ -1,6 +1,6 @@
 # libofcongress-mcp-server - Directory Structure
 
-Generated on: 2026-10-14 22:31:55
+Generated on: 2026-10-15 21:04:43
 
 ```text
 libofcongress-mcp-server/
@@ -166,6 +166,7 @@ libofcongress-mcp-server/
 │   │   │   ├── loc-api-service.ts
 │   │   │   ├── loc-text.ts
 │   │   │   ├── loc-urls.ts
+│   │   │   ├── page-text-match.ts
 │   │   │   ├── state-names.ts
 │   │   │   ├── subject-terms.ts
 │   │   │   └── types.ts
@@ -179,6 +180,9 @@ libofcongress-mcp-server/
 │   │   ├── loc-challenge.ts
 │   │   ├── loc-items.ts
 │   │   ├── loc-newspaper-search.ts
+│   │   ├── loc-page-12-text.ts
+│   │   ├── loc-page-herald-text.ts
+│   │   ├── loc-page-text.ts
 │   │   ├── loc-pages.ts
 │   │   ├── loc-subjects.ts
 │   │   └── loc-text.ts
@@ -198,6 +202,7 @@ libofcongress-mcp-server/
 │   │   ├── loc-api-service.test.ts
 │   │   ├── loc-text.test.ts
 │   │   ├── loc-urls.test.ts
+│   │   ├── page-text-match.test.ts
 │   │   └── subject-terms.test.ts
 │   └── tools/
 │       ├── libofcongress-browse-collections.tool.test.ts
