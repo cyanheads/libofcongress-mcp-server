@@ -180,6 +180,20 @@ describe('matchPageText', () => {
     });
   });
 
+  it('keeps an occurrence it absorbed whole when the next passage cuts the current one back', () => {
+    // Occurrences at 1000 and 1593 fill [700, 1900); the one at 1605 lies inside it and is absorbed
+    // without merging; the one at 1908 opens a passage whose window starts at 1608, inside the
+    // absorbed occurrence [1605, 1612), so the cut falls at that occurrence's end.
+    const text = `${filler(1000)}titanic${filler(586)}titanic${filler(5)}titanic${filler(296)}titanic${filler(1000)}`;
+    const result = matchPageText(text, 'titanic');
+    expect(result).toEqual({
+      cut: false,
+      matchCount: 4,
+      passages: [text.slice(700, 1612), text.slice(1612, 2215)],
+    });
+    expect(result.passages.join('').split('titanic')).toHaveLength(5);
+  });
+
   it('keeps a passage within 1,200 characters when one occurrence spans a long whitespace run', () => {
     const text = `${filler(2000)}the${' '.repeat(3000)}titanic${filler(2000)}`;
     const result = matchPageText(text, '"the titanic"');
@@ -238,7 +252,7 @@ describe('matchPageText passage selection when occurrences need more than 10 pas
   };
 
   it.each([
-    ['sinking of the titanic', 10],
+    ['sinking of the titanic', 9],
     ['the titanic iceberg', 8],
   ])(
     'covers both rare occurrences on a real page when common words also match: %j',
@@ -283,10 +297,10 @@ describe('matchPageText passage selection when occurrences need more than 10 pas
       'the',
       105,
       [
-        [0, 835],
-        [835, 1699],
-        [1699, 2611],
-        [2611, 3715],
+        [0, 1072],
+        [1072, 2220],
+        [2220, 3284],
+        [3284, 3964],
         [7577, 8763],
         [9635, 10238],
         [11362, 12019],
@@ -299,10 +313,10 @@ describe('matchPageText passage selection when occurrences need more than 10 pas
       'of',
       50,
       [
-        [0, 832],
-        [832, 1607],
-        [1873, 2816],
-        [2816, 3696],
+        [0, 1045],
+        [1045, 1607],
+        [1873, 3065],
+        [3065, 3696],
         [3696, 4298],
         [4559, 5513],
         [5652, 6254],

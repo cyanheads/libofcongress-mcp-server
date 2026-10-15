@@ -144,7 +144,10 @@ function place(passages: Passage[], start: number, end: number, length: number):
       current.lastEnd = Math.max(current.lastEnd, end);
       return true;
     }
-    if (end <= current.end) return true;
+    if (end <= current.end) {
+      current.lastEnd = Math.max(current.lastEnd, end);
+      return true;
+    }
   }
   if (passages.length === MAX_PASSAGES) return false;
   let passageStart = windowStart;
