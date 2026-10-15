@@ -16,7 +16,11 @@ import { locSearchItems } from '@/mcp-server/tools/definitions/libofcongress-sea
 import { type DateBound, resolveDateRange, yearBound } from '@/services/loc-api/date-range.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 import { subjectFacetTerms } from '@/services/loc-api/subject-terms.js';
-import { COBB_PHOTO_SEARCH } from '../fixtures/loc-items.js';
+import {
+  COBB_PHOTO_SEARCH,
+  CODED_DATE_SEARCH,
+  IDENTITY_SHAPES_SEARCH,
+} from '../fixtures/loc-items.js';
 import { POSTERS_PHOTOS_SEARCH } from '../fixtures/loc-subjects.js';
 import { JAZZ_ENTITY_ROWS } from '../fixtures/loc-text.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
@@ -835,6 +839,90 @@ describe('locSearchItems', () => {
     expect(text).toContain('not a libofcongress_get_item target');
   });
 
+  describe('lccn.loc.gov permalink rows (#68)', () => {
+    /** The content[] block of the result whose ID line is `id`. */
+    const resultBlock = (text: string, id: string) =>
+      text.split('\n\n').find((block) => block.includes(`**ID:** ${id}\n`));
+
+    it('marks permalink rows as items on both surfaces, keeping id and url', async () => {
+      serveByHost({ 'www.loc.gov': IDENTITY_SHAPES_SEARCH });
+
+      const result = await runToolContract(locSearchItems, { query: 'civil war', format: 'book' });
+
+      const items = structured(result).items as Array<{
+        id: string;
+        is_item: boolean;
+        url: string;
+      }>;
+      expect(items.slice(0, 3).map(({ id, is_item, url }) => ({ id, is_item, url }))).toEqual([
+        { id: '2005567251', is_item: true, url: 'https://lccn.loc.gov/2005567251' },
+        { id: 'unk82079773', is_item: true, url: 'https://lccn.loc.gov/unk82079773' },
+        { id: '2024681443', is_item: true, url: 'https://lccn.loc.gov/2024681443' },
+      ]);
+      const text = contentText(result);
+      expect(resultBlock(text, 'unk82079773')).toBe(
+        [
+          '## Our liberties in danger.',
+          '**ID:** unk82079773',
+          '_Item — pass this ID to libofcongress_get_item for full metadata._',
+          '**Date:** 1835',
+          '**Format:** book',
+          '**URL:** https://lccn.loc.gov/unk82079773',
+        ].join('\n'),
+      );
+      // Its only date is the coded item.date "uuuu" (#69), so the block has no Date line.
+      expect(resultBlock(text, '2005567251')).toBe(
+        [
+          '## WWW guide to Civil War prisons',
+          '**ID:** 2005567251',
+          '_Item — pass this ID to libofcongress_get_item for full metadata._',
+          '**Format:** book',
+          '**URL:** https://lccn.loc.gov/2005567251',
+        ].join('\n'),
+      );
+    });
+
+    it('keeps catalog.loc.gov records, hdl.loc.gov finding aids, and collections non-items', async () => {
+      serveByHost({ 'www.loc.gov': IDENTITY_SHAPES_SEARCH });
+
+      const result = await runToolContract(locSearchItems, { query: 'civil war' });
+
+      const items = structured(result).items as Array<{ id: string; is_item: boolean }>;
+      expect(items.slice(3).map(({ id, is_item }) => ({ id, is_item }))).toEqual([
+        { id: 'cgi-bin/Pwebrecon.cgi?DB=local&BBID=13839143&v3=1', is_item: false },
+        { id: 'loc.mss/eadmss.ms013110', is_item: false },
+        { id: 'collections/civil-war-maps/about-this-collection', is_item: false },
+      ]);
+    });
+
+    it('renders the non-item line naming catalog records and finding aids', async () => {
+      serveByHost({ 'www.loc.gov': IDENTITY_SHAPES_SEARCH });
+
+      const result = await runToolContract(locSearchItems, { query: 'civil war' });
+
+      expect(resultBlock(contentText(result), 'loc.mss/eadmss.ms013110')).toBe(
+        [
+          '## National Society of Arts and Letters records, 1944-1987',
+          '**ID:** loc.mss/eadmss.ms013110',
+          '_Non-item result (collection, exhibit, guide, newspaper page, catalog record, or finding aid) — not a libofcongress_get_item target; open the URL._',
+          '**Date:** 1944',
+          '**Format:** manuscript/mixed material',
+          '**URL:** https://hdl.loc.gov/loc.mss/eadmss.ms013110',
+        ].join('\n'),
+      );
+    });
+
+    it('describes permalink rows as items and names the remaining non-item kinds', () => {
+      const itemShape = locSearchItems.output.shape.items.element.shape;
+      const isItem = String(itemShape.is_item.description);
+      expect(isItem).toContain('lccn.loc.gov');
+      for (const kind of ['catalog.loc.gov', 'hdl.loc.gov', 'collections', 'newspaper pages']) {
+        expect(isItem).toContain(kind);
+      }
+      expect(locSearchItems.description).toContain('catalog.loc.gov');
+    });
+  });
+
   it('pins the retrieval-ceiling notice on both surfaces for a 400 past ~100k items (#33)', async () => {
     const fetchSpy = mockFetch('', 400);
     vi.stubGlobal('fetch', fetchSpy);
@@ -1042,6 +1130,43 @@ describe('locSearchItems', () => {
       expect(contentText(result)).toContain('**Date:** 1915-01-01');
     },
   );
+
+  describe('coded item.date (#69)', () => {
+    it('reports the top-level date, or none, for a coded item.date on both surfaces', async () => {
+      serveByHost({ 'www.loc.gov': CODED_DATE_SEARCH });
+
+      const result = await runToolContract(locSearchItems, { query: 'railroads' });
+
+      const items = structured(result).items as Array<{ id: string; date?: string }>;
+      expect(items.map((i) => [i.id, i.date])).toEqual([
+        ['scsm000191', '1895'],
+        ['magbell.02800101', '1913-06-01'],
+        ['98688858', '185?'],
+        ['2024769398', undefined],
+      ]);
+      expect(items[3]).not.toHaveProperty('date');
+      const text = contentText(result);
+      for (const coded of ['18950000', '19130600', '185u', '||||']) {
+        expect(text).not.toContain(coded);
+      }
+      expect(text).toContain('**Date:** 1913-06-01\n');
+      expect(text.split('\n\n').find((block) => block.includes('**ID:** 2024769398\n'))).toBe(
+        [
+          '## Railroad Safety Advisory Committee',
+          '**ID:** 2024769398',
+          '_Item — pass this ID to libofcongress_get_item for full metadata._',
+          '**Format:** book',
+          '**URL:** https://www.loc.gov/item/2024769398/',
+        ].join('\n'),
+      );
+    });
+
+    it('describes date as absent when LOC records only a coded value', () => {
+      const date = locSearchItems.output.shape.items.element.shape.date;
+      expect(date.description).toMatch(/as LOC catalogs it/);
+      expect(date.description).toMatch(/[Aa]bsent when LOC records only a coded value/);
+    });
+  });
 
   describe('subject headings and facets (#57)', () => {
     const POSTERS_BODY = JSON.stringify(POSTERS_PHOTOS_SEARCH);

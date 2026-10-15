@@ -36,7 +36,7 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
     item_id: z
       .string()
       .describe(
-        'LOC item ID (e.g., "2005691065" or "2009632251"). Same ID as in libofcongress_search_items result "id" field. Multi-segment newspaper IDs ("sn95047246/1935-09-05/ed-1") are supported — write the slashes literally rather than percent-encoding them.',
+        'LOC item ID (e.g., "2005691065" or "2009632251"). Same ID as in libofcongress_search_items result "id" field. Multi-segment newspaper IDs ("sn95047246/1935-09-05/ed-1") are supported — write the slashes literally rather than percent-encoding them. A loc.gov item link or an lccn.loc.gov permalink ("https://lccn.loc.gov/2005567251") is read as its id, a permalink LCCN in normalized form ("lccn.loc.gov/2005-568294" reads as 2005568294).',
       ),
   }),
 
@@ -45,9 +45,9 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
       reason: 'invalid_item_id',
       code: JsonRpcErrorCode.ValidationError,
       retryable: false,
-      when: 'item_id is neither a LOC item ID nor a loc.gov /item/ link: a URL on another loc.gov path or another host, or text with characters or segments no LOC ID has.',
+      when: 'item_id is not a LOC item ID, a loc.gov /item/ link, or an lccn.loc.gov permalink to an LCCN: a URL on another loc.gov or lccn.loc.gov path or another host, an LCCN that does not normalize to up to three lowercase letters and 8 or 10 digits, or text with characters or segments no LOC ID has.',
       recovery:
-        'Use the id from a libofcongress_search_items result, written with its slashes intact: libofcongress://item/sn95047246/1935-09-05/ed-1.',
+        'Use the id from a libofcongress_search_items result, written with its slashes intact (libofcongress://item/sn95047246/1935-09-05/ed-1), or a loc.gov item link or lccn.loc.gov permalink in its place; blanks and a hyphen in a permalink LCCN are normalized. An LCCN that still fails is malformed: find the item with libofcongress_search_items.',
     },
     {
       reason: 'item_not_found',
@@ -99,10 +99,11 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
     const decoded = percentDecoded(params.item_id);
     const itemId = decoded === undefined ? undefined : normalizeItemId(decoded);
     if (itemId === undefined) {
-      throw ctx.fail('invalid_item_id', `"${params.item_id}" is not a LOC item ID.`, {
-        field: 'item_id',
-        received: params.item_id,
-      });
+      throw ctx.fail(
+        'invalid_item_id',
+        `"${params.item_id}" is not a LOC item ID, a loc.gov item link, or an LCCN permalink.`,
+        { field: 'item_id', received: params.item_id },
+      );
     }
     try {
       return await svc.getItem(itemId, ctx);

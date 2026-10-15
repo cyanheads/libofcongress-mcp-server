@@ -34,7 +34,8 @@ export type RawLocSearchResult = {
   /**
    * Per-result detail block (e.g. `total`, `digitized`); shape varies by endpoint. On item search
    * rows, `date` is the date as cataloged ("c1915 Feb. 19.") where the top-level `date` can be a
-   * padded sort key ("1915-01-01").
+   * padded sort key ("1915-01-01"), or a coded catalog value ("18950000", "185u", "uuuu") where
+   * the top-level `date` is the readable one ("1895", "185?") or absent.
    */
   item?: { date?: unknown; [key: string]: unknown };
 };
@@ -99,10 +100,18 @@ export type RawLocItemResponse = {
   item?: {
     id?: string;
     title?: string | string[];
-    /** On Prints & Photographs records, a padded sort key ("1936-01-01"); elsewhere the date as cataloged. */
+    /**
+     * On Prints & Photographs records, a padded sort key ("1936-01-01"); elsewhere the date as
+     * cataloged, or a coded catalog value ("uuuu", "||||", "0w0 d1804 d1806").
+     */
     date?: string;
     /** The date as cataloged ("1936 Apr.", "1909-1911."); sent on Prints & Photographs records. */
     created_published_date?: string;
+    /**
+     * The imprint as cataloged — place, publisher, and date ("Boston : Estes and Lauriat, 1894."),
+     * or a date alone on photos and manuscripts ("1936 Apr."). An array on most records, with a
+     * second entry for a copyright or phonogram date ("℗2017").
+     */
     created_published?: string | string[];
     /** Contributor names with roles (e.g. "Washington, George, 1732-1799 (Author)"). */
     contributor_names?: string[];
@@ -160,6 +169,11 @@ export type RawLocItemResponse = {
  */
 export type RawLocNewspaperPageResponse = {
   item?: {
+    /**
+     * Title of the item the page belongs to, on every page type (e.g. "Betty Herndon Maury Maury
+     * diary,", or "New-York tribune (New York [N.Y.]), April 16, 1912" for a newspaper issue).
+     */
+    title?: string | string[];
     /** Display-cased title (e.g. ["Southern Christian advocate"]). */
     newspaper_title?: string[];
     /** Lowercased title with place and run (e.g. ["southern christian advocate (charleston, s.c.) 1837-1948"]). */
@@ -170,6 +184,12 @@ export type RawLocNewspaperPageResponse = {
     /** Edition number of the issue (e.g. ["1"]). */
     number_edition?: string[];
     date_issued?: string;
+    /**
+     * The `/item/` link of the item the page belongs to, on every page type (e.g.
+     * "https://www.loc.gov/item/mm77093930/" for a page of `mss93930.mss93930-001`). LCCN-keyed
+     * records send their permalink protocol-relative ("//lccn.loc.gov/2005567251").
+     */
+    url?: string;
   };
   resource?: {
     url?: string;
@@ -183,9 +203,10 @@ export type RawLocNewspaperPageResponse = {
   };
   /**
    * Text-service URL for the requested page (`sp`), present under `at=…,fulltext_service` when
-   * the page has OCR or transcribed text. Answers `{ "<segment>": { "full_text": "…" } }`.
+   * the page has OCR or transcribed text. Answers `{ "<segment>": { "full_text": "…" } }`. An
+   * image-only page carries an empty object (`{}`) here instead of a URL.
    */
-  fulltext_service?: string;
+  fulltext_service?: string | Record<string, unknown> | null;
 };
 
 /**
@@ -203,9 +224,10 @@ export type LocItemSummary = {
   description?: string;
   format?: string;
   /**
-   * True when this result is a catalog item whose `id` resolves through getItem.
-   * False for collection landing pages and other non-item results, which are a
-   * different LOC resource type with no `/item/` equivalent.
+   * True when this result is a catalog item whose `id` resolves through getItem: an `/item/` row,
+   * or a row keyed by an `lccn.loc.gov` permalink (its `id` the bare LCCN). False for collection
+   * landing pages, exhibit and guide pages, newspaper pages, `catalog.loc.gov` records, and
+   * `hdl.loc.gov` finding aids, which have no `/item/` record.
    */
   is_item: boolean;
   url: string;
@@ -237,6 +259,8 @@ export type LocItemDetail = {
   item_id: string;
   title: string;
   date?: string;
+  /** The imprint (place, publisher, date) as cataloged, entries space-joined. Absent when LOC sends none. */
+  imprint?: string;
   contributors: string[];
   /** LCSH headings as cataloged, from the raw `subject_headings`. */
   subject_headings: string[];
@@ -299,6 +323,10 @@ export type LocNewspaperPage = {
 /** Normalized newspaper page full detail */
 export type LocNewspaperPageDetail = {
   page_url: string;
+  /** ID of the item the page belongs to (issue, volume, or folder), as getItem takes it. */
+  item_id?: string;
+  /** Title of that item, decoded — the issue, book, or manuscript title. */
+  item_title?: string;
   newspaper_title?: string;
   date?: string;
   /** Every state in LOC's location_state facet, in LOC order. Absent when LOC sends none. */

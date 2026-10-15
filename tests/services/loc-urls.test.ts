@@ -42,8 +42,65 @@ describe('normalizeItemId', () => {
     ['item/2017760320', '2017760320'],
     ['https://www.loc.gov/item/2017760320/?sp=3&st=gallery#top', '2017760320'],
     ['https://www.loc.gov/item/sn83030214/1912-04-16/ed-1/', 'sn83030214/1912-04-16/ed-1'],
+    ['https://lccn.loc.gov/2005567251', '2005567251'],
+    ['http://lccn.loc.gov/2005567251', '2005567251'],
+    ['lccn.loc.gov/2005567251/', '2005567251'],
+    ['https://lccn.loc.gov/sn83030214?x=1#y', 'sn83030214'],
+    ['http://lccn.loc.gov/02009051', '02009051'],
+    ['https://lccn.loc.gov/unk82079773/', 'unk82079773'],
+    // Real LOC item IDs carry hyphens; only a permalink's LCCN is normalized.
+    ['afc1981004-b42', 'afc1981004-b42'],
+    ['2005-568294', '2005-568294'],
+    ['https://www.loc.gov/item/2005-568294/', '2005-568294'],
   ])('reads %j as %j', (raw, id) => {
     expect(normalizeItemId(raw)).toBe(id);
+  });
+
+  describe('unnormalized LCCN permalinks (#68)', () => {
+    it.each([
+      ['lccn.loc.gov/2005-568294', '2005568294'],
+      ['https://lccn.loc.gov/2005-568294/', '2005568294'],
+      ['https://lccn.loc.gov/sn 83030214', 'sn83030214'],
+      ['http://lccn.loc.gov/sn%2083030214?x=1', 'sn83030214'],
+      ['lccn.loc.gov/sn 8303 0214', 'sn83030214'],
+      ['lccn.loc.gov/85-2', '85000002'],
+      ['lccn.loc.gov/2001-000002', '2001000002'],
+      ['lccn.loc.gov/ sn 85-2 ', 'sn85000002'],
+    ])('reads %j as the normalized LCCN %j', (raw, lccn) => {
+      expect(normalizeItemId(raw)).toBe(lccn);
+    });
+
+    it.each([
+      // Too many digits after padding, or not digits.
+      'lccn.loc.gov/2005-5682940',
+      'lccn.loc.gov/2005--568294',
+      'lccn.loc.gov/2005-56-8294',
+      'lccn.loc.gov/-2005568294',
+      'lccn.loc.gov/2005-',
+      'lccn.loc.gov/sn-a83030214',
+      'lccn.loc.gov/abcd 83030214',
+      'lccn.loc.gov/SN 83030214',
+      // Only a blank and its %20 escape are removed.
+      'lccn.loc.gov/sn%2B83030214',
+      'lccn.loc.gov/sn%2083030214%2',
+      'lccn.loc.gov/sn\t83030214',
+      'lccn.loc.gov/sn+83030214',
+      'lccn.loc.gov/%20',
+      'lccn.loc.gov/ - ',
+      // Still another path or host.
+      'lccn.loc.gov/2005-568294/marcxml',
+      'https://lccn.loc.gov.evil.example/2005-568294',
+      '//lccn.loc.gov/2005-568294',
+    ])('rejects %j', (raw) => {
+      expect(normalizeItemId(raw)).toBeUndefined();
+    });
+
+    it('reads a written LCCN of up to 64 characters, and no longer', () => {
+      const written = (blanks: number) => `sn${' '.repeat(blanks)}83030214`;
+      expect(written(54)).toHaveLength(64);
+      expect(normalizeItemId(`lccn.loc.gov/${written(54)}`)).toBe('sn83030214');
+      expect(normalizeItemId(`lccn.loc.gov/${written(55)}`)).toBeUndefined();
+    });
   });
 
   it.each([
@@ -71,6 +128,16 @@ describe('normalizeItemId', () => {
     '2017760320#x',
     'sn83030214\\..\\collections',
     '2017 760320',
+    'https://lccn.loc.gov/2005567251/marcxml',
+    'https://lccn.loc.gov.evil.example/2005567251',
+    'https://evil.example/lccn.loc.gov/2005567251',
+    'https://lccn.loc.gov/200556725',
+    'https://lccn.loc.gov/20055672511',
+    'https://lccn.loc.gov/abcd83030214',
+    'https://lccn.loc.gov/SN83030214',
+    '//lccn.loc.gov/2005567251',
+    'ftp://lccn.loc.gov/2005567251',
+    'https://lccn.loc.gov/',
   ])('rejects %j', (raw) => {
     expect(normalizeItemId(raw)).toBeUndefined();
   });
@@ -192,6 +259,23 @@ describe('scan time stays linear in the input (5k → 320k characters)', () => {
     ['a dotted name with no slash', (n) => repeatTo('www.', n)],
     ['repeated loc.gov labels with no slash', (n) => repeatTo('x.loc.gov', n)],
     ['one letter and a run of dots', (n) => `a${repeatTo('.', n - 1)}`],
+    ['an lccn.loc.gov link and a long digit run', (n) => `lccn.loc.gov/${repeatTo('1', n - 13)}`],
+    [
+      'an lccn.loc.gov link and a long query',
+      (n) => `lccn.loc.gov/2005567251?${repeatTo('a', n - 24)}`,
+    ],
+    [
+      'an lccn.loc.gov link and repeated blanks and hyphens with a bad end',
+      (n) => `lccn.loc.gov/${repeatTo('1 -', n - 14)}!`,
+    ],
+    [
+      'an lccn.loc.gov link and repeated %20 escapes with no path end',
+      (n) => `lccn.loc.gov/${repeatTo('%20', n - 14)}/x`,
+    ],
+    [
+      'an lccn.loc.gov link and repeated unfinished escapes',
+      (n) => `lccn.loc.gov/${repeatTo('%2', n - 13)}`,
+    ],
   ])('normalizeItemId: %s', (_name, make) => {
     const { largeMs, ratio } = cpuScaling(normalizeItemId, make);
     expect(ratio).toBeLessThan(256);

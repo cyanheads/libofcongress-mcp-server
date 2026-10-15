@@ -17,14 +17,14 @@ import { normalizeItemId } from '@/services/loc-api/loc-urls.js';
 export const locGetItem = tool('libofcongress_get_item', {
   title: 'Get LOC Item',
   description:
-    "Retrieve the full metadata record for a specific LOC digital item. Returns contributors, LCSH subject headings and the subject terms the search subject filter accepts, summary, languages, locations, rights information, physical description, call number, original and online formats, access restrictions, former catalog IDs, notes, and related items, plus the item's digital resources (each with its page count, representative image, PDF, and audio) and a window of its pages. Each page has a page_url and has_text; pass a page_url with has_text true to libofcongress_get_newspaper_page to read that page's text (newspaper, book, and manuscript pages alike). A long item lists 50 pages per call: continue with page_offset set to next_page_offset. Set include_files for each listed page's downloadable files (TIFF, JP2, JPEG sizes, text). Use after libofcongress_search_items on a result whose is_item is true. Pass the result id — a simple ID or a slash-separated newspaper path — or a loc.gov item link (`https://www.loc.gov/item/<id>/`), which is read as its id. Non-item results (is_item: false) — collections, exhibits, guides, newspaper pages — have no item record and cannot be retrieved here.",
+    "Retrieve the full metadata record for a specific LOC digital item. Returns the imprint (place, publisher, and date of publication), contributors, LCSH subject headings and the subject terms the search subject filter accepts, summary, languages, locations, rights information, physical description, call number, original and online formats, access restrictions, former catalog IDs, notes, and related items, plus the item's digital resources (each with its page count, representative image, PDF, and audio) and a window of its pages. Each page has a page_url and has_text; pass a page_url with has_text true to libofcongress_get_newspaper_page to read that page's text (newspaper, book, and manuscript pages alike). A long item lists 50 pages per call: continue with page_offset set to next_page_offset. Set include_files for each listed page's downloadable files (TIFF, JP2, JPEG sizes, text). Use after libofcongress_search_items on a result whose is_item is true. Pass the result id — a simple ID, an LCCN, or a slash-separated newspaper path — or a loc.gov item link (`https://www.loc.gov/item/<id>/`) or LCCN permalink (`https://lccn.loc.gov/<lccn>`), which is read as its id. Non-item results (is_item: false) — collections, exhibits, guides, newspaper pages, catalog.loc.gov records, hdl.loc.gov finding aids — have no item record and cannot be retrieved here.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     item_id: z
       .string()
       .min(1)
       .describe(
-        'LOC item id from a libofcongress_search_items result\'s "id" field (where is_item is true): a simple ID ("2009632251", "2005691065") or a slash-separated path for newspaper issues ("sn95047246/1935-09-05/ed-1"). A loc.gov item link is also read as its id: "https://www.loc.gov/item/2009632251/", http or without "www.", or "item/2009632251". Any other URL, such as a /resource/ page URL, is rejected.',
+        'LOC item id from a libofcongress_search_items result\'s "id" field (where is_item is true): a simple ID ("2009632251", "2005691065") or a slash-separated path for newspaper issues ("sn95047246/1935-09-05/ed-1"). A loc.gov item link is also read as its id: "https://www.loc.gov/item/2009632251/", http or without "www.", or "item/2009632251"; so is an LCCN permalink, as its normalized LCCN: "https://lccn.loc.gov/2005567251", http or without a scheme; "lccn.loc.gov/2005-568294" reads as 2005568294. Any other URL, such as a /resource/ page URL, is rejected.',
       ),
     page_offset: z
       .number()
@@ -54,14 +54,20 @@ export const locGetItem = tool('libofcongress_get_item', {
     item_id: z
       .string()
       .describe(
-        'LOC item ID: the input item_id, or the id read from the loc.gov item link passed as item_id.',
+        'LOC item ID: the input item_id, or the id read from the loc.gov item link or LCCN permalink passed as item_id.',
       ),
     title: z.string().describe('Item title.'),
     date: z
       .string()
       .optional()
       .describe(
-        'Publication or creation date as LOC catalogs it: free text, a year, or a full date (e.g., "1936 Apr.", "1909-1911.", "1894", "1912-04-16").',
+        'Publication or creation date as LOC catalogs it: free text, a year, or a full date (e.g., "1936 Apr.", "1909-1911.", "1894", "1912-04-16"). Absent when LOC records only a coded value ("uuuu", "||||") or none.',
+      ),
+    imprint: z
+      .string()
+      .optional()
+      .describe(
+        'Imprint as LOC catalogs it: place, publisher, and date of publication (e.g., "New York : Werner School Book Company, c1900."), or a date alone on many photos and manuscripts ("1936 Apr."). Absent when LOC records none.',
       ),
     contributors: z
       .array(z.string())
@@ -147,7 +153,9 @@ export const locGetItem = tool('libofcongress_get_item', {
               ),
             has_text: z
               .boolean()
-              .describe('True when LOC holds OCR or transcribed text for this page.'),
+              .describe(
+                "True when LOC lists an OCR or transcribed text file for this page. A blank page can have one: LOC's blank-page placeholder, which libofcongress_get_newspaper_page returns as empty text.",
+              ),
             files: z
               .array(z.string().describe('Download URL; its extension names the format.'))
               .optional()
@@ -198,9 +206,9 @@ export const locGetItem = tool('libofcongress_get_item', {
       reason: 'invalid_item_id',
       code: JsonRpcErrorCode.ValidationError,
       retryable: false,
-      when: 'item_id is neither a LOC item ID nor a loc.gov /item/ link: a URL on another loc.gov path (such as a /resource/ page URL) or another host, or text with characters or segments no LOC ID has.',
+      when: 'item_id is not a LOC item ID, a loc.gov /item/ link, or an lccn.loc.gov permalink to an LCCN: a URL on another loc.gov or lccn.loc.gov path (such as a /resource/ page URL) or another host, an LCCN that does not normalize to up to three lowercase letters and 8 or 10 digits, or text with characters or segments no LOC ID has.',
       recovery:
-        'Pass the id from a libofcongress_search_items result, or a loc.gov item link (`https://www.loc.gov/item/<id>/`). To read a /resource/ page URL, pass it to libofcongress_get_newspaper_page instead.',
+        'Pass the id from a libofcongress_search_items result, a loc.gov item link (`https://www.loc.gov/item/<id>/`), or an LCCN permalink (`https://lccn.loc.gov/<lccn>`; blanks and a hyphen in the LCCN are normalized). An LCCN that still fails is malformed: find the item with libofcongress_search_items. To read a /resource/ page URL, pass it to libofcongress_get_newspaper_page instead.',
     },
     {
       reason: 'item_not_found',
@@ -246,7 +254,7 @@ export const locGetItem = tool('libofcongress_get_item', {
     if (itemId === undefined) {
       throw ctx.fail(
         'invalid_item_id',
-        'item_id must be a LOC item ID or a loc.gov item link (`https://www.loc.gov/item/<id>/`).',
+        'item_id must be a LOC item ID, a loc.gov item link (`https://www.loc.gov/item/<id>/`), or an LCCN permalink (`https://lccn.loc.gov/<lccn>`).',
         { field: 'item_id', received: input.item_id },
       );
     }
@@ -310,6 +318,7 @@ export const locGetItem = tool('libofcongress_get_item', {
     lines.push(`# ${inlineText(result.title)}`);
     lines.push(`**ID:** ${result.item_id}`);
     if (result.date) lines.push(`**Date:** ${inlineText(result.date)}`);
+    if (result.imprint) lines.push(`**Imprint:** ${inlineText(result.imprint)}`);
     if (result.contributors.length > 0)
       lines.push(`**Contributors:** ${list(result.contributors, ', ')}`);
     // Headings and terms can carry commas ("World War, 1939-1945"), so entries join with "; ".

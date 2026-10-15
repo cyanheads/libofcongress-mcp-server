@@ -1,5 +1,6 @@
 /**
- * @fileoverview Item records and item-search rows captured live from www.loc.gov (2026-10-14).
+ * @fileoverview Item records and item-search rows captured live from www.loc.gov (2026-10-14 and
+ * 2026-10-15).
  * Item records are `/item/{id}/?fo=json&at=item,resources,related_items` responses with the `item`
  * block cut to the fields the tests read and some file groups cut to a few representative entries;
  * resource keys and file-entry keys are LOC's own. Multi-page resources keep one captured file
@@ -474,4 +475,162 @@ export const COBB_PHOTO_SEARCH = {
     },
   ],
   pagination: { of: 3, perpage: 10, total: 1 },
+};
+
+/**
+ * Item-search rows captured live (2026-10-15) from `/books/`, `/manuscripts/`, and `/search/`
+ * searches, one per identity shape: `lccn.loc.gov` permalinks (a 10-digit LCCN and an
+ * `unk`-prefixed one), an `/item/` row whose `url` is a permalink, a `catalog.loc.gov` record, an
+ * `hdl.loc.gov` finding aid, and a collection page. Cut to the fields the normalizer reads.
+ */
+export const IDENTITY_SHAPES_SEARCH = {
+  results: [
+    {
+      id: 'http://lccn.loc.gov/2005567251',
+      url: '//lccn.loc.gov/2005567251',
+      title: 'WWW guide to Civil War prisons',
+      original_format: ['book'],
+      item: { date: 'uuuu' },
+    },
+    {
+      id: 'http://lccn.loc.gov/unk82079773',
+      url: '//lccn.loc.gov/unk82079773',
+      title: 'Our liberties in danger.',
+      date: '1835',
+      original_format: ['book'],
+      item: { date: '1835' },
+    },
+    {
+      id: 'http://www.loc.gov/item/2024681443/',
+      url: '//lccn.loc.gov/2024681443',
+      title: 'Pacific railroad. April 16, 1860. -- Ordered to be printed',
+      date: '1860',
+      original_format: ['book'],
+      item: { date: '1860' },
+    },
+    {
+      id: 'http://catalog.loc.gov/cgi-bin/Pwebrecon.cgi?DB=local&BBID=13839143&v3=1',
+      url: 'https://catalog.loc.gov/vwebv/holdingsInfo?bibId=13839143',
+      title: 'US Civil War generals',
+      original_format: ['book'],
+      item: { date: 'uuuu' },
+    },
+    {
+      id: 'http://hdl.loc.gov/loc.mss/eadmss.ms013110',
+      url: '//hdl.loc.gov/loc.mss/eadmss.ms013110',
+      title: 'National Society of Arts and Letters records, 1944-1987',
+      date: '1944',
+      original_format: ['manuscript/mixed material'],
+      item: {},
+    },
+    {
+      id: 'http://www.loc.gov/collections/civil-war-maps/about-this-collection/',
+      url: 'https://www.loc.gov/collections/civil-war-maps/about-this-collection/',
+      title: 'Civil War Maps',
+      date: '1999',
+      original_format: ['collection', 'map'],
+      item: {},
+    },
+  ],
+  pagination: { of: 6, perpage: 100, total: 1 },
+};
+
+/**
+ * Item-search rows captured live (2026-10-15) whose nested `item.date` is a coded catalog value: a
+ * compact sort number on a score and on a manuscript, a MARC `u` placeholder on a map, and `||||`
+ * on a book collection with no top-level `date`. Cut to the fields the normalizer reads.
+ */
+export const CODED_DATE_SEARCH = {
+  results: [
+    {
+      id: 'http://www.loc.gov/item/scsm000191/',
+      url: 'https://www.loc.gov/item/scsm000191/',
+      title: 'March, Lincoln Park: for pianoforte by Henry Wannemacher.',
+      date: '1895',
+      original_format: ['notated music'],
+      item: { date: '18950000' },
+    },
+    {
+      id: 'http://www.loc.gov/item/magbell.02800101/',
+      url: 'https://www.loc.gov/item/magbell.02800101/',
+      title: 'Card by Mabel Hubbard Bell, June 1913',
+      date: '1913-06-01',
+      original_format: ['manuscript/mixed material'],
+      item: { date: '19130600' },
+    },
+    {
+      id: 'http://www.loc.gov/item/98688858/',
+      url: 'https://www.loc.gov/item/98688858/',
+      title: 'Map of the Williamsport and Elmira Railroad with its connections',
+      date: '185?',
+      original_format: ['map'],
+      item: { date: '185u' },
+    },
+    {
+      id: 'http://www.loc.gov/item/2024769398/',
+      url: 'https://www.loc.gov/item/2024769398/',
+      title: 'Railroad Safety Advisory Committee',
+      original_format: ['book', 'collection'],
+      item: { date: '||||' },
+    },
+  ],
+  pagination: { of: 4, perpage: 100, total: 1 },
+};
+
+/**
+ * Book `00003348` (captured 2026-10-15): `item.date` is a coded time-period value and the imprint
+ * carries the publication year. Resources cut to none; one top-level related record is an
+ * `lccn.loc.gov` permalink.
+ */
+export const BOOK_ITEM_00003348 = {
+  item: {
+    title: 'The story of Captain Meriwether Lewis and Captain William Clark : for young readers',
+    date: '0w0 d1804 d1806',
+    created_published: ['New York : Werner School Book Company, c1900.'],
+    call_number: ['F592.7 .K55'],
+    url: 'https://www.loc.gov/item/00003348/',
+  },
+  resources: [],
+  related_items: [
+    { id: 'http://www.loc.gov/item/2003627086/' },
+    { id: 'http://lccn.loc.gov/2003542660' },
+  ],
+};
+
+/** Book `2005567251` (captured 2026-10-15): an LCCN-permalink record with a `uuuu` date and no imprint. */
+export const BOOK_ITEM_2005567251 = {
+  item: {
+    title: 'WWW guide to Civil War prisons',
+    date: 'uuuu',
+    call_number: ['E611'],
+    url: '//lccn.loc.gov/2005567251',
+  },
+  resources: [],
+  related_items: [],
+};
+
+/** Book collection `2024769398` (captured 2026-10-15): a `||||` date and a bracketed imprint. Resources cut to none. */
+export const BOOK_ITEM_2024769398 = {
+  item: {
+    title: 'Railroad Safety Advisory Committee',
+    date: '||||',
+    created_published: ['[197-?]-'],
+    call_number: ['FAC 2099'],
+    url: 'https://www.loc.gov/item/2024769398/',
+  },
+  resources: [],
+  related_items: [],
+};
+
+/** Sound recording `2023622861` (captured 2026-10-15): a two-entry imprint. */
+export const AUDIO_ITEM_2023622861 = {
+  item: {
+    title: 'Jazz tango',
+    date: '2017',
+    created_published: ['Millwood, NY : ZOHO Music, [2017]', '℗2017'],
+    call_number: ['SDD 64018'],
+    url: '//lccn.loc.gov/2023622861',
+  },
+  resources: [],
+  related_items: [],
 };

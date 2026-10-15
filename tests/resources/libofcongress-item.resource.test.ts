@@ -13,7 +13,9 @@ import { locGetItem } from '@/mcp-server/tools/definitions/libofcongress-get-ite
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 import type { LocItemDetail } from '@/services/loc-api/types.js';
 import {
+  BOOK_ITEM_00003348,
   BOOK_ITEM_02007458,
+  BOOK_ITEM_2005567251,
   MANUSCRIPT_ITEM_MM77093930,
   PHOTO_ITEM_2017760320,
 } from '../fixtures/loc-items.js';
@@ -114,6 +116,8 @@ const callItemResource = async (
 
 describe('locItemResource', () => {
   beforeEach(async () => {
+    // A test that forgets its stub fails here instead of reaching LOC, which blocks for an hour.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('unmocked fetch')));
     const storage = await createInMemoryStorage();
     initLocApiService(config, storage);
   });
@@ -184,6 +188,29 @@ describe('locItemResource', () => {
     );
 
     expect(result.date).toBe('1936 Apr.');
+  });
+
+  it('omits a coded catalog date (#69)', async () => {
+    serveByHost({ 'www.loc.gov': BOOK_ITEM_00003348 });
+    const ctx = createResourceContext({ uri: new URL('libofcongress://item/00003348') });
+    const result = await callItemResource(
+      locItemResource.params!.parse({ item_id: '00003348' }),
+      ctx,
+    );
+
+    expect(result).toMatchObject({ item_id: '00003348' });
+    expect(result).not.toHaveProperty('date');
+  });
+
+  it('returns the imprint (#71)', async () => {
+    serveByHost({ 'www.loc.gov': BOOK_ITEM_00003348 });
+    const ctx = createResourceContext({ uri: new URL('libofcongress://item/00003348') });
+    const result = await callItemResource(
+      locItemResource.params!.parse({ item_id: '00003348' }),
+      ctx,
+    );
+
+    expect(result.imprint).toBe('New York : Werner School Book Company, c1900.');
   });
 
   it('surfaces the curated metadata fields from a dense upstream record', async () => {
@@ -437,7 +464,75 @@ describe('locItemResource', () => {
       expect(new URL(String(fetchSpy.mock.calls[0]![0])).pathname).toBe('/item/2017760320/');
     });
 
+    it('reads a percent-encoded lccn.loc.gov permalink as its LCCN (#68)', async () => {
+      const fetchSpy = mockFetch(JSON.stringify(BOOK_ITEM_2005567251));
+      vi.stubGlobal('fetch', fetchSpy);
+      const uri = 'libofcongress://item/https%3A%2F%2Flccn.loc.gov%2F2005567251';
+      const ctx = createResourceContext({ uri: new URL(uri) });
+
+      const result = await callItemResource(
+        locItemResource.params!.parse(itemUriTemplate.match(uri)),
+        ctx,
+      );
+
+      expect(result).toMatchObject({
+        item_id: '2005567251',
+        url: 'https://lccn.loc.gov/2005567251',
+      });
+      expect(new URL(String(fetchSpy.mock.calls[0]![0])).pathname).toBe('/item/2005567251/');
+      expect(String(locItemResource.params!.shape.item_id.description)).toContain('lccn.loc.gov');
+      const entry = locItemResource.errors!.find((e) => e.reason === 'invalid_item_id')!;
+      expect(entry.when).toContain('lccn.loc.gov');
+    });
+
     it.each([
+      ['libofcongress://item/lccn.loc.gov/2005-568294', '2005568294'],
+      ['libofcongress://item/https%3A%2F%2Flccn.loc.gov%2Fsn%2083030214', 'sn83030214'],
+    ])('reads the unnormalized LCCN permalink %s as %s (#68)', async (uri, lccn) => {
+      const fetchSpy = mockFetch(JSON.stringify(BOOK_ITEM_2005567251));
+      vi.stubGlobal('fetch', fetchSpy);
+      const ctx = createResourceContext({ uri: new URL(uri) });
+
+      const result = await callItemResource(
+        locItemResource.params!.parse(itemUriTemplate.match(uri)),
+        ctx,
+      );
+
+      expect(result.item_id).toBe(lccn);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(new URL(String(fetchSpy.mock.calls[0]![0])).pathname).toBe(`/item/${lccn}/`);
+    });
+
+    it('names the accepted forms in its invalid_item_id message and recovery on the wire (#68)', async () => {
+      vi.stubGlobal('fetch', vi.fn());
+      const uri = 'libofcongress://item/lccn.loc.gov/2005-5682940';
+
+      const error = await readItemResourceError(uri);
+
+      expect(error.message).toBe(
+        '"lccn.loc.gov/2005-5682940" is not a LOC item ID, a loc.gov item link, or an LCCN permalink.',
+      );
+      expect(contractRecovery(locItemResource, 'invalid_item_id')).toBe(
+        'Use the id from a libofcongress_search_items result, written with its slashes intact (libofcongress://item/sn95047246/1935-09-05/ed-1), or a loc.gov item link or lccn.loc.gov permalink in its place; blanks and a hyphen in a permalink LCCN are normalized. An LCCN that still fails is malformed: find the item with libofcongress_search_items.',
+      );
+      expect(error.data).toMatchObject({
+        recovery: { hint: contractRecovery(locItemResource, 'invalid_item_id') },
+      });
+      const entry = locItemResource.errors!.find((e) => e.reason === 'invalid_item_id')!;
+      expect(entry.when).toBe(
+        'item_id is not a LOC item ID, a loc.gov /item/ link, or an lccn.loc.gov permalink to an LCCN: a URL on another loc.gov or lccn.loc.gov path or another host, an LCCN that does not normalize to up to three lowercase letters and 8 or 10 digits, or text with characters or segments no LOC ID has.',
+      );
+    });
+
+    it.each([
+      [
+        'an encoded lccn.loc.gov MARC XML link (#68)',
+        'libofcongress://item/https%3A%2F%2Flccn.loc.gov%2F2005567251%2Fmarcxml',
+      ],
+      [
+        'an LCCN on lccn.loc.gov that does not normalize (#68)',
+        'libofcongress://item/lccn.loc.gov/2005-5682940',
+      ],
       ['an encoded dot-segment traversal', 'libofcongress://item/%2e%2e%2f%2e%2e%2fcollections'],
       [
         'an encoded /resource/ page URL',

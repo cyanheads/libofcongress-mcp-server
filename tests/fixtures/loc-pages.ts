@@ -7,7 +7,11 @@
 
 /** Diary `mss93930.mss93930-001` page 3: `fulltext_file` is the whole volume's `.txt`; `fulltext_service` is page 3's. */
 export const MANUSCRIPT_PAGE_3 = {
-  item: { title: 'Betty Herndon Maury Maury diary,', date: '1861' },
+  item: {
+    title: 'Betty Herndon Maury Maury diary,',
+    date: '1861',
+    url: 'https://www.loc.gov/item/mm77093930/',
+  },
   resource: {
     fulltext_file:
       'https://tile.loc.gov/storage-services/service/gdc/gdccrowd/mss/mss93930/mss93930-001/mss93930-001.txt',
@@ -63,15 +67,59 @@ export const BOOK_PAGE_11_TEXT = JSON.stringify({
   },
 });
 
+/**
+ * Book `gdcmassbookdig.storyofcaptainme00king` page 3, a blank page (captured 2026-10-15): LOC
+ * lists a text file for it, and its text service answers with the blank-page placeholder.
+ */
+export const BOOK_BLANK_PAGE_3 = {
+  item: {
+    title: 'The story of Captain Meriwether Lewis and Captain William Clark : for young readers',
+    url: 'https://www.loc.gov/item/00003348/',
+  },
+  resource: {
+    fulltext_file:
+      'https://tile.loc.gov/storage-services/public/gdcmassbookdig/storyofcaptainme00king/storyofcaptainme00king.text.txt',
+    segment_count: 136,
+    url: 'https://www.loc.gov/resource/gdcmassbookdig.storyofcaptainme00king/',
+  },
+  fulltext_service:
+    'https://tile.loc.gov/text-services/word-coordinates-service?segment=/public/gdcmassbookdig/storyofcaptainme00king/storyofcaptainme00king_0003.alto.xml&format=alto_xml&full_text=1',
+};
+
+/** Page 3's text-service body, verbatim: the placeholder LOC sends for an ALTO file with no words. */
+export const BOOK_BLANK_PAGE_3_TEXT =
+  '{"/public/gdcmassbookdig/storyofcaptainme00king/storyofcaptainme00king_0003.alto.xml":{"full_text":"[NO TEXT AVAILABLE FOR THIS PAGE]","height":"3059","width":"2191"}}';
+
+/**
+ * Manuscript `magbell.02800101` page 2, an image-only page (captured 2026-10-15): LOC sends its
+ * `fulltext_service` as an empty object, not a URL, while `resource.fulltext_file` still names
+ * the folder's transcription XML.
+ */
+export const MANUSCRIPT_IMAGE_ONLY_PAGE_2 = {
+  item: {
+    title: 'Card by Mabel Hubbard Bell, June 1913',
+    url: 'https://www.loc.gov/item/magbell.02800101/',
+  },
+  resource: {
+    fulltext_file:
+      'https://tile.loc.gov/storage-services/service/mss/magbell/028/02800101/02800101.xml',
+    segment_count: 3,
+    url: 'https://www.loc.gov/resource/magbell.02800101/',
+  },
+  fulltext_service: {},
+};
+
 /** Newspaper `sn83030214/1912-04-16/ed-1` page 1: `fulltext_file` and `fulltext_service` are the same URL. */
 export const NEWSPAPER_PAGE_1 = {
   item: {
+    title: 'New-York tribune (New York [N.Y.]), April 16, 1912',
     newspaper_title: ['New-York tribune'],
     partof_title: ['new-york tribune (new york [n.y.]) 1866-1924'],
     location_state: ['new york'],
     place_of_publication: 'New York [N.Y.]',
     number_edition: ['1'],
     date_issued: '1912-04-16',
+    url: 'https://www.loc.gov/item/sn83030214/1912-04-16/ed-1/',
   },
   resource: {
     fulltext_file:
@@ -90,12 +138,14 @@ export const NEWSPAPER_PAGE_1 = {
  */
 export const NEWSPAPER_ED2_PAGE_2 = {
   item: {
+    title: 'The Newberry herald and news (Newberry, S.C.), January 24, 1902',
     newspaper_title: ['The Newberry herald and news'],
     partof_title: ['the newberry herald and news (newberry, s.c.) 1884-1903'],
     location_state: ['south carolina'],
     place_of_publication: 'Newberry, S.C.',
     number_edition: ['2'],
     date_issued: '1902-01-24',
+    url: 'https://www.loc.gov/item/sn93067777/1902-01-24/ed-2/',
   },
   resource: {
     fulltext_file:

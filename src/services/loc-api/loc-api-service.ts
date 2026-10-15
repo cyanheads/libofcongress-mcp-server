@@ -20,6 +20,7 @@ import {
   UPSTREAM_UNAVAILABLE,
 } from '@/services/http.js';
 import { decodeText, htmlToText } from './loc-text.js';
+import { lccnFromPermalink, newspaperIssueId, normalizeItemId } from './loc-urls.js';
 import { locationStateName } from './state-names.js';
 import type {
   LocCollection,
@@ -200,25 +201,44 @@ function normalizeUrl(raw: string): string {
   return raw;
 }
 
+/**
+ * True for a coded catalog value LOC sends in a date field in place of a date: a MARC date with
+ * `u` or `|` placeholders (`uuuu`, `185u`, `||||`), a compact sort number of seven or more digits
+ * (`18950000`, `1860000`), or a MARC time-period code holding a `d`-plus-year token
+ * (`0w0 d1804 d1806`). A plain year (`800`, `1867`) and every cataloged form (`185?`,
+ * `c1915 Feb. 19.`) are dates.
+ */
+export function isCodedDate(value: string): boolean {
+  return (
+    /^\d*[u|][\d|u]*$/.test(value) || /^\d{7,}$/.test(value) || /(?:^|\s)d\d{4}(?=\s|$)/.test(value)
+  );
+}
+
+/** The first of `candidates` that holds a date: decoded, non-empty, and not {@link isCodedDate}. */
+function catalogedDate(...candidates: Array<string | string[] | undefined>): string | undefined {
+  return candidates.map(extractFirstString).find((date) => date && !isCodedDate(date));
+}
+
 function normalizeSearchResult(result: RawLocSearchResult): LocItemSummary {
   const title = extractFirstString(result.title) ?? 'Untitled';
   const description = joinedText(result.description);
   const format = extractFirstString(result.original_format ?? result.online_format);
-  // libofcongress_get_item resolves /item/ resources only. LOC search also mixes in
-  // collections (/collections/), exhibit and research-guide pages, and newspaper-page
-  // /resource/ URLs — none of which get_item can consume. A result is get_item-usable
-  // exactly when its canonical URL is an /item/ path; flag that so callers don't pass a
-  // non-item id to get_item (which 404s).
-  const is_item = Boolean(result.url?.includes('/item/') || result.id?.includes('/item/'));
-  const id = extractId(result);
+  // libofcongress_get_item resolves /item/ resources, which include the records LOC search keys by
+  // an lccn.loc.gov permalink (served at /item/<lccn>/). LOC search also mixes in collections
+  // (/collections/), exhibit and research-guide pages, newspaper-page /resource/ URLs,
+  // catalog.loc.gov records, and hdl.loc.gov finding aids — none of which get_item can consume.
+  // Flag the difference so callers don't pass a non-item id to get_item (which 404s).
+  const lccn = lccnFromPermalink(result.id ?? result.url ?? '');
+  const is_item = Boolean(lccn || result.url?.includes('/item/') || result.id?.includes('/item/'));
+  const id = lccn ?? extractId(result);
   const url = normalizeUrl(result.url ?? `${LOC_BASE}/item/${id}/`);
   // The top-level date can be LOC's padded sort key ("1915-01-01"); the row's item block carries
-  // the date as cataloged ("c1915 Feb. 19.") when it has one. The item block's shape varies by
-  // endpoint, so only a non-empty string there stands in.
-  const catalogedDate = result.item?.date;
-  const date = extractFirstString(
-    typeof catalogedDate === 'string' && catalogedDate ? catalogedDate : result.date,
-  );
+  // the date as cataloged ("c1915 Feb. 19.") when it has one, but on scores, manuscripts, maps,
+  // and catalog-only books a coded value instead ("18950000", "185u", "uuuu"), where the top-level
+  // date ("1895", "185?") stands in. The item block's shape varies by endpoint, so only a string
+  // there is read.
+  const itemDate = result.item?.date;
+  const date = catalogedDate(typeof itemDate === 'string' ? itemDate : undefined, result.date);
   return {
     id,
     title,
@@ -321,10 +341,17 @@ function itemPages(
 }
 
 /**
+ * What tile.loc.gov's text service sends as `full_text` for a page whose text file holds no words
+ * (a blank book page): a placeholder, not page content.
+ */
+const BLANK_PAGE_PLACEHOLDER = '[NO TEXT AVAILABLE FOR THIS PAGE]';
+
+/**
  * The page text in a tile.loc.gov text-service body — `{ "<segment>": { "full_text": "…" } }`,
  * the same shape for newspaper, book, and manuscript pages — or undefined when the body is not
  * that shape (a plain-text file, truncated JSON). The text is returned as sent: tile.loc.gov does
- * not HTML-escape it (raw `<`, bare `&`), so decoding would corrupt a literal `&name;`.
+ * not HTML-escape it (raw `<`, bare `&`), so decoding would corrupt a literal `&name;`. A body that
+ * is the blank-page placeholder alone, surrounding whitespace aside, reads as empty text.
  */
 function parseFullText(body: string): string | undefined {
   let json: unknown;
@@ -335,7 +362,8 @@ function parseFullText(body: string): string | undefined {
   }
   if (typeof json !== 'object' || json === null) return;
   const segment = Object.values(json)[0] as { full_text?: unknown } | undefined;
-  return typeof segment?.full_text === 'string' ? segment.full_text : undefined;
+  if (typeof segment?.full_text !== 'string') return;
+  return segment.full_text.trim() === BLANK_PAGE_PLACEHOLDER ? '' : segment.full_text;
 }
 
 /** `url` with its `sp` (page sequence) query parameter set to `sequence`. */
@@ -718,13 +746,18 @@ export class LocApiService {
     // first entry would silently drop the rest.
     const summary = joinedText(item.summary);
     // On Prints & Photographs records item.date is a padded sort key ("1936-01-01");
-    // created_published_date is the date as cataloged ("1936 Apr.").
-    const date = extractFirstString(item.created_published_date || item.date);
+    // created_published_date is the date as cataloged ("1936 Apr."). A coded item.date ("uuuu",
+    // "0w0 d1804 d1806") is no date, and is left out.
+    const date = catalogedDate(item.created_published_date, item.date);
+    // The publication statement (place, publisher, date) is catalog text: decoded once, its
+    // brackets ("2013-<2021>") kept as data.
+    const imprint = joinedText(item.created_published);
 
     return {
       item_id: itemId,
       title,
       ...(date && { date }),
+      ...(imprint && { imprint }),
       contributors: extractStringArray(item.contributor_names),
       subject_headings: extractStringArray(item.subject_headings),
       subject_terms: extractStringArray(item.subject),
@@ -820,8 +853,8 @@ export class LocApiService {
    * requested `sp`. `resource.fulltext_file` is never read: on books and manuscripts it is the
    * whole volume's text (the same file for every page), and on newspaper pages it is the same URL
    * as `fulltext_service`. The page fetch and the text fetch share one call budget; the text leg
-   * gets whatever the page fetch left. `ocrMiss` says why `ocr_text` is empty on a page that has
-   * text.
+   * gets whatever the page fetch left. `ocrMiss`, when set, says why `ocr_text` is empty on a page
+   * that has text; a blank page has none.
    */
   async getNewspaperPage(
     pageUrl: string,
@@ -853,6 +886,7 @@ export class LocApiService {
     // The display-cased newspaper_title reads best; partof_title (lowercased, with place and run)
     // stands in when it is absent.
     const title = extractFirstString(item.newspaper_title) ?? extractFirstString(item.partof_title);
+    const itemTitle = extractFirstString(item.title);
     const states = extractStringArray(item.location_state);
     const placeOfPublication = extractFirstString(item.place_of_publication);
     const edition = extractFirstString(item.number_edition);
@@ -866,14 +900,26 @@ export class LocApiService {
     const spParam = parsed.searchParams.get('sp');
     const sequence =
       spParam && /^\d+$/.test(spParam) && Number(spParam) > 0 ? Number(spParam) : undefined;
+    // item.url names the item on every page type; a book or manuscript resource path does not
+    // (`mss93930.mss93930-001` belongs to `mm77093930`). Without it, a newspaper page's issue path
+    // is its item ID. A url that is not an item link yields none rather than a guess. LCCN-keyed
+    // records send it protocol-relative (`//lccn.loc.gov/<lccn>`), resolved to https first.
+    const itemId = item.url
+      ? normalizeItemId(normalizeUrl(item.url))
+      : newspaperIssueId(parsed.pathname);
 
-    const ocrAvailable = Boolean(data.fulltext_service);
-    const ocr = data.fulltext_service
-      ? await this.fetchOcrText(data.fulltext_service, ctx, deadlineAt)
-      : { text: '' };
+    // Only a non-empty string is a text service: image-only pages carry `{}` in its place.
+    const textService =
+      typeof data.fulltext_service === 'string' && data.fulltext_service.trim()
+        ? data.fulltext_service
+        : undefined;
+    const ocrAvailable = textService !== undefined;
+    const ocr = textService ? await this.fetchOcrText(textService, ctx, deadlineAt) : { text: '' };
 
     return {
       page_url: pageUrl,
+      ...(itemId && { item_id: itemId }),
+      ...(itemTitle && { item_title: itemTitle }),
       ...(title && { newspaper_title: title }),
       ...(date && { date }),
       ...(states.length > 0 && { states }),

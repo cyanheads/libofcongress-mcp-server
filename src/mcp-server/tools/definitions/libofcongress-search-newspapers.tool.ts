@@ -31,7 +31,7 @@ const DISJUNCTION = new Intl.ListFormat('en', { type: 'disjunction' });
 export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
   title: 'Search Historical Newspapers',
   description:
-    'Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with OCR text excerpts (~500 characters), publication title, date, the states LOC indexes the title under, and the page URL needed for libofcongress_get_newspaper_page. Filters by keyword, date range, US state, and newspaper title. The OCR excerpts are sufficient for relevance assessment — call libofcongress_get_newspaper_page with the returned url field to read the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text.',
+    "Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with the opening of each page's OCR text (~500 characters), publication title, date, the states LOC indexes the title under, and the page URL needed for libofcongress_get_newspaper_page. Filters by keyword, date range, US state, and newspaper title. The excerpt is the page's first lines, not the text around the match: to read where the query occurs, call libofcongress_get_newspaper_page with the returned url field and this query as its match, which returns the passages around each occurrence; omit match for the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -85,13 +85,15 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
             url: z
               .string()
               .describe(
-                'LOC resource URL for this page — pass to libofcongress_get_newspaper_page to get full OCR text.',
+                'LOC resource URL for this page — pass to libofcongress_get_newspaper_page for its full OCR text, or with the query as match for the passages around it.',
               ),
             title: z.string().describe('Page or issue title.'),
             description: z
               .string()
               .optional()
-              .describe('OCR text excerpt (~500 chars) for relevance assessment.'),
+              .describe(
+                "Opening of the page's OCR text (~500 chars): the page's first lines, not the text around the match. Pass the query as match to libofcongress_get_newspaper_page for the passages around it.",
+              ),
             date: z.string().optional().describe('Issue publication date.'),
             states: z
               .array(z.string())

@@ -29,7 +29,7 @@ const facetList = (kind: string) =>
 export const locSearchItems = tool('libofcongress_search_items', {
   title: 'Search LOC Items',
   description:
-    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location, or scope the search to a single curated collection with collection_slug. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Each result carries is_item: pass the id of a result where is_item is true to libofcongress_get_item for full metadata; results where is_item is false are non-item resources (collections, exhibit and research-guide pages, newspaper-page results) with no item record — open their url instead. Use libofcongress_search_subjects to find an LCSH heading for the subject filter. To discover the subject and location values the filters accept for a search, set include_facets to get its top subject_facets and location_facets.',
+    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location, or scope the search to a single curated collection with collection_slug. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Each result carries is_item: pass the id of a result where is_item is true to libofcongress_get_item for full metadata; results where is_item is false are non-item resources (collections, exhibit and research-guide pages, newspaper-page results, catalog.loc.gov records, hdl.loc.gov finding aids) with no item record — open their url instead. Use libofcongress_search_subjects to find an LCSH heading for the subject filter. To discover the subject and location values the filters accept for a search, set include_facets to get its top subject_facets and location_facets.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -103,14 +103,14 @@ export const locSearchItems = tool('libofcongress_search_items', {
             id: z
               .string()
               .describe(
-                'LOC identifier for this result. When is_item is true, pass it to libofcongress_get_item for full metadata. When is_item is false it is a non-item resource (a collection, exhibit, guide, or newspaper page), not a get_item input — open url instead.',
+                'LOC identifier for this result: an item ID, or the bare LCCN of a record whose url is an lccn.loc.gov permalink. When is_item is true, pass it to libofcongress_get_item for full metadata. When is_item is false it is a non-item resource (a collection, exhibit, guide, newspaper page, catalog.loc.gov record, or hdl.loc.gov finding aid), not a get_item input — open url instead.',
               ),
             title: z.string().describe('Item title.'),
             date: z
               .string()
               .optional()
               .describe(
-                'Publication or creation date as LOC catalogs it: free text, a year, or a full date (e.g., "c1915 Feb. 19.", "1912").',
+                'Publication or creation date as LOC catalogs it: free text, a year, or a full date (e.g., "c1915 Feb. 19.", "1912"). Absent when LOC records only a coded value ("uuuu", "||||") or none.',
               ),
             description: z.string().optional().describe('Brief description or summary.'),
             format: z
@@ -120,7 +120,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
             is_item: z
               .boolean()
               .describe(
-                'True when this result is a catalog item whose id resolves through libofcongress_get_item. False for collections, exhibits, research guides, newspaper pages, and other non-item results, which have no get_item record — follow url instead. Always present on every result.',
+                'True when this result is a catalog item whose id resolves through libofcongress_get_item, including records LOC links by an lccn.loc.gov permalink. False for collections, exhibits, research guides, newspaper pages, catalog.loc.gov records, hdl.loc.gov finding aids, and other non-item results, which have no get_item record — follow url instead. Always present on every result.',
               ),
             url: z.string().describe('LOC item or collection URL.'),
           })
@@ -429,7 +429,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
         lines.push('_Item — pass this ID to libofcongress_get_item for full metadata._');
       else
         lines.push(
-          '_Non-item result (collection/exhibit/guide/newspaper page) — not a libofcongress_get_item target; open the URL._',
+          '_Non-item result (collection, exhibit, guide, newspaper page, catalog record, or finding aid) — not a libofcongress_get_item target; open the URL._',
         );
       if (item.date) lines.push(`**Date:** ${inlineText(item.date)}`);
       if (item.format) lines.push(`**Format:** ${inlineText(item.format)}`);

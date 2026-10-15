@@ -11,16 +11,31 @@ import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } fr
 import {
   getLocApiService,
   initLocApiService,
+  isCodedDate,
   LocApiService,
 } from '@/services/loc-api/loc-api-service.js';
 import type { LocPagination } from '@/services/loc-api/types.js';
 import {
   AUDIO_ITEM_JUKEBOX_68453,
   BASEBALL_CARD_ITEM_2008676581,
+  BOOK_ITEM_00003348,
   BOOK_ITEM_02007458,
+  BOOK_ITEM_2005567251,
+  BOOK_ITEM_2024769398,
+  COBB_PHOTO_SEARCH,
+  CODED_DATE_SEARCH,
+  IDENTITY_SHAPES_SEARCH,
   MANUSCRIPT_ITEM_MM77093930,
   NEWSPAPER_ISSUE_SN83030214_1912_04_16,
 } from '../fixtures/loc-items.js';
+import {
+  BOOK_BLANK_PAGE_3,
+  BOOK_BLANK_PAGE_3_TEXT,
+  MANUSCRIPT_IMAGE_ONLY_PAGE_2,
+  MANUSCRIPT_PAGE_3,
+  NEWSPAPER_ED2_PAGE_2,
+  NEWSPAPER_PAGE_1,
+} from '../fixtures/loc-pages.js';
 import {
   MAP_ITEM_77694805,
   POSTERS_PHOTOS_SEARCH,
@@ -34,6 +49,7 @@ import {
   NEWSPAPER_NOTES_SN83030214,
   TITANIC_OCR_EXCERPT,
 } from '../fixtures/loc-text.js';
+import { cpuScaling, repeatTo } from '../helpers/cpu-scaling.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
 
 function mockFetch(body: string, status = 200) {
@@ -70,6 +86,47 @@ describe('LocApiService init/accessor', () => {
     initLocApiService(config, storage);
     const svc = getLocApiService();
     expect(svc).toBeInstanceOf(LocApiService);
+  });
+});
+
+describe('isCodedDate (#69)', () => {
+  it.each(['uuuu', '185u', '15uu', '||||', '18950000', '19130600', '1860000', '0w0 d1804 d1806'])(
+    'reads %j as coded',
+    (value) => {
+      expect(isCodedDate(value)).toBe(true);
+    },
+  );
+
+  it.each([
+    '800',
+    '1867',
+    '1894',
+    '185?',
+    '15??',
+    '200?',
+    'c1915 Feb. 19.',
+    '1936 Apr.',
+    '1909-1911.',
+    '1913-06-01',
+    '1860-01-01',
+    '[between 1861 and 1865]',
+    '[ca. 1911]',
+    '3 June 1902.',
+    '186500',
+  ])('reads %j as a date', (value) => {
+    expect(isCodedDate(value)).toBe(false);
+  });
+
+  it.each<[string, (length: number) => string]>([
+    ['a digit run', (n) => repeatTo('1', n)],
+    ['a digit run ending in a letter', (n) => `${repeatTo('1', n - 1)}x`],
+    ['a u-placeholder run ending in a letter', (n) => `${repeatTo('u', n - 1)}x`],
+    ['repeated d-prefixed digit runs', (n) => repeatTo('d123 ', n)],
+    ['repeated spaced d letters', (n) => repeatTo(' d', n)],
+  ])('scans %s in linear time (5k → 320k characters)', (_name, make) => {
+    const { largeMs, ratio } = cpuScaling(isCodedDate, make);
+    expect(ratio).toBeLessThan(256);
+    expect(largeMs).toBeLessThan(250);
   });
 });
 
@@ -441,6 +498,82 @@ describe('LocApiService.search', () => {
     expect(item.id).toBe('2009632251');
   });
 
+  describe('row identity shapes (#68)', () => {
+    const identities = async () => {
+      serveByHost({ 'www.loc.gov': IDENTITY_SHAPES_SEARCH });
+      const result = await getLocApiService().search(
+        { query: 'civil war', page: 1 },
+        createMockContext(),
+      );
+      return result.items.map(({ id, is_item, url }) => ({ id, is_item, url }));
+    };
+
+    it('flags lccn.loc.gov permalink rows is_item:true, keeping the bare LCCN id and https url', async () => {
+      expect((await identities()).slice(0, 3)).toEqual([
+        { id: '2005567251', is_item: true, url: 'https://lccn.loc.gov/2005567251' },
+        { id: 'unk82079773', is_item: true, url: 'https://lccn.loc.gov/unk82079773' },
+        { id: '2024681443', is_item: true, url: 'https://lccn.loc.gov/2024681443' },
+      ]);
+    });
+
+    it('keeps catalog.loc.gov, hdl.loc.gov, and collection rows is_item:false', async () => {
+      expect((await identities()).slice(3)).toEqual([
+        {
+          id: 'cgi-bin/Pwebrecon.cgi?DB=local&BBID=13839143&v3=1',
+          is_item: false,
+          url: 'https://catalog.loc.gov/vwebv/holdingsInfo?bibId=13839143',
+        },
+        {
+          id: 'loc.mss/eadmss.ms013110',
+          is_item: false,
+          url: 'https://hdl.loc.gov/loc.mss/eadmss.ms013110',
+        },
+        {
+          id: 'collections/civil-war-maps/about-this-collection',
+          is_item: false,
+          url: 'https://www.loc.gov/collections/civil-war-maps/about-this-collection/',
+        },
+      ]);
+    });
+  });
+
+  describe('coded item.date on rows (#69)', () => {
+    const dates = async (body: unknown) => {
+      serveByHost({ 'www.loc.gov': body });
+      const result = await getLocApiService().search(
+        { query: 'railroads', page: 1 },
+        createMockContext(),
+      );
+      return result.items.map((item) => [item.id, item.date]);
+    };
+
+    it('falls back to the top-level date, or none, when item.date is coded', async () => {
+      expect(await dates(CODED_DATE_SEARCH)).toEqual([
+        ['scsm000191', '1895'],
+        ['magbell.02800101', '1913-06-01'],
+        ['98688858', '185?'],
+        ['2024769398', undefined],
+      ]);
+      const identity = await dates(IDENTITY_SHAPES_SEARCH);
+      expect(identity[0]).toEqual(['2005567251', undefined]);
+      expect(identity[3]).toEqual(['cgi-bin/Pwebrecon.cgi?DB=local&BBID=13839143&v3=1', undefined]);
+    });
+
+    it('keeps a cataloged item.date, and the top-level date of a row without one', async () => {
+      expect(await dates(COBB_PHOTO_SEARCH)).toEqual([
+        ['2008676581', '1909-1911.'],
+        ['2001704373', 'c1915 Feb. 19.'],
+        ['exhibits/jazz-singers/slideshow', '2016-02-11'],
+      ]);
+      const identity = await dates(IDENTITY_SHAPES_SEARCH);
+      expect(identity.slice(1, 3)).toEqual([
+        ['unk82079773', '1835'],
+        ['2024681443', '1860'],
+      ]);
+      expect(identity[4]).toEqual(['loc.mss/eadmss.ms013110', '1944']);
+    });
+  });
+
   it('preserves the full multi-segment path for deep /item/ newspaper URLs', async () => {
     vi.stubGlobal(
       'fetch',
@@ -765,6 +898,103 @@ describe('LocApiService.getItem', () => {
     const svc = getLocApiService();
     const result = await svc.getItem('medium', ctx);
     expect(result.physical_description).toBe('1 photograph');
+  });
+
+  describe('coded item.date (#69)', () => {
+    it.each([
+      ['00003348', BOOK_ITEM_00003348],
+      ['2005567251', BOOK_ITEM_2005567251],
+      ['2024769398', BOOK_ITEM_2024769398],
+    ])('omits the coded date of %s', async (itemId, body) => {
+      serveByHost({ 'www.loc.gov': body });
+      const result = await getLocApiService().getItem(itemId, createMockContext());
+      expect(result).toMatchObject({ item_id: itemId });
+      expect(result).not.toHaveProperty('date');
+    });
+
+    it.each([
+      ['a placeholder-free estimate', { date: '200?' }, '200?'],
+      ['a three-digit year', { date: '800' }, '800'],
+      [
+        'a cataloged date over the sort key',
+        { date: '1936-01-01', created_published_date: '1936 Apr.' },
+        '1936 Apr.',
+      ],
+      ['a padded key with no cataloged date', { date: '1860-01-01' }, '1860-01-01'],
+    ])('keeps %s', async (_name, dates, expected) => {
+      serveByHost({
+        'www.loc.gov': {
+          item: { title: 'Dated', url: 'https://www.loc.gov/item/dated/', ...dates },
+          resources: [],
+          related_items: [],
+        },
+      });
+      const result = await getLocApiService().getItem('dated', createMockContext());
+      expect(result.date).toBe(expected);
+    });
+  });
+
+  describe('imprint (#71)', () => {
+    /** getItem's result for a record whose `item` block carries `fields`. */
+    const itemWith = (fields: Record<string, unknown>) => {
+      serveByHost({
+        'www.loc.gov': {
+          item: { title: 'Imprinted', url: 'https://www.loc.gov/item/imprinted/', ...fields },
+          resources: [],
+          related_items: [],
+        },
+      });
+      return getLocApiService().getItem('imprinted', createMockContext());
+    };
+
+    it('reads the captured imprint of 00003348 from the item block, with no extra request', async () => {
+      const fetchSpy = serveByHost({ 'www.loc.gov': BOOK_ITEM_00003348 });
+
+      const result = await getLocApiService().getItem('00003348', createMockContext());
+
+      expect(result.imprint).toBe('New York : Werner School Book Company, c1900.');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(new URL(String(fetchSpy.mock.calls[0]![0])).searchParams.get('at')).toBe(
+        'item,resources,related_items',
+      );
+    });
+
+    it.each([
+      [
+        'a two-entry array, space-joined',
+        ['Millwood, NY : ZOHO Music, [2017]', '℗2017'],
+        'Millwood, NY : ZOHO Music, [2017] ℗2017',
+      ],
+      ['a string', '1946.', '1946.'],
+      [
+        'cataloging brackets, verbatim',
+        ['Roma : Carocci, 2013-<2021>'],
+        'Roma : Carocci, 2013-<2021>',
+      ],
+      [
+        'a character reference, decoded once',
+        ['Lanham : Rowman &amp; Littlefield, [2023]'],
+        'Lanham : Rowman & Littlefield, [2023]',
+      ],
+      [
+        'a bare ampersand, unchanged',
+        ['Philadelphia : J.B. Lippincott & co., 1867.'],
+        'Philadelphia : J.B. Lippincott & co., 1867.',
+      ],
+      ['an escaped reference, decoded only once', ['A &amp;amp; B'], 'A &amp; B'],
+    ])('returns %s', async (_name, createdPublished, imprint) => {
+      const result = await itemWith({ created_published: createdPublished });
+      expect(result.imprint).toBe(imprint);
+    });
+
+    it.each([
+      ['absent', {}],
+      ['an empty array', { created_published: [] }],
+    ])('omits imprint when created_published is %s', async (_name, fields) => {
+      const result = await itemWith(fields);
+      expect(result).toMatchObject({ item_id: 'imprinted', title: 'Imprinted' });
+      expect(result).not.toHaveProperty('imprint');
+    });
   });
 
   it('lists a file group as a page, its files only when requested (#63)', async () => {
@@ -1832,6 +2062,8 @@ describe('LocApiService.getNewspaperPage', () => {
 
     expect(result).toEqual({
       page_url: 'https://www.loc.gov/resource/sn87065702/1927-06-16/ed-1/?sp=10',
+      item_id: 'sn87065702/1927-06-16/ed-1',
+      item_title: 'Southern Christian advocate (Charleston, S.C.), June 16, 1927',
       newspaper_title: 'Southern Christian advocate',
       date: '1927-06-16',
       states: ['georgia', 'south carolina'],
@@ -1885,6 +2117,7 @@ describe('LocApiService.getNewspaperPage', () => {
 
     expect(result).toEqual({
       page_url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/?sp=12',
+      item_id: 'sn82014248/1912-04-18/ed-1',
       date: '1912-04-18',
       sequence: 12,
       ocr_text: '',
@@ -1942,6 +2175,263 @@ describe('LocApiService.getNewspaperPage', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     expect(result.ocr_available).toBe(true);
     expect(result.ocr_text).toBe('Recovered OCR text');
+  });
+
+  describe('image-only pages (#75)', () => {
+    const IMAGE_ONLY_PAGE_URL = 'https://www.loc.gov/resource/magbell.02800101/?sp=2';
+    const { fulltext_service: _captured, ...imageOnlyPage } = MANUSCRIPT_IMAGE_ONLY_PAGE_2;
+
+    it.each([
+      { name: 'an empty object, as LOC sends it', service: _captured },
+      { name: 'an empty string', service: '' },
+      { name: 'a blank string', service: '  ' },
+      { name: 'null', service: null },
+      { name: 'absent', service: undefined },
+    ])(
+      'reads a fulltext_service of $name as no text, with no text request',
+      async ({ service }) => {
+        const fetchSpy = serveByHost({
+          'www.loc.gov': {
+            ...imageOnlyPage,
+            ...(service !== undefined && { fulltext_service: service }),
+          },
+        });
+
+        const result = await getLocApiService().getNewspaperPage(
+          IMAGE_ONLY_PAGE_URL,
+          createMockContext(),
+        );
+
+        expect(result).toEqual({
+          page_url: IMAGE_ONLY_PAGE_URL,
+          item_id: 'magbell.02800101',
+          item_title: 'Card by Mabel Hubbard Bell, June 1913',
+          sequence: 2,
+          segment_count: 3,
+          ocr_text: '',
+          ocr_available: false,
+        });
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  describe('item_id of the page (#72)', () => {
+    const NEWSPAPER_PAGE_URL = 'https://www.loc.gov/resource/sn83030214/1912-04-16/ed-1/?sp=1';
+    const BOOK_PAGE_URL =
+      'https://www.loc.gov/resource/gdcmassbookdig.storyofcaptainme00king/?sp=3';
+    /** Serves `page` from www.loc.gov and a one-line text body from tile.loc.gov. */
+    const servePage = (page: unknown) =>
+      serveByHost({ 'www.loc.gov': page, 'tile.loc.gov': { '/x.xml': { full_text: 'Text.' } } });
+    /** `page` with its item block's `url` replaced by `url`, or removed when `url` is undefined. */
+    const withItemUrl = (page: { item: Record<string, unknown> }, url?: string) => {
+      const { url: _omit, ...item } = page.item;
+      return { ...page, item: { ...item, ...(url !== undefined && { url }) } };
+    };
+
+    it.each([
+      {
+        name: 'a newspaper page',
+        page: NEWSPAPER_PAGE_1,
+        pageUrl: NEWSPAPER_PAGE_URL,
+        itemId: 'sn83030214/1912-04-16/ed-1',
+      },
+      {
+        name: 'an ed-2 newspaper page',
+        page: NEWSPAPER_ED2_PAGE_2,
+        pageUrl: 'https://www.loc.gov/resource/sn93067777/1902-01-24/ed-2/?sp=2',
+        itemId: 'sn93067777/1902-01-24/ed-2',
+      },
+      {
+        name: 'a manuscript page',
+        page: MANUSCRIPT_PAGE_3,
+        pageUrl: 'https://www.loc.gov/resource/mss93930.mss93930-001/?sp=3',
+        itemId: 'mm77093930',
+      },
+      { name: 'a book page', page: BOOK_BLANK_PAGE_3, pageUrl: BOOK_PAGE_URL, itemId: '00003348' },
+    ])('reads item.url as the item ID for $name', async ({ page, pageUrl, itemId }) => {
+      servePage(page);
+      const result = await getLocApiService().getNewspaperPage(pageUrl, createMockContext());
+      expect(result.item_id).toBe(itemId);
+    });
+
+    it.each([
+      { name: 'without url', page: withItemUrl(NEWSPAPER_PAGE_1) },
+      { name: 'with an empty url', page: withItemUrl(NEWSPAPER_PAGE_1, '') },
+      { name: 'absent', page: { ...NEWSPAPER_PAGE_1, item: undefined } },
+    ])(
+      'falls back to the issue path of a newspaper page_url when the item block is $name',
+      async ({ page }) => {
+        servePage(page);
+        const result = await getLocApiService().getNewspaperPage(
+          NEWSPAPER_PAGE_URL,
+          createMockContext(),
+        );
+        expect(result.item_id).toBe('sn83030214/1912-04-16/ed-1');
+      },
+    );
+
+    it.each([
+      ['//lccn.loc.gov/2005567251', '2005567251'],
+      ['//lccn.loc.gov/2005-567251/', '2005567251'],
+      ['//www.loc.gov/item/00003348/', '00003348'],
+    ])(
+      'resolves a protocol-relative item.url %j to https before reading item ID %j',
+      async (url, itemId) => {
+        servePage(withItemUrl(BOOK_BLANK_PAGE_3, url));
+        const result = await getLocApiService().getNewspaperPage(
+          BOOK_PAGE_URL,
+          createMockContext(),
+        );
+        expect(result.item_id).toBe(itemId);
+      },
+    );
+
+    it("falls back to an ed-2 page's own edition, never ed-1", async () => {
+      servePage(withItemUrl(NEWSPAPER_ED2_PAGE_2));
+      const result = await getLocApiService().getNewspaperPage(
+        'https://www.loc.gov/resource/sn93067777/1902-01-24/ed-2/?sp=2',
+        createMockContext(),
+      );
+      expect(result.item_id).toBe('sn93067777/1902-01-24/ed-2');
+    });
+
+    it('omits item_id for a book page whose item block carries no url', async () => {
+      servePage(withItemUrl(BOOK_BLANK_PAGE_3));
+      const result = await getLocApiService().getNewspaperPage(BOOK_PAGE_URL, createMockContext());
+      expect(result).toMatchObject({ page_url: BOOK_PAGE_URL, sequence: 3 });
+      expect(result).not.toHaveProperty('item_id');
+    });
+
+    it.each([
+      'https://www.loc.gov/resource/sn83030214/1912-04-16/ed-1/',
+      'https://evil.example.com/item/sn83030214/',
+      'https://www.loc.gov/item/../../etc/passwd/',
+      'not a url',
+    ])(
+      'omits item_id when normalizeItemId rejects item.url %j, even on a newspaper page',
+      async (url) => {
+        servePage(withItemUrl(NEWSPAPER_PAGE_1, url));
+        const result = await getLocApiService().getNewspaperPage(
+          NEWSPAPER_PAGE_URL,
+          createMockContext(),
+        );
+        expect(result).toMatchObject({ page_url: NEWSPAPER_PAGE_URL, ocr_text: 'Text.' });
+        expect(result).not.toHaveProperty('item_id');
+      },
+    );
+  });
+
+  describe('item_title of the page (#74)', () => {
+    /** Serves `page` from www.loc.gov and a one-line text body from tile.loc.gov. */
+    const servePage = (page: unknown) =>
+      serveByHost({ 'www.loc.gov': page, 'tile.loc.gov': { '/x.xml': { full_text: 'Text.' } } });
+
+    it.each([
+      {
+        name: 'a book page',
+        page: BOOK_BLANK_PAGE_3,
+        pageUrl: 'https://www.loc.gov/resource/gdcmassbookdig.storyofcaptainme00king/?sp=3',
+        itemTitle:
+          'The story of Captain Meriwether Lewis and Captain William Clark : for young readers',
+      },
+      {
+        name: 'a manuscript page',
+        page: MANUSCRIPT_PAGE_3,
+        pageUrl: 'https://www.loc.gov/resource/mss93930.mss93930-001/?sp=3',
+        itemTitle: 'Betty Herndon Maury Maury diary,',
+      },
+    ])(
+      'reads item.title as item_title for $name, which has no newspaper_title',
+      async ({ page, pageUrl, itemTitle }) => {
+        servePage(page);
+        const result = await getLocApiService().getNewspaperPage(pageUrl, createMockContext());
+        expect(result.item_title).toBe(itemTitle);
+        expect(result).not.toHaveProperty('newspaper_title');
+      },
+    );
+
+    it('reads item.title beside the unchanged newspaper_title on a newspaper page', async () => {
+      servePage(NEWSPAPER_PAGE_1);
+      const result = await getLocApiService().getNewspaperPage(
+        'https://www.loc.gov/resource/sn83030214/1912-04-16/ed-1/?sp=1',
+        createMockContext(),
+      );
+      expect(result).toMatchObject({
+        item_title: 'New-York tribune (New York [N.Y.]), April 16, 1912',
+        newspaper_title: 'New-York tribune',
+      });
+    });
+
+    it('decodes character references in item.title once', async () => {
+      servePage({
+        ...MANUSCRIPT_PAGE_3,
+        item: { ...MANUSCRIPT_PAGE_3.item, title: 'Smith &amp; Co. &amp;amp; sons&#8217; papers' },
+      });
+      const result = await getLocApiService().getNewspaperPage(
+        'https://www.loc.gov/resource/mss93930.mss93930-001/?sp=3',
+        createMockContext(),
+      );
+      expect(result.item_title).toBe('Smith & Co. &amp; sons’ papers');
+    });
+
+    it.each([
+      { name: 'no title', item: { url: 'https://www.loc.gov/item/mm77093930/' } },
+      { name: 'an empty title', item: { title: '', url: 'https://www.loc.gov/item/mm77093930/' } },
+      { name: 'no item block', item: undefined },
+    ])('omits item_title for an item block with $name', async ({ item }) => {
+      servePage({ ...MANUSCRIPT_PAGE_3, item });
+      const result = await getLocApiService().getNewspaperPage(
+        'https://www.loc.gov/resource/mss93930.mss93930-001/?sp=3',
+        createMockContext(),
+      );
+      expect(result).toMatchObject({ sequence: 3, ocr_text: 'Text.' });
+      expect(result).not.toHaveProperty('item_title');
+    });
+  });
+
+  describe("LOC's blank-page placeholder (#70)", () => {
+    const BOOK_PAGE_URL =
+      'https://www.loc.gov/resource/gdcmassbookdig.storyofcaptainme00king/?sp=3';
+    /** Serves the blank book page with a text-service body whose `full_text` is `fullText`. */
+    const serveText = (fullText: string) =>
+      serveByHost({
+        'www.loc.gov': BOOK_BLANK_PAGE_3,
+        'tile.loc.gov': { '/x.alto.xml': { full_text: fullText } },
+      });
+
+    it('reads the captured placeholder body as empty text with no miss', async () => {
+      serveByHost({
+        'www.loc.gov': BOOK_BLANK_PAGE_3,
+        'tile.loc.gov': JSON.parse(BOOK_BLANK_PAGE_3_TEXT),
+      });
+      const result = await getLocApiService().getNewspaperPage(BOOK_PAGE_URL, createMockContext());
+      expect(result).toMatchObject({ ocr_text: '', ocr_available: true });
+      expect(result).not.toHaveProperty('ocrMiss');
+    });
+
+    it.each([
+      ' [NO TEXT AVAILABLE FOR THIS PAGE] ',
+      '[NO TEXT AVAILABLE FOR THIS PAGE]\n',
+      '\n\t[NO TEXT AVAILABLE FOR THIS PAGE]\r\n',
+    ])('reads the placeholder with surrounding whitespace %j as empty text', async (fullText) => {
+      serveText(fullText);
+      const result = await getLocApiService().getNewspaperPage(BOOK_PAGE_URL, createMockContext());
+      expect(result.ocr_text).toBe('');
+      expect(result).not.toHaveProperty('ocrMiss');
+    });
+
+    it.each([
+      '[NO TEXT AVAILABLE FOR THIS PAGE]\nCHAPTER I',
+      'See [NO TEXT AVAILABLE FOR THIS PAGE]',
+      '[no text available for this page]',
+      '[No Text Available For This Page]',
+      'NO TEXT AVAILABLE FOR THIS PAGE',
+    ])('returns text that is not the placeholder alone, %j, as sent', async (fullText) => {
+      serveText(fullText);
+      const result = await getLocApiService().getNewspaperPage(BOOK_PAGE_URL, createMockContext());
+      expect(result.ocr_text).toBe(fullText);
+    });
   });
 });
 

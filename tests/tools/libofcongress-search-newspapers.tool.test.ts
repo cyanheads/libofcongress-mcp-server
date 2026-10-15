@@ -343,6 +343,14 @@ describe('locSearchNewspapers', () => {
     expect(title).toContain('"new-york tribune (new york [n.y.]) 1866-1924"');
   });
 
+  it('calls the excerpt the page opening and points to match on get_newspaper_page (#73)', () => {
+    expect(locSearchNewspapers.description).toMatch(
+      /first lines, not the text around the match.*libofcongress_get_newspaper_page.*this query as its match/,
+    );
+    const row = locSearchNewspapers.output.shape.items.element.shape.description;
+    expect(String(row.description)).toMatch(/^Opening of the page's OCR text.*as match/);
+  });
+
   it('strips empty state/newspaper_title (form-client payload)', async () => {
     const fetchSpy = mockFetch(makeNewspaperSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);

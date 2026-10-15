@@ -14,11 +14,19 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { locGetItem } from '@/mcp-server/tools/definitions/libofcongress-get-item.tool.js';
 import { locGetNewspaperPage } from '@/mcp-server/tools/definitions/libofcongress-get-newspaper-page.tool.js';
+import { fencedText } from '@/mcp-server/tools/render-text.js';
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
-import { MANUSCRIPT_ITEM_MM77093930 } from '../fixtures/loc-items.js';
 import {
+  MANUSCRIPT_ITEM_MM77093930,
+  NEWSPAPER_ISSUE_SN83030214_1912_04_16,
+} from '../fixtures/loc-items.js';
+import { NEWSPAPER_PAGE_1_TEXT } from '../fixtures/loc-page-text.js';
+import {
+  BOOK_BLANK_PAGE_3,
+  BOOK_BLANK_PAGE_3_TEXT,
   BOOK_PAGE_11,
   BOOK_PAGE_11_TEXT,
+  MANUSCRIPT_IMAGE_ONLY_PAGE_2,
   MANUSCRIPT_PAGE_3,
   MANUSCRIPT_PAGE_3_TEXT,
   MANUSCRIPT_PAGE_4,
@@ -142,6 +150,20 @@ describe('locGetNewspaperPage upstream text (#65)', () => {
     expect(text).toContain('**States:** oklahoma \\<i>\n');
     expect(text).toContain('**Edition:** 1 \\<x>\n');
     expect(text).toContain(`**URL:** ${PAGE_URL}\n`);
+  });
+
+  it('escapes markup in item_title in content[] only, as a line and as the heading (#74)', async () => {
+    servePage({ ...PAGE_ITEM, title: 'The &lt;b&gt;daily&lt;/b&gt;\nOklahoman &amp;c.' }, 'Text.');
+    const newspaper = await runToolContract(locGetNewspaperPage, { page_url: PAGE_URL });
+    expect(structured(newspaper).item_title).toBe('The <b>daily</b>\nOklahoman &c.');
+    expect(contentText(newspaper)).toContain(
+      '**Item title:** The \\<b>daily\\</b> Oklahoman &c.\n',
+    );
+
+    servePage({ title: 'A &lt;i&gt;diary&lt;/i&gt;' }, 'Text.');
+    const book = await runToolContract(locGetNewspaperPage, { page_url: PAGE_URL });
+    expect(structured(book).item_title).toBe('A <i>diary</i>');
+    expect(contentText(book)).toMatch(/^# A \\<i>diary\\<\/i>\n/);
   });
 });
 
@@ -382,6 +404,7 @@ describe('locGetNewspaperPage', () => {
     expect(result.isError).toBeFalsy();
     expect(structured(result)).toEqual({
       page_url: pageUrl,
+      item_id: 'sn82014248/1912-04-18/ed-1',
       date: '1912-04-18',
       sequence: 12,
       ocr_text: '',
@@ -579,6 +602,52 @@ describe('locGetNewspaperPage', () => {
       expect(spy).toHaveBeenCalledTimes(1);
     });
 
+    describe('image-only page with an empty fulltext_service (#75)', () => {
+      const IMAGE_ONLY_PAGE = 'https://www.loc.gov/resource/magbell.02800101/?sp=2';
+      const IMAGE_ONLY_HEAD = `# Card by Mabel Hubbard Bell, June 1913\n**URL:** ${IMAGE_ONLY_PAGE}\n**Item ID:** magbell.02800101\n**Sequence:** 2 of 3\n**OCR available:** No\n`;
+      const IMAGE_ONLY_LINE =
+        '_No digitized OCR text available for this page (image-only digitization batch)._';
+
+      it('reports no text and no notice, without a text request, on both surfaces', async () => {
+        expect(MANUSCRIPT_IMAGE_ONLY_PAGE_2.fulltext_service).toEqual({});
+        const spy = route({ '2': MANUSCRIPT_IMAGE_ONLY_PAGE_2 }, {});
+
+        const result = await runToolContract(locGetNewspaperPage, { page_url: IMAGE_ONLY_PAGE });
+
+        const sc = structured(result);
+        expect(sc).toMatchObject({
+          ocr_available: false,
+          ocr_text: '',
+          item_id: 'magbell.02800101',
+        });
+        expect(sc).not.toHaveProperty('notice');
+        expect(contentText(result)).toBe(`${IMAGE_ONLY_HEAD}\n${IMAGE_ONLY_LINE}`);
+        expect(spy).toHaveBeenCalledTimes(1);
+      });
+
+      it('returns no passages and no notice with match, without a text request, on both surfaces', async () => {
+        const spy = route({ '2': MANUSCRIPT_IMAGE_ONLY_PAGE_2 }, {});
+
+        const result = await runToolContract(locGetNewspaperPage, {
+          page_url: IMAGE_ONLY_PAGE,
+          match: 'bell',
+        });
+
+        const sc = structured(result);
+        expect(sc).toMatchObject({
+          ocr_available: false,
+          ocr_text: '',
+          matches: [],
+          match_count: 0,
+        });
+        expect(sc).not.toHaveProperty('notice');
+        expect(contentText(result)).toBe(
+          `${IMAGE_ONLY_HEAD}**Match count:** 0\n\n${IMAGE_ONLY_LINE}`,
+        );
+        expect(spy).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it('names an unparseable text body as unparseable, not a retry, on both surfaces', async () => {
       // A plain-text body where the service's JSON was expected.
       route(
@@ -625,11 +694,344 @@ describe('locGetNewspaperPage', () => {
       expect(contentText(result)).toContain(String(sc.notice));
     });
 
+    it.each([
+      {
+        name: 'a book page',
+        sp: '11',
+        page: BOOK_PAGE_11,
+        text: BOOK_PAGE_11_TEXT,
+        pageUrl: 'https://www.loc.gov/resource/gdcmassbookdig.popularhistoryof00chen/?sp=11',
+        title: 'Popular history of the civil war',
+        // The captured book page's item block carries no url, and a book page has no issue path.
+        itemId: undefined,
+        sequence: '11 of 582',
+      },
+      {
+        name: 'a manuscript page',
+        sp: '3',
+        page: MANUSCRIPT_PAGE_3,
+        text: MANUSCRIPT_PAGE_3_TEXT,
+        pageUrl: 'https://www.loc.gov/resource/mss93930.mss93930-001/?sp=3',
+        title: 'Betty Herndon Maury Maury diary,',
+        itemId: 'mm77093930',
+        sequence: '3 of 122',
+      },
+    ])(
+      'heads $name with its item_title on both surfaces (#74)',
+      async ({ sp, page, text, pageUrl, title, itemId, sequence }) => {
+        route({ [sp]: page }, { [segment(page.fulltext_service)]: text });
+
+        const result = await runToolContract(locGetNewspaperPage, { page_url: pageUrl });
+
+        const sc = structured(result);
+        expect(sc.item_title).toBe(title);
+        expect(sc).not.toHaveProperty('newspaper_title');
+        expect(sc.item_id).toBe(itemId);
+        const itemIdLine = itemId === undefined ? '' : `**Item ID:** ${itemId}\n`;
+        const head = `# ${title}\n**URL:** ${pageUrl}\n${itemIdLine}**Sequence:** ${sequence}\n**OCR available:** Yes\n\n`;
+        const rendered = contentText(result);
+        expect(rendered.slice(0, head.length)).toBe(head);
+        expect(rendered).not.toContain('**Item title:**');
+      },
+    );
+
+    it('returns the item_id of an item.url sent protocol-relative, on both surfaces (#72)', async () => {
+      // LOC sends LCCN-keyed records' item.url as //lccn.loc.gov/<lccn>.
+      const page = {
+        ...BOOK_PAGE_11,
+        item: { ...BOOK_PAGE_11.item, url: '//lccn.loc.gov/2005567251' },
+      };
+      route({ '11': page }, { [segment(page.fulltext_service)]: BOOK_PAGE_11_TEXT });
+      const pageUrl = 'https://www.loc.gov/resource/gdcmassbookdig.popularhistoryof00chen/?sp=11';
+
+      const result = await runToolContract(locGetNewspaperPage, { page_url: pageUrl });
+
+      expect(structured(result).item_id).toBe('2005567251');
+      const head = `# Popular history of the civil war\n**URL:** ${pageUrl}\n**Item ID:** 2005567251\n**Sequence:** 11 of 582\n`;
+      expect(contentText(result).slice(0, head.length)).toBe(head);
+    });
+
+    it("reads LOC's blank-page placeholder as an empty page: no text, the empty-text notice, no fence (#70)", async () => {
+      route(
+        { '3': BOOK_BLANK_PAGE_3 },
+        { [segment(BOOK_BLANK_PAGE_3.fulltext_service)]: BOOK_BLANK_PAGE_3_TEXT },
+      );
+
+      const result = await runToolContract(locGetNewspaperPage, {
+        page_url: 'https://www.loc.gov/resource/gdcmassbookdig.storyofcaptainme00king/?sp=3',
+      });
+
+      const sc = structured(result);
+      expect(sc).toMatchObject({ ocr_text: '', ocr_available: true, sequence: 3 });
+      expect(sc.notice).toBe("LOC's text for this page is empty; the page may be blank.");
+      const text = contentText(result);
+      expect(text).toContain(String(sc.notice));
+      expect(text).not.toContain('```');
+      expect(text).not.toContain('NO TEXT AVAILABLE');
+    });
+
+    it('describes a blank page in the notice description (#70)', () => {
+      expect(String(locGetNewspaperPage.enrichment?.notice.description)).toContain(
+        '[NO TEXT AVAILABLE FOR THIS PAGE]',
+      );
+    });
+
     it('describes manuscript and book pages in the tool and page_url descriptions', () => {
       expect(locGetNewspaperPage.description).toMatch(/book or manuscript page/);
       expect(locGetNewspaperPage.input.shape.page_url.description).toMatch(
         /libofcongress_get_item for a newspaper, book, or manuscript page/,
       );
+    });
+
+    describe('match passages (#73)', () => {
+      const TRIBUNE_PAGE_1 = 'https://www.loc.gov/resource/sn83030214/1912-04-16/ed-1/?sp=1';
+      /** The `full_text` of the captured page-1 body. */
+      const TRIBUNE_PAGE_1_TEXT: string = (
+        Object.values(JSON.parse(NEWSPAPER_PAGE_1_TEXT))[0] as { full_text: string }
+      ).full_text;
+      const BLANK_BOOK_PAGE =
+        'https://www.loc.gov/resource/gdcmassbookdig.storyofcaptainme00king/?sp=3';
+      const NO_MATCH_NOTICE =
+        'Nothing on this page matched the match terms. OCR misreads and words split across a line break can hide an occurrence, and libofcongress_search_newspapers matches more loosely than this literal scan; try another spelling or fewer words, or omit match to read the whole page.';
+      const CUT_NOTICE =
+        'Showing 10 passages, chosen around the rarest match terms first; match_count counts every occurrence on the page. Omit match to read the whole page, which holds the rest; a narrower match (a quoted phrase or a rarer word) needs fewer passages.';
+      const servePage1 = () =>
+        route(
+          { '1': NEWSPAPER_PAGE_1 },
+          { [segment(NEWSPAPER_PAGE_1.fulltext_service)]: NEWSPAPER_PAGE_1_TEXT },
+        );
+      /** The text output for `sc`: its head lines, the match count, then each passage fenced. */
+      const passagesText = (sc: Record<string, unknown>) =>
+        [
+          `**Match count:** ${sc.match_count}`,
+          ...(sc.matches as string[]).map((p, i) => `\n**Passage ${i + 1}**\n${fencedText(p)}`),
+        ].join('\n');
+      const TRIBUNE_HEAD = `# New-York tribune\n**URL:** ${TRIBUNE_PAGE_1}\n**Item ID:** sn83030214/1912-04-16/ed-1\n**Item title:** New-York tribune (New York [N.Y.]), April 16, 1912\n**Date:** 1912-04-16\n**Place of publication:** New York [N.Y.]\n**States:** new york\n**Edition:** 1\n**Sequence:** 1 of 14\n**OCR available:** Yes\n`;
+
+      it('returns the passages around a phrase, across line breaks, instead of the page text, on both surfaces', async () => {
+        const spy = servePage1();
+
+        const result = await runToolContract(locGetNewspaperPage, {
+          page_url: TRIBUNE_PAGE_1,
+          match: '"the titanic"',
+        });
+
+        const sc = structured(result);
+        expect(sc).toMatchObject({
+          ocr_text: '',
+          ocr_available: true,
+          match_count: 22,
+          item_id: 'sn83030214/1912-04-16/ed-1',
+        });
+        // The 22 occurrences fit in 9 passages, so none is cut and no notice is raised.
+        const matches = sc.matches as string[];
+        expect(matches).toHaveLength(9);
+        for (const passage of matches) {
+          expect(passage).toMatch(/the\s+titanic/i);
+          expect(TRIBUNE_PAGE_1_TEXT).toContain(passage);
+        }
+        expect(matches.some((p) => /the\s*\n\s*titanic/i.test(p))).toBe(true);
+        expect(sc).not.toHaveProperty('notice');
+        expect(contentText(result)).toBe(`${TRIBUNE_HEAD}${passagesText(sc)}`);
+        // match adds no request: the page and its text, as without it.
+        expect(spy).toHaveBeenCalledTimes(2);
+      });
+
+      it('matches case-insensitively and cuts passages at 10 with a notice on both surfaces', async () => {
+        servePage1();
+        const lower = await runToolContract(locGetNewspaperPage, {
+          page_url: TRIBUNE_PAGE_1,
+          match: 'titanic',
+        });
+        const upper = await runToolContract(locGetNewspaperPage, {
+          page_url: TRIBUNE_PAGE_1,
+          match: 'TITANIC',
+        });
+
+        const sc = structured(lower);
+        expect(sc).toMatchObject({ ocr_text: '', match_count: 35, notice: CUT_NOTICE });
+        expect(sc.matches).toHaveLength(10);
+        expect(contentText(lower)).toContain(`${TRIBUNE_HEAD}${passagesText(sc)}`);
+        expect(contentText(lower)).toContain(CUT_NOTICE);
+        expect(structured(upper)).toEqual(sc);
+      });
+
+      it('returns no passages and the no-match notice when nothing matches, on both surfaces', async () => {
+        servePage1();
+
+        const result = await runToolContract(locGetNewspaperPage, {
+          page_url: TRIBUNE_PAGE_1,
+          match: '"titanic iceberg"',
+        });
+
+        const sc = structured(result);
+        expect(sc).toMatchObject({
+          ocr_text: '',
+          matches: [],
+          match_count: 0,
+          notice: NO_MATCH_NOTICE,
+        });
+        const text = contentText(result);
+        expect(text).toContain(`${TRIBUNE_HEAD}**Match count:** 0`);
+        expect(text).toContain(NO_MATCH_NOTICE);
+        expect(text).not.toContain('```');
+      });
+
+      it.each([
+        // As a pattern, a.*b would match across most of the page; the page holds no literal "a.*b".
+        ['a.*b', 0, 0],
+        // An unescaped "(", "[", or "\" is an invalid pattern; the page holds 9 literal "(", in
+        // 3 passages.
+        ['(', 9, 3],
+        ['[', 0, 0],
+        ['\\', 0, 0],
+      ])('matches %j literally and never throws', async (match, count, passages) => {
+        servePage1();
+        expect(TRIBUNE_PAGE_1_TEXT.split(match).length - 1).toBe(count);
+
+        const result = await runToolContract(locGetNewspaperPage, {
+          page_url: TRIBUNE_PAGE_1,
+          match,
+        });
+
+        expect(result.isError).toBeFalsy();
+        const sc = structured(result);
+        expect(sc.match_count).toBe(count);
+        expect(sc.matches).toHaveLength(passages);
+        for (const passage of sc.matches as string[]) expect(passage).toContain(match);
+        if (count === 0) expect(sc.notice).toBe(NO_MATCH_NOTICE);
+        else expect(sc).not.toHaveProperty('notice');
+      });
+
+      it.each([
+        {
+          name: "LOC's blank-page placeholder (#70)",
+          text: BOOK_BLANK_PAGE_3_TEXT,
+          type: 'application/json',
+          notice: "LOC's text for this page is empty; the page may be blank.",
+        },
+        {
+          name: 'an unparseable text body',
+          text: 'Plain text, not the service JSON.',
+          type: 'text/plain',
+          notice:
+            "LOC lists text for this page, but its text service answered with a body that could not be read as text (unparseable). Retrying will not change it; read the page's image at page_url instead.",
+        },
+        {
+          name: 'a text service that answers with an HTML page',
+          text: '<!DOCTYPE html><html><head><title>Just a moment...</title></head></html>',
+          type: 'text/html',
+          notice:
+            'OCR is digitized for this page, but the full text was not returned this call. Retry libofcongress_get_newspaper_page; a persistent empty result means the OCR text service is temporarily unavailable.',
+        },
+      ])('keeps only the existing text-state notice for $name', async ({ text, type, notice }) => {
+        route(
+          { '3': BOOK_BLANK_PAGE_3 },
+          { [segment(BOOK_BLANK_PAGE_3.fulltext_service)]: text },
+          type,
+        );
+
+        const result = await runToolContract(locGetNewspaperPage, {
+          page_url: BLANK_BOOK_PAGE,
+          match: 'clark',
+        });
+
+        const sc = structured(result);
+        expect(sc).toMatchObject({
+          ocr_text: '',
+          ocr_available: true,
+          matches: [],
+          match_count: 0,
+          item_id: '00003348',
+        });
+        expect(sc.notice).toBe(notice);
+        expect(contentText(result)).toContain(`**Match count:** 0`);
+        expect(contentText(result)).toContain(notice);
+      });
+
+      it('returns no passages and no notice on an image-only page', async () => {
+        const { fulltext_service: _omit, ...imageOnly } = BOOK_BLANK_PAGE_3;
+        route({ '3': imageOnly }, {});
+
+        const result = await runToolContract(locGetNewspaperPage, {
+          page_url: BLANK_BOOK_PAGE,
+          match: 'clark',
+        });
+
+        const sc = structured(result);
+        expect(sc).toMatchObject({
+          ocr_text: '',
+          ocr_available: false,
+          matches: [],
+          match_count: 0,
+        });
+        expect(sc).not.toHaveProperty('notice');
+        expect(contentText(result)).toContain(
+          '\n**OCR available:** No\n**Match count:** 0\n\n_No digitized OCR text available for this page (image-only digitization batch)._',
+        );
+      });
+
+      it.each([
+        { name: 'no match', args: {} },
+        { name: 'an empty match', args: { match: '' } },
+        { name: 'a whitespace-only match', args: { match: ' \n\t ' } },
+      ])(
+        'returns the whole page, with no matches or match_count keys, for $name',
+        async ({ args }) => {
+          servePage1();
+
+          const result = await runToolContract(locGetNewspaperPage, {
+            page_url: TRIBUNE_PAGE_1,
+            ...args,
+          });
+
+          const sc = structured(result);
+          expect(sc.ocr_text).toBe(TRIBUNE_PAGE_1_TEXT);
+          expect(sc).not.toHaveProperty('matches');
+          expect(sc).not.toHaveProperty('match_count');
+          expect(sc).not.toHaveProperty('notice');
+          const text = contentText(result);
+          expect(text).toBe(`${TRIBUNE_HEAD}\n${fencedText(String(sc.ocr_text))}`);
+        },
+      );
+
+      it('accepts a 200-character match and rejects a longer one before any request', async () => {
+        const spy = servePage1();
+        const ok = await runToolContract(locGetNewspaperPage, {
+          page_url: TRIBUNE_PAGE_1,
+          match: 'x'.repeat(200),
+        });
+        expect(structured(ok)).toMatchObject({ match_count: 0, matches: [] });
+        spy.mockClear();
+
+        const tooLong = await runToolContract(locGetNewspaperPage, {
+          page_url: TRIBUNE_PAGE_1,
+          match: 'x'.repeat(201),
+        });
+        expect(wireError(tooLong).code).toBe(JsonRpcErrorCode.InvalidParams);
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      it('format() renders the match count and each passage fenced in place of the page text', () => {
+        const output = locGetNewspaperPage.output.parse({
+          page_url: PAGE_URL,
+          ocr_text: '',
+          ocr_available: true,
+          matches: ['the Titanic\nsank', 'struck ```an``` iceberg'],
+          match_count: 3,
+        });
+        const blocks = locGetNewspaperPage.format!(output);
+        expect((blocks[0] as { type: 'text'; text: string }).text).toBe(
+          `**URL:** ${PAGE_URL}\n**OCR available:** Yes\n**Match count:** 3\n\n**Passage 1**\n${fencedText('the Titanic\nsank')}\n\n**Passage 2**\n${fencedText('struck ```an``` iceberg')}`,
+        );
+      });
+
+      it('names match in the tool description and points the search description at it', () => {
+        expect(locGetNewspaperPage.description).toMatch(/pass the search query as match/);
+        expect(String(locGetNewspaperPage.input.shape.match.description)).toMatch(
+          /pass the query you gave libofcongress_search_newspapers/,
+        );
+      });
     });
   });
 
@@ -729,6 +1131,76 @@ describe('locGetNewspaperPage', () => {
 
       expect(page).toMatchObject({ page_url: pageUrl, sequence: 3, ocr_available: true });
     });
+
+    it.each([
+      PAGE_1,
+      `${PAGE_1}&q=titanic`,
+      'https://www.loc.gov/resource/sn83030214/1912-04-16/ed-1/seq-1/',
+      'https://chroniclingamerica.loc.gov/lccn/sn83030214/1912-04-16/ed-1/seq-1/',
+    ])('returns the issue item_id for %s on both surfaces (#72)', async (pageUrl) => {
+      servePage1();
+
+      const result = await runToolContract(locGetNewspaperPage, { page_url: pageUrl });
+
+      expect(structured(result).item_id).toBe('sn83030214/1912-04-16/ed-1');
+      expect(contentText(result)).toContain(
+        `**URL:** ${PAGE_1}\n**Item ID:** sn83030214/1912-04-16/ed-1\n`,
+      );
+    });
+
+    it('returns item_title beside the unchanged newspaper_title heading of a newspaper page (#74)', async () => {
+      servePage1();
+
+      const result = await runToolContract(locGetNewspaperPage, { page_url: PAGE_1 });
+
+      expect(structured(result)).toMatchObject({
+        newspaper_title: 'New-York tribune',
+        item_title: 'New-York tribune (New York [N.Y.]), April 16, 1912',
+      });
+      const head = `# New-York tribune\n**URL:** ${PAGE_1}\n**Item ID:** sn83030214/1912-04-16/ed-1\n**Item title:** New-York tribune (New York [N.Y.]), April 16, 1912\n**Date:** 1912-04-16\n`;
+      const text = contentText(result);
+      expect(text.slice(0, head.length)).toBe(head);
+    });
+
+    it.each([
+      {
+        name: 'a newspaper page',
+        pageUrl: PAGE_1,
+        pagePath: '/resource/sn83030214/1912-04-16/ed-1/?sp=1',
+        page: NEWSPAPER_PAGE_1,
+        itemPath: '/item/sn83030214/1912-04-16/ed-1/?sp=null',
+        item: NEWSPAPER_ISSUE_SN83030214_1912_04_16,
+        pageTotal: 14,
+      },
+      {
+        name: 'a manuscript page',
+        pageUrl: 'https://www.loc.gov/resource/mss93930.mss93930-001/?sp=3',
+        pagePath: '/resource/mss93930.mss93930-001/?sp=3',
+        page: MANUSCRIPT_PAGE_3,
+        itemPath: '/item/mm77093930/?sp=null',
+        item: MANUSCRIPT_ITEM_MM77093930,
+        pageTotal: 122,
+      },
+    ])(
+      'names the item whose get_item page list holds $name (#72)',
+      async ({ pageUrl, pagePath, page, itemPath, item, pageTotal }) => {
+        serve({ [pagePath]: page, [itemPath]: item });
+
+        const pageResult = structured(
+          await runToolContract(locGetNewspaperPage, { page_url: pageUrl }),
+        );
+        const itemResult = structured(
+          await runToolContract(locGetItem, {
+            item_id: String(pageResult.item_id),
+            page_offset: Number(pageResult.sequence) - 1,
+            page_limit: 1,
+          }),
+        );
+
+        expect(itemResult.page_total).toBe(pageTotal);
+        expect(itemResult.pages).toEqual([{ page_url: pageUrl, has_text: true }]);
+      },
+    );
 
     it('names the accepted forms in the page_url description and the invalid_page_url contract', () => {
       const description = String(locGetNewspaperPage.input.shape.page_url.description);
