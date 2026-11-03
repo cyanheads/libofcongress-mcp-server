@@ -1,6 +1,6 @@
 # libofcongress-mcp-server - Directory Structure
 
-Generated on: 2026-10-15 21:04:43
+Generated on: 2026-11-03 07:50:51
 
 ```text
 libofcongress-mcp-server/
@@ -41,6 +41,8 @@ libofcongress-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -138,6 +140,9 @@ libofcongress-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── libofcongress-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -191,6 +196,8 @@ libofcongress-mcp-server/
 │   │   ├── item-resource-read.ts
 │   │   ├── loc-fetch.ts
 │   │   └── tool-result.ts
+│   ├── packaging/
+│   │   └── clean-mcpb.test.ts
 │   ├── prompts/
 │   ├── resources/
 │   │   └── libofcongress-item.resource.test.ts
@@ -210,6 +217,7 @@ libofcongress-mcp-server/
 │       ├── libofcongress-get-newspaper-page.tool.test.ts
 │       ├── libofcongress-search-items.tool.test.ts
 │       ├── libofcongress-search-newspapers.tool.test.ts
+│       ├── libofcongress-search-routing.test.ts
 │       ├── libofcongress-search-subjects.tool.test.ts
 │       ├── loc-upstream-failure-reasons.test.ts
 │       ├── notices.test.ts
@@ -230,7 +238,9 @@ libofcongress-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json
