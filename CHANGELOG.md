@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.6.0](changelog/0.6.x/0.6.0.md) — 2026-11-03 · ⚠️ Breaking
+
+Research navigation, paged subject discovery, and a published research guide.
+
 ## [0.5.1](changelog/0.5.x/0.5.1.md) — 2026-10-15
 
 libofcongress_get_newspaper_page takes match for the passages around a term and returns item_id and item_title; libofcongress_get_item returns the imprint and accepts lccn.loc.gov links; coded dates, blank-page placeholders, and empty text services no longer surface as page content.
