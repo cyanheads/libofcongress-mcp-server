@@ -5,6 +5,17 @@
  */
 
 import type { Context } from '@cyanheads/mcp-ts-core';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
+
+/** Render a notice as quoted literal text without changing its structured value. */
+export function renderNotice(value: string | undefined): string {
+  return value === undefined
+    ? ''
+    : escapeMarkdownInline(value)
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n');
+}
 
 /**
  * Returns a writer that adds `text` to this response's `notice`. `ctx.enrich.notice` (and

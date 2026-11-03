@@ -83,6 +83,18 @@ describe('LcLinkedDataService.searchSubjects', () => {
     vi.restoreAllMocks();
   });
 
+  it('characterizes exact-label promotion at limit 1 before pagination', async () => {
+    fetchSpy.mockResolvedValue(json(CIVIL_WAR_KEYWORD));
+    const result = await getLcLinkedDataService().searchSubjects(
+      'civil war',
+      1,
+      createMockContext(),
+    );
+    expect(result.subjects).toEqual([
+      { label: 'Civil war', uri: 'http://id.loc.gov/authorities/subjects/sh85026421' },
+    ]);
+  });
+
   it('sends a keyword search to the subject-scoped suggest2 endpoint for at least 50 headings', async () => {
     fetchSpy.mockResolvedValue(json(WORLD_WAR_1939_KEYWORD));
 

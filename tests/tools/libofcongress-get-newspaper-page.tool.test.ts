@@ -36,7 +36,13 @@ import {
 } from '../fixtures/loc-pages.js';
 import { TITANIC_OCR_EXCERPT } from '../fixtures/loc-text.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
-import { contentText, contractRecovery, structured, wireError } from '../helpers/tool-result.js';
+import {
+  contentText,
+  contractRecovery,
+  renderedContentText,
+  structured,
+  wireError,
+} from '../helpers/tool-result.js';
 
 const PAGE_URL = 'https://www.loc.gov/resource/sn84026749/1900-01-01/ed-1/?sp=1';
 
@@ -806,7 +812,7 @@ describe('locGetNewspaperPage', () => {
           `**Match count:** ${sc.match_count}`,
           ...(sc.matches as string[]).map((p, i) => `\n**Passage ${i + 1}**\n${fencedText(p)}`),
         ].join('\n');
-      const TRIBUNE_HEAD = `# New-York tribune\n**URL:** ${TRIBUNE_PAGE_1}\n**Item ID:** sn83030214/1912-04-16/ed-1\n**Item title:** New-York tribune (New York [N.Y.]), April 16, 1912\n**Date:** 1912-04-16\n**Place of publication:** New York [N.Y.]\n**States:** new york\n**Edition:** 1\n**Sequence:** 1 of 14\n**OCR available:** Yes\n`;
+      const TRIBUNE_HEAD = `# New-York tribune\n**URL:** ${TRIBUNE_PAGE_1}\n**Item ID:** sn83030214/1912-04-16/ed-1\n**Item title:** New-York tribune (New York \\[N.Y.\\]), April 16, 1912\n**Date:** 1912-04-16\n**Place of publication:** New York \\[N.Y.\\]\n**States:** new york\n**Edition:** 1\n**Sequence:** 1 of 14\n**OCR available:** Yes\n`;
 
       it('returns the passages around a phrase, across line breaks, instead of the page text, on both surfaces', async () => {
         const spy = servePage1();
@@ -906,12 +912,14 @@ describe('locGetNewspaperPage', () => {
       it.each([
         {
           name: "LOC's blank-page placeholder (#70)",
+          knownEmpty: true,
           text: BOOK_BLANK_PAGE_3_TEXT,
           type: 'application/json',
           notice: "LOC's text for this page is empty; the page may be blank.",
         },
         {
           name: 'an unparseable text body',
+          knownEmpty: false,
           text: 'Plain text, not the service JSON.',
           type: 'text/plain',
           notice:
@@ -919,35 +927,45 @@ describe('locGetNewspaperPage', () => {
         },
         {
           name: 'a text service that answers with an HTML page',
+          knownEmpty: false,
           text: '<!DOCTYPE html><html><head><title>Just a moment...</title></head></html>',
           type: 'text/html',
           notice:
             'OCR is digitized for this page, but the full text was not returned this call. Retry libofcongress_get_newspaper_page; a persistent empty result means the OCR text service is temporarily unavailable.',
         },
-      ])('keeps only the existing text-state notice for $name', async ({ text, type, notice }) => {
-        route(
-          { '3': BOOK_BLANK_PAGE_3 },
-          { [segment(BOOK_BLANK_PAGE_3.fulltext_service)]: text },
-          type,
-        );
+      ])(
+        'keeps only the existing text-state notice for $name',
+        async ({ text, type, notice, knownEmpty }) => {
+          route(
+            { '3': BOOK_BLANK_PAGE_3 },
+            { [segment(BOOK_BLANK_PAGE_3.fulltext_service)]: text },
+            type,
+          );
 
-        const result = await runToolContract(locGetNewspaperPage, {
-          page_url: BLANK_BOOK_PAGE,
-          match: 'clark',
-        });
+          const result = await runToolContract(locGetNewspaperPage, {
+            page_url: BLANK_BOOK_PAGE,
+            match: 'clark',
+          });
 
-        const sc = structured(result);
-        expect(sc).toMatchObject({
-          ocr_text: '',
-          ocr_available: true,
-          matches: [],
-          match_count: 0,
-          item_id: '00003348',
-        });
-        expect(sc.notice).toBe(notice);
-        expect(contentText(result)).toContain(`**Match count:** 0`);
-        expect(contentText(result)).toContain(notice);
-      });
+          const sc = structured(result);
+          expect(sc).toMatchObject({
+            ocr_text: '',
+            ocr_available: true,
+            item_id: '00003348',
+          });
+          expect(sc.notice).toBe(notice);
+          if (knownEmpty) {
+            expect(sc).toMatchObject({ matches: [], match_count: 0 });
+            expect(contentText(result)).toContain('**Match count:** 0');
+          } else {
+            expect(sc).not.toHaveProperty('matches');
+            expect(sc).not.toHaveProperty('match_count');
+            expect(contentText(result)).not.toContain('**Match count:**');
+            expect(contentText(result)).not.toContain('**Passage');
+          }
+          expect(contentText(result)).toContain(notice);
+        },
+      );
 
       it('returns no passages and no notice on an image-only page', async () => {
         const { fulltext_service: _omit, ...imageOnly } = BOOK_BLANK_PAGE_3;
@@ -1157,7 +1175,7 @@ describe('locGetNewspaperPage', () => {
         newspaper_title: 'New-York tribune',
         item_title: 'New-York tribune (New York [N.Y.]), April 16, 1912',
       });
-      const head = `# New-York tribune\n**URL:** ${PAGE_1}\n**Item ID:** sn83030214/1912-04-16/ed-1\n**Item title:** New-York tribune (New York [N.Y.]), April 16, 1912\n**Date:** 1912-04-16\n`;
+      const head = `# New-York tribune\n**URL:** ${PAGE_1}\n**Item ID:** sn83030214/1912-04-16/ed-1\n**Item title:** New-York tribune (New York \\[N.Y.\\]), April 16, 1912\n**Date:** 1912-04-16\n`;
       const text = contentText(result);
       expect(text.slice(0, head.length)).toBe(head);
     });
@@ -1302,7 +1320,7 @@ describe('locGetNewspaperPage', () => {
       );
       const text = contentText(result);
       expect(text).toContain(PAGE_URL);
-      expect(text).toContain(`Recovery: ${hint}`);
+      expect(renderedContentText(result)).toContain(`Recovery: ${hint}`);
     },
   );
 
@@ -1329,11 +1347,9 @@ describe('locGetNewspaperPage', () => {
         },
       });
       const text = contentText(result);
-      expect(text).toContain(`Recovery: ${hint}`);
+      expect(renderedContentText(result)).toContain(`Recovery: ${hint}`);
       expect(text).toContain('reason invalid_page_url');
-      // A placeholder outside a code span renders as an HTML tag and vanishes.
-      expect(text).toContain('`…/lccn/<lccn>/<date>/ed-N/seq-M/`');
-      expect(text.replace(/`[^`]*`/g, '')).not.toMatch(/<[a-z]+>/);
+      expect(renderedContentText(result)).toContain('`…/lccn/<lccn>/<date>/ed-N/seq-M/`');
       expect(fetchSpy).not.toHaveBeenCalled();
     },
   );

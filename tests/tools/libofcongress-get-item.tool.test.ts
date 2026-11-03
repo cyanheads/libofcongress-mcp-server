@@ -30,7 +30,13 @@ import {
 import { MAP_ITEM_77694805 } from '../fixtures/loc-subjects.js';
 import { MANUSCRIPT_RIGHTS_MM77093930, NEWSPAPER_NOTES_SN83030214 } from '../fixtures/loc-text.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
-import { contentText, contractRecovery, structured, wireError } from '../helpers/tool-result.js';
+import {
+  contentText,
+  contractRecovery,
+  renderedContentText,
+  structured,
+  wireError,
+} from '../helpers/tool-result.js';
 
 /** Full LOC item response fixture */
 function makeItemResponse(overrides: Record<string, unknown> = {}) {
@@ -148,7 +154,7 @@ describe('locGetItem upstream text (#65)', () => {
       '**Physical description:** 1 v. \\<u>\n',
       '**Original format:** manuscript/mixed material\n',
       '**Online format:** image \\<z>\n',
-      '**Call number:** LOT 6668 \\<item> [P&P]\n',
+      '**Call number:** LOT 6668 \\<item> \\[P&P\\]\n',
       '**Former IDs:** https://hdl.loc.gov/loc.mss/mm.77093930?a=1&b=2\n',
       '- Semiweekly ed.: New-York tribune (New York, N.Y. : 1866 : Semiweekly), 1866-<1899>.\n',
       '- Gift \\<b>\n',
@@ -486,7 +492,7 @@ describe('locGetItem', () => {
 
       expect(structured(result).imprint).toBe('Millwood, NY : ZOHO Music, [2017] ℗2017');
       expect(contentText(result)).toContain(
-        '**Date:** 2017\n**Imprint:** Millwood, NY : ZOHO Music, [2017] ℗2017\n',
+        '**Date:** 2017\n**Imprint:** Millwood, NY : ZOHO Music, \\[2017\\] ℗2017\n',
       );
     });
 
@@ -735,7 +741,7 @@ describe('locGetItem', () => {
     expect(text).toContain('A political cartoon commenting on the 1884 election.');
     expect(text).toContain('english');
     expect(text).toContain('united states');
-    expect(text).toContain('Unprocessed in PR 13 CN 2001:055-4 [item] [P&P]');
+    expect(text).toContain('Unprocessed in PR 13 CN 2001:055-4 \\[item\\] \\[P&P\\]');
     expect(text).toContain('http://www.loc.gov/item/13903333');
     expect(text).toContain('photo, print, drawing');
     expect(text).toContain('image');
@@ -981,10 +987,8 @@ describe('locGetItem', () => {
         data: { reason: 'invalid_item_id', field: 'item_id', received: itemId, recovery: { hint } },
       });
       expect(error.message).toContain('`https://www.loc.gov/item/<id>/`');
-      const text = contentText(result);
-      expect(text).toContain(`Recovery: ${hint}`);
-      // A placeholder outside a code span renders as an HTML tag and vanishes.
-      expect(text.replace(/`[^`]*`/g, '')).not.toMatch(/<[a-z]+>/);
+      expect(renderedContentText(result)).toContain(`Recovery: ${hint}`);
+      expect(renderedContentText(result)).toContain('https://www.loc.gov/item/<id>/');
       expect(spy).not.toHaveBeenCalled();
     });
 
@@ -1205,7 +1209,7 @@ describe('locGetItem', () => {
       expect(error.message).not.toBe('LOC resource not found');
       const text = contentText(result);
       expect(text).toContain('99999999999zzz');
-      expect(text).toContain(`Recovery: ${hint}`);
+      expect(renderedContentText(result)).toContain(`Recovery: ${hint}`);
     },
   );
 

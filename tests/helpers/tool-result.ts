@@ -5,6 +5,8 @@
  */
 
 import type { runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { decodeHTML } from 'entities';
+import { marked } from 'marked';
 
 type ToolResult = Awaited<ReturnType<typeof runToolContract>>;
 
@@ -18,6 +20,16 @@ export interface WireError {
 /** Concatenated text of every `content[]` text block. */
 export function contentText(result: ToolResult): string {
   return result.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n');
+}
+
+/** Text a client reads after parsing content[] as Markdown. */
+export function renderedContentText(result: ToolResult): string {
+  return decodeHTML(
+    marked
+      .parse(contentText(result), { async: false, gfm: false })
+      .replace(/<br\s*\/?>(?:\r?\n)?/g, '\n')
+      .replace(/<[^>]*>/g, ''),
+  );
 }
 
 /** `structuredContent` of a successful call. */

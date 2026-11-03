@@ -112,6 +112,210 @@ describe('locSearchSubjects', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('pages one stable promoted sequence across changed limits and the initial-window boundary', async () => {
+    const raw = page(302, 302).hits;
+    raw[9] = { ...raw[9]!, aLabel: 'music' };
+    fetchSpy.mockImplementation(async (url) => {
+      const params = new URL(String(url)).searchParams;
+      const offset = Number(params.get('offset') ?? 1) - 1;
+      const count = Math.min(Number(params.get('count')), 250);
+      return json({ ...page(0, 302), hits: raw.slice(offset, offset + count) });
+    });
+    const first = structured(
+      await runToolContract(locSearchSubjects, { query: 'music', limit: 1 }),
+    );
+    expect(first.subjects).toEqual([
+      { label: 'music', uri: 'http://id.loc.gov/authorities/subjects/sh9' },
+    ]);
+    expect(first.next_offset).toBe(1);
+    const second = await runToolContract(locSearchSubjects, {
+      query: 'music',
+      offset: 1,
+      limit: 2,
+    });
+    expect(structured(second).subjects).toEqual([
+      { label: 'Music 0', uri: 'http://id.loc.gov/authorities/subjects/sh0' },
+      { label: 'Music 1', uri: 'http://id.loc.gov/authorities/subjects/sh1' },
+    ]);
+    expect(structured(second).next_offset).toBe(3);
+    expect(contentText(second)).toContain('Next offset: 3');
+    expect(contentText(second)).toContain('offset 3');
+    const crossing = structured(
+      await runToolContract(locSearchSubjects, { query: 'music', offset: 49, limit: 250 }),
+    );
+    expect(crossing.subjects).toEqual(
+      raw.slice(49, 299).map(({ aLabel, uri }) => ({ label: aLabel, uri })),
+    );
+    expect(crossing).toMatchObject({ total: 250, next_offset: 299 });
+    const last = structured(
+      await runToolContract(locSearchSubjects, { query: 'music', offset: 299, limit: 250 }),
+    );
+    expect(last).toMatchObject({ total: 3 });
+    expect(last).not.toHaveProperty('next_offset');
+    const past = await runToolContract(locSearchSubjects, {
+      query: 'music',
+      offset: 302,
+      limit: 500,
+    });
+    expect(structured(past)).toMatchObject({ subjects: [], total: 0, effectiveLimit: 250 });
+    expect(structured(past)).not.toHaveProperty('next_offset');
+    expect(contentText(past)).toContain('Offset 302 is past the 302 matching headings');
+    expect(contentText(past)).not.toContain('No LCSH headings matched');
+    expect(
+      fetchSpy.mock.calls.every(
+        ([url]) => new URL(String(url)).searchParams.get('searchtype') === 'keyword',
+      ),
+    ).toBe(true);
+    const walked: string[] = [];
+    let offset = 0;
+    for (const limit of [1, 2, 5, 7, 50, 250]) {
+      const result = structured(
+        await runToolContract(locSearchSubjects, { query: 'music', offset, limit }),
+      );
+      walked.push(...(result.subjects as Array<{ uri: string }>).map(({ uri }) => uri));
+      offset = Number(result.next_offset ?? 302);
+    }
+    const expected = [
+      9,
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      ...Array.from({ length: 292 }, (_, i) => i + 10),
+    ];
+    expect(walked).toEqual(expected.map((id) => `http://id.loc.gov/authorities/subjects/sh${id}`));
+  });
+
+  it('pages the left-anchored fallback at the same position without promoting a later exact label', async () => {
+    const raw = page(60, 60, 'left-anchored').hits;
+    raw[55] = { ...raw[55]!, aLabel: 'music' };
+    fetchSpy.mockImplementation(async (url) => {
+      const params = new URL(String(url)).searchParams;
+      if (params.get('searchtype') === 'keyword') return json(page(0, 0));
+      const offset = Number(params.get('offset') ?? 1) - 1;
+      return json({
+        ...page(0, 60, 'left-anchored'),
+        hits: raw.slice(offset, offset + Number(params.get('count'))),
+      });
+    });
+    const result = await runToolContract(locSearchSubjects, {
+      query: 'music',
+      offset: 54,
+      limit: 2,
+    });
+    expect(structured(result)).toMatchObject({
+      subjects: [
+        { label: 'Music 54', uri: 'http://id.loc.gov/authorities/subjects/sh54' },
+        { label: 'music', uri: 'http://id.loc.gov/authorities/subjects/sh55' },
+      ],
+      total: 2,
+      next_offset: 56,
+    });
+    expect(contentText(result)).toContain('Next offset: 56');
+    expect(
+      fetchSpy.mock.calls.map(([url]) => new URL(String(url)).searchParams.get('offset')),
+    ).toEqual(['55', '55']);
+  });
+
+  it('advances by upstream entries when a sparse hit cannot be normalized', async () => {
+    answer({
+      count: 4,
+      hits: [
+        { aLabel: 'One' },
+        { aLabel: 'Two', uri: 'http://id.loc.gov/authorities/subjects/sh2' },
+      ],
+    });
+    const result = await runToolContract(locSearchSubjects, { query: 'music', limit: 2 });
+    expect(structured(result)).toMatchObject({
+      subjects: [{ label: 'Two', uri: 'http://id.loc.gov/authorities/subjects/sh2' }],
+      total: 1,
+      next_offset: 2,
+    });
+    expect(contentText(result)).toContain('Next offset: 2');
+  });
+
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER])(
+    'rejects invalid offset %s before fetching',
+    async (offset) => {
+      const result = await runToolContract(locSearchSubjects, { query: 'music', offset });
+      expect(result.isError).toBe(true);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it('maps a suffix fetch failure to the declared reason and recovery on both surfaces', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(json(page(250, 300)))
+      .mockResolvedValueOnce(new Response('Unavailable', { status: 503 }));
+    const result = await runToolContract(locSearchSubjects, {
+      query: 'music',
+      offset: 49,
+      limit: 250,
+    });
+    expect(wireError(result)).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: {
+        reason: 'upstream_unavailable',
+        recovery: { hint: contractRecovery(locSearchSubjects, 'upstream_unavailable') },
+      },
+    });
+    expect(contentText(result)).toContain(
+      contractRecovery(locSearchSubjects, 'upstream_unavailable'),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares the deadline with a suffix fetch and renders the declared timeout recovery', async () => {
+    vi.useFakeTimers();
+    fetchSpy.mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(() => resolve(json(page(250, 300))), 45_000)),
+    );
+    fetchSpy.mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+    const pending = runToolContract(locSearchSubjects, { query: 'music', offset: 49, limit: 250 });
+    await vi.advanceTimersByTimeAsync(50_001);
+    const result = await pending;
+    expect(wireError(result)).toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: {
+        reason: 'request_timed_out',
+        recovery: { hint: contractRecovery(locSearchSubjects, 'request_timed_out') },
+      },
+    });
+    expect(contentText(result)).toContain(contractRecovery(locSearchSubjects, 'request_timed_out'));
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates cancellation during the suffix fetch and starts no further request', async () => {
+    const controller = new AbortController();
+    fetchSpy.mockResolvedValueOnce(json(page(250, 300)));
+    fetchSpy.mockImplementation(async (_url, init) => {
+      controller.abort(new DOMException('Subject pagination cancelled', 'AbortError'));
+      expect(init?.signal?.aborted).toBe(true);
+      throw init?.signal?.reason;
+    });
+    const result = await runToolContract(
+      locSearchSubjects,
+      { query: 'music', offset: 49, limit: 250 },
+      { context: { signal: controller.signal } },
+    );
+    expect(wireError(result).code).toBe(JsonRpcErrorCode.RequestCancelled);
+    expect(contentText(result)).toContain('Subject pagination cancelled');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it('returns the base heading first for a keyword query that spans its words', async () => {
@@ -160,7 +364,7 @@ describe('locSearchSubjects', () => {
     );
     expect(sc).toMatchObject({ total: 3, truncated: true, shown: 3, cap: 3 });
     expect(sc.notice).toBe(
-      'Showing 3 of 45 matching headings. Raise limit (up to 50) or refine the query to see others.',
+      'Showing 3 of 45 matching headings at offset 0. Request offset 3 with limit 3 to continue.',
     );
     expect(contentText(result)).toContain('## Aerial photogrammetry');
   });
@@ -247,7 +451,7 @@ describe('locSearchSubjects', () => {
     expect(sc.subjects).toHaveLength(3);
     expect(sc).toMatchObject({ truncated: true, shown: 3, cap: 3 });
     const notice =
-      'Showing 3 of 1341 matching headings. Raise limit (up to 50) or refine the query to see others.';
+      'Showing 3 of 1341 matching headings at offset 0. Request offset 3 with limit 3 to continue.';
     expect(sc.notice).toBe(notice);
     expect(contentText(result)).toContain(notice);
   });
@@ -342,44 +546,52 @@ describe('locSearchSubjects', () => {
     expect(() => locSearchSubjects.input.parse({ query: 'test', limit: 1001 })).toThrow();
   });
 
-  describe('limit above the per-call cap of 50', () => {
+  describe('limit above the per-call cap of 250', () => {
     const CLAMP_NOTICE = (n: number) =>
-      `Requested limit ${n} exceeds the per-call cap of 50 headings.`;
+      `Requested limit ${n} exceeds the per-call cap of 250 headings.`;
 
-    it('requests and returns up to 50 headings with effectiveLimit and the clamp notice on both surfaces', async () => {
-      answer(page(50, 50));
+    it('requests and returns up to 250 headings with effectiveLimit and the clamp notice on both surfaces', async () => {
+      answer(page(250, 250));
 
-      const result = await runToolContract(locSearchSubjects, { query: 'music', limit: 200 });
+      const result = await runToolContract(locSearchSubjects, { query: 'music', limit: 1000 });
 
-      expect(sentCount()).toBe('50');
+      expect(sentCount()).toBe('250');
       const sc = structured(result);
-      expect(sc.subjects).toHaveLength(50);
-      expect(sc).toMatchObject({ total: 50, effectiveLimit: 50 });
+      expect(sc.subjects).toHaveLength(250);
+      expect(sc).toMatchObject({ total: 250, effectiveLimit: 250 });
       expect(sc).not.toHaveProperty('truncated');
-      expect(sc.notice).toBe(CLAMP_NOTICE(200));
-      expect(contentText(result)).toContain(CLAMP_NOTICE(200));
+      expect(sc.notice).toBe(CLAMP_NOTICE(1000));
+      expect(contentText(result)).toContain(CLAMP_NOTICE(1000));
     });
 
     it('leaves a limit at the cap unchanged — no effectiveLimit, no notice', async () => {
       answer(page(1, 1));
 
-      const sc = structured(await runToolContract(locSearchSubjects, { query: 'jazz', limit: 50 }));
+      const sc = structured(
+        await runToolContract(locSearchSubjects, { query: 'jazz', limit: 250 }),
+      );
 
-      expect(sentCount()).toBe('50');
+      expect(sentCount()).toBe('250');
       expect(sc).not.toHaveProperty('effectiveLimit');
       expect(sc).not.toHaveProperty('notice');
     });
 
     it('combines the clamp notice with the truncation notice, which no longer offers a larger limit', async () => {
-      answer(page(50, 1341));
+      answer(page(250, 1341));
 
       const result = await runToolContract(locSearchSubjects, { query: 'music', limit: 500 });
 
       const sc = structured(result);
-      expect(sc).toMatchObject({ truncated: true, shown: 50, cap: 50, effectiveLimit: 50 });
+      expect(sc).toMatchObject({
+        truncated: true,
+        shown: 250,
+        cap: 250,
+        effectiveLimit: 250,
+        next_offset: 250,
+      });
       const notice = String(sc.notice);
       expect(notice).toBe(
-        `${CLAMP_NOTICE(500)} Showing 50 of 1341 matching headings. Refine the query to see others.`,
+        `${CLAMP_NOTICE(500)} Showing 250 of 1341 matching headings at offset 0. Request offset 250 with limit 250 to continue.`,
       );
       expect(contentText(result)).toContain(notice);
     });
@@ -388,11 +600,11 @@ describe('locSearchSubjects', () => {
       answer(page(0, 0), page(0, 0, 'left-anchored'));
 
       const sc = structured(
-        await runToolContract(locSearchSubjects, { query: 'xyzzy_no_match', limit: 51 }),
+        await runToolContract(locSearchSubjects, { query: 'xyzzy_no_match', limit: 251 }),
       );
 
-      expect(sc).toMatchObject({ subjects: [], total: 0, effectiveLimit: 50 });
-      expect(sc.notice).toBe(`${CLAMP_NOTICE(51)} ${EMPTY_NOTICE('xyzzy_no_match')}`);
+      expect(sc).toMatchObject({ subjects: [], total: 0, effectiveLimit: 250 });
+      expect(sc.notice).toBe(`${CLAMP_NOTICE(251)} ${EMPTY_NOTICE('xyzzy_no_match')}`);
     });
   });
 

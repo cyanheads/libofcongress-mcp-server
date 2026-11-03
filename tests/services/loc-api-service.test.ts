@@ -140,6 +140,114 @@ describe('LocApiService.search', () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps relevance requests and upstream order unchanged', async () => {
+    const fetchSpy = mockFetch(
+      makeSearchResponse({
+        results: [
+          { id: 'https://www.loc.gov/item/later/', title: 'Later', date: '1920' },
+          { id: 'https://www.loc.gov/item/earlier/', title: 'Earlier', date: '1863' },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const result = await getLocApiService().search(
+      { query: '*', format: 'photo', page: 2 },
+      createMockContext(),
+    );
+    const url = new URL(String(fetchSpy.mock.calls[0]![0]));
+    expect(url.pathname).toBe('/photos/');
+    expect(url.searchParams.get('sb')).toBeNull();
+    expect(url.searchParams.get('q')).toBe('*');
+    expect(url.searchParams.get('sp')).toBe('2');
+    expect(result.items.map((item) => item.id)).toEqual(['later', 'earlier']);
+  });
+
+  it.each([
+    ['photo', 'photo, print, drawing'],
+    ['map', 'map'],
+    ['newspaper', 'newspaper'],
+    ['manuscript', 'manuscript/mixed material'],
+    ['audio', 'sound recording'],
+    ['film', 'film, video'],
+    ['book', 'book'],
+    ['notated-music', 'notated music'],
+  ])('combines collection and %s using its original-format facet', async (format, facet) => {
+    const fetchSpy = mockFetch(makeSearchResponse());
+    vi.stubGlobal('fetch', fetchSpy);
+    await getLocApiService().search(
+      {
+        query: '*',
+        collectionSlug: 'aaron-copland',
+        format,
+        subjectTerms: ['music'],
+        location: 'new york',
+        dates: '1863/1863',
+        includeFacets: true,
+        limit: 3,
+        page: 2,
+      },
+      createMockContext(),
+    );
+    const url = new URL(String(fetchSpy.mock.calls[0]![0]));
+    expect(url.pathname).toBe('/collections/aaron-copland/');
+    expect(url.searchParams.get('fa')).toBe(
+      `subject:music|location:new york|original-format:${facet}`,
+    );
+    expect(url.searchParams.get('dates')).toBe('1863/1863');
+    expect(url.searchParams.get('at')).toBe('results,pagination,facets');
+    expect(url.searchParams.get('sp')).toBe('2');
+  });
+
+  it.each(['date', 'date_desc'] as const)(
+    'forwards %s through every search route',
+    async (sort) => {
+      const fetchSpy = vi
+        .fn()
+        .mockImplementation(
+          () =>
+            new Response(makeSearchResponse(), { headers: { 'Content-Type': 'application/json' } }),
+        );
+      vi.stubGlobal('fetch', fetchSpy);
+      const svc = getLocApiService();
+      vi.useFakeTimers();
+      for (const scope of [
+        {},
+        { format: 'photo' },
+        { collectionSlug: 'aaron-copland', format: 'photo' },
+      ]) {
+        const pending = svc.search({ query: '*', sort, ...scope, page: 2 }, createMockContext());
+        await vi.runAllTimersAsync();
+        await pending;
+      }
+      const pending = svc.searchNewspapers(
+        {
+          query: 'train',
+          sort,
+          dates: '1912/1912',
+          state: 'OK',
+          newspaperTitle: 'full title',
+          page: 2,
+        },
+        createMockContext(),
+      );
+      await vi.runAllTimersAsync();
+      await pending;
+      vi.useRealTimers();
+      const urls = fetchSpy.mock.calls.map((call) => new URL(String(call[0])));
+      expect(urls.map((url) => url.pathname)).toEqual([
+        '/search/',
+        '/photos/',
+        '/collections/aaron-copland/',
+        '/newspapers/',
+      ]);
+      expect(urls.map((url) => url.searchParams.get('sb'))).toEqual([sort, sort, sort, sort]);
+      expect(urls.map((url) => url.searchParams.get('sp'))).toEqual(['2', '2', '2', '2']);
+      expect(urls[3]!.searchParams.get('fa')).toBe(
+        'location_state:oklahoma|partof_title:full title',
+      );
+    },
+  );
+
   it('normalizes protocol-relative URLs in item url field to https:', async () => {
     vi.stubGlobal(
       'fetch',

@@ -29,26 +29,32 @@ function renderedInlineText(markdownLine: string): string {
 }
 
 describe('inlineText', () => {
+  it.each(['*literal* [link](https://example.com)', '`code` and ~~strike~~', 'catalog #'])(
+    'renders Markdown punctuation in %j as literal data',
+    (value) => {
+      expect(renderedInlineText(`**Title:** ${inlineText(value)}`)).toBe(`Title: ${value}`);
+    },
+  );
   it.each([
-    ['a decoded escaped tag', '<b>bold</b>', '\\<b>bold\\</b>'],
-    ['a closing tag', 'x</p>', 'x\\</p>'],
-    ['a comment', '<!-- note -->', '\\<!-- note -->'],
-    ['a declaration', '<!DOCTYPE html>', '\\<!DOCTYPE html>'],
-    ['a processing instruction', '<?xml version="1.0"?>', '\\<?xml version="1.0"?>'],
-    ['an autolink', '<https://www.loc.gov/>', '\\<https://www.loc.gov/>'],
-    ['a call number holding a tag-like word', 'LOT 6668 <item> [P&P]', 'LOT 6668 \\<item> [P&P]'],
-    ['a named reference', 'AT&amp;T', 'AT\\&amp;T'],
-    ['decimal and hex references', '&#60; &#x3C;', '\\&#60; \\&#x3C;'],
-    ['a backslash before an opener is doubled', 'a\\<b>', 'a\\\\\\<b>'],
-    ['two backslashes before an opener', 'a\\\\&lt;', 'a\\\\\\\\\\&lt;'],
-    ['CRLF, CR, and LF become spaces', 'one\r\ntwo\rthree\nfour', 'one two three four'],
-    ['a trailing backslash is doubled', 'Lot 12\\', 'Lot 12\\\\'],
-    ['a trailing backslash run is doubled', 'a\\\\', 'a\\\\\\\\'],
-    ['a trailing backslash after a line break', 'a\n\\', 'a \\\\'],
-    ['a trailing `<` the next slot could complete', 'x<', 'x\\<'],
-    ['a trailing unterminated reference', 'AT&lt', 'AT\\&lt'],
-  ])('escapes %s', (_name, value, rendered) => {
-    expect(inlineText(value)).toBe(rendered);
+    ['a decoded escaped tag', '<b>bold</b>'],
+    ['a closing tag', 'x</p>'],
+    ['a comment', '<!-- note -->'],
+    ['a declaration', '<!DOCTYPE html>'],
+    ['a processing instruction', '<?xml version="1.0"?>'],
+    ['an autolink', '<https://www.loc.gov/>'],
+    ['a call number holding a tag-like word', 'LOT 6668 <item> [P&P]'],
+    ['a named reference', 'AT&amp;T'],
+    ['decimal and hex references', '&#60; &#x3C;'],
+    ['a backslash before an opener', 'a\\<b>'],
+    ['two backslashes before an opener', 'a\\\\&lt;'],
+    ['CRLF, CR, and LF become spaces', 'one\r\ntwo\rthree\nfour'],
+    ['a trailing backslash', 'Lot 12\\'],
+    ['a trailing backslash run', 'a\\\\'],
+    ['a trailing backslash after a line break', 'a\n\\'],
+    ['a trailing `<` the next slot could complete', 'x<'],
+    ['a trailing unterminated reference', 'AT&lt'],
+  ])('escapes %s', (_name, value) => {
+    expect(renderedInlineText(inlineText(value))).toBe(value.replace(/\r\n|\r|\n/g, ' '));
   });
 
   it.each([
@@ -59,7 +65,7 @@ describe('inlineText', () => {
     ['underscores, asterisks, brackets, and backslashes elsewhere', 'a_b *c* [d](e) \\f #g'],
     ['a URL', 'https://www.loc.gov/resource/sn83030214/1912-04-16/ed-1/?sp=1&q=jazz'],
   ])('leaves %s unchanged', (_name, value) => {
-    expect(inlineText(value)).toBe(value);
+    expect(renderedInlineText(inlineText(value))).toBe(value);
   });
 
   it.each([
@@ -115,7 +121,7 @@ describe('lineText', () => {
     expect(paragraph).not.toMatch(BLOCK_TAG);
     const list = marked.parse(`- ${lineText(value)}\n- next`, { async: false });
     expect(list.match(BLOCK_TAG)).toEqual(['<ul']);
-    expect(renderedInlineText(lineText(value))).toBe(value.trimStart());
+    expect(renderedInlineText(lineText(value))).toBe(value);
   });
 
   it('writes a value with no leading marker as inlineText does', () => {

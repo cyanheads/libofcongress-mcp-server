@@ -5,14 +5,14 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { noticeWriter, pageSizeClampNotice } from '@/mcp-server/tools/notices.js';
+import { noticeWriter, pageSizeClampNotice, renderNotice } from '@/mcp-server/tools/notices.js';
 import { inlineText, lineText } from '@/mcp-server/tools/render-text.js';
 import { getLocApiService, LOC_MAX_PAGE_SIZE } from '@/services/loc-api/loc-api-service.js';
 
 export const locBrowseCollections = tool('libofcongress_browse_collections', {
   title: 'Browse LOC Collections',
   description:
-    'List and browse Library of Congress curated digital collections. Returns collection names, descriptions, item counts, slugs, and URLs. Optionally filter by keyword. Collections are curated subsets of the digital holdings with specific focuses (e.g., "Civil War Glass Negatives", "Baseball Cards", "WPA Posters"). Use the returned URL to navigate directly to a collection on loc.gov.',
+    'List and browse Library of Congress curated digital collections. Returns collection names, descriptions, item counts, slugs, and URLs. Optionally filter by keyword. Collections are curated subsets of the digital holdings with specific focuses (e.g., "Civil War Glass Negatives", "Baseball Cards", "WPA Posters"). Pass a returned slug to libofcongress_search_items.collection_slug to search within it; use query "*" to browse matching records, optionally with format, date and sort filters. Use the returned URL to navigate directly to a collection on loc.gov.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -44,7 +44,9 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
           .object({
             slug: z
               .string()
-              .describe('Collection URL slug — identifies the collection within loc.gov URLs.'),
+              .describe(
+                'Collection URL slug — pass unchanged to libofcongress_search_items.collection_slug to search within this collection.',
+              ),
             title: z.string().describe('Collection name.'),
             description: z
               .string()
@@ -90,6 +92,8 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
         'Recovery hint when results are empty or a page is out of range — suggests broadening the keyword or removing filters — plus disclosure of a capped limit. Absent on ordinary result pages.',
       ),
   },
+
+  enrichmentTrailer: { notice: { render: renderNotice } },
 
   errors: [
     {

@@ -231,6 +231,10 @@ export type LocItemSummary = {
    */
   is_item: boolean;
   url: string;
+  /** Accepted newspaper page URL for getNewspaperPage; the original url stays intact. */
+  page_url?: string;
+  /** Explains why the original catalog URL no longer opens its record. */
+  link_notice?: string;
 };
 
 /** One facet value of a search, with the number of matching items that carry it. */

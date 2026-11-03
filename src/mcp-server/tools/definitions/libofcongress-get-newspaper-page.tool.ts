@@ -6,6 +6,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
+import { renderNotice } from '@/mcp-server/tools/notices.js';
 import { fencedText, inlineText } from '@/mcp-server/tools/render-text.js';
 import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 import { normalizePageUrl } from '@/services/loc-api/loc-urls.js';
@@ -57,7 +58,7 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       .array(z.string())
       .optional()
       .describe(
-        'Every US state LOC indexes this newspaper title under (e.g., ["georgia", "south carolina"]), in LOC order — possibly more than the state of publication. Absent when LOC lists no state.',
+        'Every state or province LOC indexes this newspaper title under (e.g., ["georgia", "south carolina"]), in LOC order — possibly more than the place of publication. Absent when LOC lists none.',
       ),
     place_of_publication: z
       .string()
@@ -91,14 +92,14 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       .array(z.string())
       .optional()
       .describe(
-        'Present only when match is set: passages of the page text around the occurrences of the match terms, in page order — about 300 characters either side of each occurrence, overlapping passages merged up to 1,200 characters, never overlapping, at most 10, chosen around the rarest terms first when more would be needed. Empty when nothing matched or the page has no text.',
+        'Present when match is set and text retrieval did not fail: passages of the page text around the occurrences of the match terms, in page order — about 300 characters either side of each occurrence, overlapping passages merged up to 1,200 characters, never overlapping, at most 10, chosen around the rarest terms first when more would be needed. Empty when nothing matched or the page has no text. Absent when retrieval failed and matches are unknown; see notice.',
       ),
     match_count: z
       .number()
       .int()
       .optional()
       .describe(
-        'Present only when match is set: occurrences of every match term on the page, including those beyond the passages returned. 0 when nothing matched or the page has no text.',
+        'Present when match is set and text retrieval did not fail: occurrences of every match term on the page, including those beyond the passages returned. 0 when nothing matched or the page has no text. Absent when retrieval failed and the count is unknown; see notice.',
       ),
   }),
 
@@ -112,6 +113,8 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
         "Set when ocr_available is true but the page's text came back empty, saying why: the text service did not answer this call (retry), its answer could not be read as text (retrying will not help), or the page's text is empty — a blank page, including one LOC sends as the placeholder [NO TEXT AVAILABLE FOR THIS PAGE]. Distinguishes these from a genuinely image-only page (where ocr_available is false), which carries no notice. With match set on a page that has text, set instead when nothing matched or when some occurrences fall outside the passages returned — those are read on the whole page, by calling again without match. Absent otherwise.",
       ),
   },
+
+  enrichmentTrailer: { notice: { render: renderNotice } },
 
   errors: [
     {
@@ -214,7 +217,7 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     }
 
     const match = input.match?.trim();
-    if (!match) return page;
+    if (!match || ocrMiss) return page;
     // A page without text keeps only its text-state notice above; these two need text to scan.
     const found = matchPageText(page.ocr_text, match);
     if (page.ocr_text && found.matchCount === 0) {

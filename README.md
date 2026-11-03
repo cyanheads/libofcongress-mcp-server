@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.5.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.5.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/libofcongress-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/%40cyanheads%2Flibofcongress-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/libofcongress-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4%2B-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -50,12 +50,17 @@ Library of Congress digital collections, Chronicling America historic newspapers
 
 All resource data is also reachable via `libofcongress_get_item`. Use `libofcongress_search_items` to discover item IDs first.
 
+### Research guide
+
+[`libofcongress-guide`](skills/libofcongress-guide/SKILL.md) covers identifier chains, OCR uncertainty, research coverage, and collection, newspaper, book, and manuscript workflows. It ships with plugin, npm, Docker, and MCPB installs and is also available through MCP skill discovery and resource reads.
+
 ## Capability reference
 
 ### `libofcongress_search_items` <sub>tool</sub>
 
-- Filters: eight material formats (`photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`), inclusive year range (`date_start`/`date_end`), `subject` (an LCSH heading from `libofcongress_search_subjects` or a facet term), location, and `collection_slug` (from `libofcongress_browse_collections`, mutually exclusive with `format`); up to 100 results per page — a larger `limit` (up to 1000) is served as 100 with `effectiveLimit` and a notice
-- Each result carries `date` as LOC catalogs it and `is_item`: `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for collections, exhibit/guide pages, newspaper pages, `catalog.loc.gov` records, and `hdl.loc.gov` finding aids, whose `url` should be opened instead
+- Filters: eight material formats (`photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`), inclusive year range (`date_start`/`date_end`), `subject` (an LCSH heading from `libofcongress_search_subjects` or a facet term), location, and `collection_slug` (from `libofcongress_browse_collections`, combinable with `format`); up to 100 results per page — a larger `limit` (up to 1000) is served as 100 with `effectiveLimit` and a notice
+- Use `query: "*"` to browse without a keyword. `sort` accepts `relevance` (default), `date` (oldest first), or `date_desc` (newest first); `effectiveSort` echoes the order LOC applies before pagination
+- Each result carries `date` as LOC catalogs it and `is_item`: `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for other resources. Newspaper rows include `page_url` for `libofcongress_get_newspaper_page`; retired catalog links carry `link_notice` and retain their original URL. Other non-item rows can be opened at `url`
 - `include_facets: true` adds `subject_facets` and `location_facets` (LOC's top 10 terms across all matches, each with its item count); off by default since it slows every search. A zero-result notice names the subject terms and location applied
 
 ---
@@ -70,7 +75,8 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 ### `libofcongress_search_newspapers` <sub>tool</sub>
 
-- Filters: keyword, inclusive date range down to the day (`date_start`/`date_end` take an integer year or a `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` string), US state (full name or postal code), and newspaper title (the exact `newspaper_title` of a search result); up to 100 results per page — a larger `limit` (up to 1000) is served as 100 with `effectiveLimit` and a notice
+- Filters: keyword, inclusive date range down to the day (`date_start`/`date_end` take an integer year or a `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` string), indexed state/province (full name or supported US postal code), and newspaper title (the exact `newspaper_title` of a search result); up to 100 results per page — a larger `limit` (up to 1000) is served as 100 with `effectiveLimit` and a notice
+- `sort` accepts `relevance` (default), `date` (oldest first), or `date_desc` (newest first); `effectiveSort` echoes the applied order
 - Each result carries the opening ~500 characters of the page's OCR text, `states`, and the `url` that `libofcongress_get_newspaper_page` takes verbatim
 - The excerpt is the page's first lines, not the text around the match; pass the same query as `match` to `libofcongress_get_newspaper_page` for the passages around it
 
@@ -80,13 +86,15 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 - Takes the `url` from a `libofcongress_search_newspapers` result, or a `pages[].page_url` from `libofcongress_get_item` (newspaper, book, and manuscript pages alike), plus Chronicling America page links; a link that names no single page, any other host, or a malformed path or `sp` is rejected as `invalid_page_url` before any request
 - Returns the page's text as `ocr_text` with `newspaper_title`, `date`, `place_of_publication`, `states`, `edition`, `sequence`, `segment_count`, `item_title`, and `item_id` (pass it to `libofcongress_get_item` to list the item's pages). `ocr_available: false` marks an image-only page, and a `notice` explains an empty result: the text service did not answer (retry), the body could not be read as text, or the page is blank
-- `match` returns only the passages around a term — pass the query you searched with. Space-separated words are separate terms and a double-quoted span is one phrase, matched case-insensitively. `matches` holds up to 10 passages of about 300 characters either side of each occurrence, `match_count` counts every occurrence, and `ocr_text` is empty; a notice says when nothing matched or some occurrences fall outside the passages
+- `match` returns only the passages around a term — pass the query you searched with. Space-separated words are separate terms and a double-quoted span is one phrase, matched case-insensitively. `matches` holds up to 10 passages of about 300 characters either side of each occurrence, `match_count` counts every occurrence, and `ocr_text` is empty; a notice says when nothing matched or some occurrences fall outside the passages. If text retrieval fails, both match fields are absent because the result is unknown; blank and image-only pages still report zero
 
 ---
 
 ### `libofcongress_search_subjects` <sub>tool</sub>
 
-- Keyword query, up to 50 results per call (default 10; a larger `limit`, up to 1000, returns up to 50 with a notice); returns the authorized LCSH `label` and stable LOC `uri`, exact match first
+- Keyword query, up to 250 results per call (default 10; a larger `limit`, up to 1000, returns up to 250 with a notice); returns the authorized LCSH `label` and stable LOC `uri`
+- Start at `offset: 0` (default), then pass `next_offset` to continue. `total` counts this page's headings; the final or past-end page omits `next_offset`. A past-end offset succeeds empty with a recovery notice
+- An exact match from the first 50 results moves to the start. Subsequent offsets and changed limits preserve that ordering while the upstream results remain unchanged
 - Pass the label verbatim as `libofcongress_search_items`'s `subject` filter. A partial word (`aerial photog`) falls back to headings that begin with it
 
 ---
@@ -118,124 +126,38 @@ Library of Congress-specific:
 Agent-friendly output:
 
 - Empty results include a `notice` with recovery hints that echo the applied filters
-- Every search response carries pagination status (`total`, `page`, `pages`, `has_next`), capped at LOC's ~100,000-item retrieval ceiling
+- Item and newspaper searches carry pagination status (`total`, `page`, `pages`, `has_next`), capped at LOC's ~100,000-item retrieval ceiling; subject searches use `offset` and `next_offset` with a page-local `total`
 - `ocr_available` and `is_item` let callers branch without parsing text
 - Every typed error carries a recovery hint
 
 ## Getting started
 
-### Public Hosted Instance
+Connect Claude Code to the hosted server:
 
-A public instance is available at `https://libofcongress.caseyjhand.com/mcp` — no installation required. Point any MCP client at it via Streamable HTTP:
-
-```json
-{
-  "mcpServers": {
-    "libofcongress-mcp-server": {
-      "type": "streamable-http",
-      "url": "https://libofcongress.caseyjhand.com/mcp"
-    }
-  }
-}
+```sh
+claude mcp add --transport http libofcongress-mcp-server https://libofcongress.caseyjhand.com/mcp
 ```
 
-### Self-Hosted / Local
+Or run it locally:
 
-Add the following to your MCP client configuration file.
-
-```json
-{
-  "mcpServers": {
-    "libofcongress-mcp-server": {
-      "type": "stdio",
-      "command": "bunx",
-      "args": ["@cyanheads/libofcongress-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_SESSION_MODE": "stateless",
-        "MCP_LOG_LEVEL": "info"
-      }
-    }
-  }
-}
+```sh
+claude mcp add libofcongress-mcp-server -- npx -y @cyanheads/libofcongress-mcp-server
 ```
 
-Or with npx (no Bun required):
+For other clients, add this to the MCP config file:
 
 ```json
 {
   "mcpServers": {
     "libofcongress-mcp-server": {
-      "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@cyanheads/libofcongress-mcp-server@latest"],
-      "env": {
-        "MCP_TRANSPORT_TYPE": "stdio",
-        "MCP_SESSION_MODE": "stateless",
-        "MCP_LOG_LEVEL": "info"
-      }
+      "args": ["-y", "@cyanheads/libofcongress-mcp-server"]
     }
   }
 }
 ```
 
-Or with Docker:
-
-```json
-{
-  "mcpServers": {
-    "libofcongress-mcp-server": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "run", "-i", "--rm",
-        "-e", "MCP_TRANSPORT_TYPE=stdio",
-        "-e", "MCP_SESSION_MODE=stateless",
-        "ghcr.io/cyanheads/libofcongress-mcp-server:latest"
-      ]
-    }
-  }
-}
-```
-
-For Streamable HTTP, set the transport and start the server:
-
-```sh
-MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
-# Server listens at http://localhost:3010/mcp
-```
-
-### Prerequisites
-
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
-- No API key required — the LOC JSON API and LC Linked Data endpoints are open. LOC recommends a descriptive `LOC_USER_AGENT` for polite access.
-
-### Installation
-
-1. **Clone the repository:**
-
-```sh
-git clone https://github.com/cyanheads/libofcongress-mcp-server.git
-```
-
-2. **Navigate into the directory:**
-
-```sh
-cd libofcongress-mcp-server
-```
-
-3. **Install dependencies:**
-
-```sh
-bun install
-```
-
-4. **Configure environment:**
-
-```sh
-cp .env.example .env
-# edit .env if you want to set LOC_USER_AGENT or LOC_REQUEST_DELAY_MS
-```
+No API key is required. Set `LOC_USER_AGENT` to identify your application to LOC. For Docker or a source build, see [Running the server](#running-the-server).
 
 ## Configuration
 
@@ -261,6 +183,15 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 
 ### Local development
 
+Requires [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+
+```sh
+git clone https://github.com/cyanheads/libofcongress-mcp-server.git
+cd libofcongress-mcp-server && bun install
+cp .env.example .env
+# Optionally set LOC_USER_AGENT or LOC_REQUEST_DELAY_MS.
+```
+
 - **Build and run:**
 
   ```sh
@@ -284,11 +215,10 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 ### Docker
 
 ```sh
-docker build -t libofcongress-mcp-server .
-docker run --rm -p 3010:3010 libofcongress-mcp-server
+docker run --rm -p 3010:3010 ghcr.io/cyanheads/libofcongress-mcp-server:latest
 ```
 
-The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `/var/log/libofcongress-mcp-server`. OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them.
+The image defaults to HTTP transport, stateless session mode, and logs to `/var/log/libofcongress-mcp-server`. For stdio in an MCP client, use `"command": "docker"` with `"args": ["run", "-i", "--rm", "-e", "MCP_TRANSPORT_TYPE=stdio", "ghcr.io/cyanheads/libofcongress-mcp-server:latest"]`. Build locally with `docker build -t libofcongress-mcp-server .`; OpenTelemetry peer dependencies are installed by default — build with `--build-arg OTEL_ENABLED=false` to omit them.
 
 ## Project structure
 

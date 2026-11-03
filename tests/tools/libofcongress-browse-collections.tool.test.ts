@@ -16,7 +16,7 @@ import { locBrowseCollections } from '@/mcp-server/tools/definitions/libofcongre
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 import { COLLECTION_ENTITY_ROWS } from '../fixtures/loc-text.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
-import { contentText, structured, wireError } from '../helpers/tool-result.js';
+import { contentText, renderedContentText, structured, wireError } from '../helpers/tool-result.js';
 
 /**
  * Live-shaped LOC /collections/ payload: results point at an /about-this-collection/ subpage,
@@ -96,7 +96,7 @@ describe('locBrowseCollections upstream text (#65)', () => {
     expect(text).toContain('Paris by storm at the Théâtre du Châtelet in May of 1909');
     expect(text).not.toMatch(/&(?:[A-Za-z][A-Za-z0-9]*|#\d+|#[xX][0-9A-Fa-f]+);/);
     expect(text).toContain('\n## Posters \\<WPA>\n**Slug:** wpa-posters\n');
-    expect(text).toContain('\n\\# Art for the \\<b>people\\</b>.\n');
+    expect(renderedContentText(result)).toContain('# Art\nfor the <b>people</b>.');
   });
 });
 
@@ -458,7 +458,7 @@ describe('locBrowseCollections', () => {
       const notice = String(sc.notice);
       for (const m of mentions) expect(notice).toContain(m);
       expect(notice).toContain('page 1');
-      expect(contentText(result)).toContain(notice);
+      expect(renderedContentText(result)).toContain(notice);
       expect(fetchSpy).toHaveBeenCalledTimes(1);
     },
   );

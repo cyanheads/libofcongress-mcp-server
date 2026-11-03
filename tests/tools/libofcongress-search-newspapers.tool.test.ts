@@ -29,7 +29,13 @@ import {
 } from '../fixtures/loc-newspaper-search.js';
 import { TITANIC_OCR_EXCERPT } from '../fixtures/loc-text.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
-import { contentText, contractRecovery, structured, wireError } from '../helpers/tool-result.js';
+import {
+  contentText,
+  contractRecovery,
+  renderedContentText,
+  structured,
+  wireError,
+} from '../helpers/tool-result.js';
 
 function makeNewspaperSearchResponse(overrides: { results?: object[]; pagination?: object } = {}) {
   return JSON.stringify({
@@ -127,7 +133,7 @@ describe('locSearchNewspapers upstream text (#65)', () => {
     const text = contentText(result);
     expect(text).toContain('\n## Image 1 of New-York tribune \\<i>\n');
     expect(text).toContain(
-      '**Publication:** new-york tribune \\<b> (new york [n.y.]) 1866-<1924>\n',
+      '**Publication:** new-york tribune \\<b> (new york \\[n.y.\\]) 1866-<1924>\n',
     );
     expect(text).toContain('**States:** new york \\<x>\n');
     expect(text).toContain(`\n\`\`\`\`\n${excerpt}\n\`\`\`\`\n`);
@@ -138,6 +144,53 @@ describe('locSearchNewspapers upstream text (#65)', () => {
 });
 
 describe('locSearchNewspapers', () => {
+  it.each([
+    ['relevance', 1, 25, 200, false],
+    ['date', 1, 25, 200, true],
+    ['date_desc', 9, 1000, 404, true],
+  ] as const)(
+    'discloses %s on both surfaces at page %i',
+    async (sort, page, limit, status, empty) => {
+      const fetchSpy = mockFetch(makeNewspaperSearchResponse(empty ? { results: [] } : {}), status);
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await runToolContract(locSearchNewspapers, {
+        query: 'train',
+        sort,
+        page,
+        limit,
+        state: 'OK',
+        newspaper_title: 'full title',
+        date_start: 1912,
+        date_end: 1912,
+      });
+      expect(result.isError).not.toBe(true);
+      expect(structured(result)).toMatchObject({ effectiveSort: sort, effectiveQuery: 'train' });
+      expect(contentText(result)).toContain(sort);
+      const url = new URL(String(fetchSpy.mock.calls[0]![0]));
+      expect(url.searchParams.get('sb')).toBe(sort === 'relevance' ? null : sort);
+      expect(url.searchParams.get('fa')).toBe('location_state:oklahoma|partof_title:full title');
+      expect(url.searchParams.get('c')).toBe(limit > 100 ? '100' : String(limit));
+      expect(url.searchParams.get('sp')).toBe(String(page));
+      if (empty) expect(structured(result).items).toEqual([]);
+    },
+  );
+
+  it('rejects invalid sort before making a request', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    // Widen only the test driver's input so the real schema sees malformed client data.
+    const result = await runToolContract<Parameters<typeof runToolContract>[0]>(
+      locSearchNewspapers,
+      {
+        query: 'train',
+        sort: 'title',
+      },
+    );
+    expect(wireError(result).data?.reason).toBe('invalid_arguments');
+    expect(contentText(result)).toContain('sort');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   beforeEach(async () => {
     // A test that forgets its stub fails here instead of reaching LOC, which blocks for an hour.
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('unmocked fetch')));
@@ -317,7 +370,7 @@ describe('locSearchNewspapers', () => {
       "newspaper_title matches only a newspaper's full catalog title, exactly as the newspaper_title field of a libofcongress_search_newspapers result gives it",
     );
     expect(notice).toContain('"new-york tribune (new york [n.y.]) 1866-1924"');
-    expect(contentText(result)).toContain(notice);
+    expect(renderedContentText(result)).toContain(notice);
   });
 
   it('leaves the title requirement out of an empty-result notice when no newspaper_title was set (#59)', async () => {
@@ -756,7 +809,7 @@ describe('locSearchNewspapers', () => {
       expect(notice).toContain(advice);
       if (!('state' in filters)) expect(notice).not.toContain('state');
       if (!('date_start' in filters)) expect(notice).not.toContain('date range');
-      expect(contentText(result)).toContain(notice);
+      expect(renderedContentText(result)).toContain(notice);
     },
   );
 
@@ -799,7 +852,7 @@ describe('locSearchNewspapers', () => {
       /^Requested limit 150 exceeds the per-call cap of 100; this page holds up to 100 results, and page numbers count 100-result pages\. Request page 2 with limit 100 for the next results\. /,
     );
     expect(notice).toContain('LOC pages through only the first ~100,000');
-    expect(contentText(result)).toContain(notice);
+    expect(renderedContentText(result)).toContain(notice);
   });
 
   it('rejects page=0 at schema level', () => {
@@ -831,7 +884,7 @@ describe('locSearchNewspapers', () => {
     expect(sc.notice).toBe(
       `Page 1500 is past LOC's ~100,000-item retrieval ceiling for query "the" — Chronicling America serves nothing that deep, however few pages match. Re-run with page 1 to see the real total and page count; if the target pages lie past the first 100,000, narrow the search with a date range (date_start/date_end) or state.`,
     );
-    expect(contentText(result)).toContain(String(sc.notice));
+    expect(renderedContentText(result)).toContain(String(sc.notice));
   });
 
   it('returns the out-of-range sentinel for a 400 within the ceiling', async () => {
@@ -873,7 +926,7 @@ describe('locSearchNewspapers', () => {
     expect(notice).toContain('state "oklahoma"');
     expect(notice).toContain('page 1');
     expect(notice).not.toContain('ceiling');
-    expect(contentText(result)).toContain(notice);
+    expect(renderedContentText(result)).toContain(notice);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 

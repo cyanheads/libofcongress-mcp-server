@@ -29,11 +29,9 @@ await createApp({
   ],
   resources: [locItemResource],
   prompts: [],
+  skills: 'skills',
   instructions:
-    'Library of Congress digital collections server. Use libofcongress_search_subjects to find exact LCSH terms before subject-filtering libofcongress_search_items. ' +
-    'Newspaper research: libofcongress_search_newspapers → libofcongress_get_newspaper_page (two hops); pass the search query as match to get the passages around it instead of the whole page. ' +
-    'Book and manuscript pages: libofcongress_get_item lists pages[].page_url; pass one with has_text to libofcongress_get_newspaper_page. ' +
-    'Rate limit: 20 req/min; violations block for 1 hour.',
+    'Library of Congress digital collections server. Use libofcongress_search_subjects to find exact LCSH terms before subject-filtering libofcongress_search_items. Collections: pass a slug from libofcongress_browse_collections to libofcongress_search_items.collection_slug; query "*" browses matching records and combines with format and date filters. Both search tools accept sort date (oldest first) or date_desc (newest first), preserving LOC catalog dates and order. Newspaper research: libofcongress_search_newspapers → libofcongress_get_newspaper_page (two hops); pass the search query as match to get the passages around it instead of the whole page. Book and manuscript pages: libofcongress_get_item lists pages[].page_url; pass one with has_text to libofcongress_get_newspaper_page. Rate limit: 20 req/min; violations block for 1 hour.',
   landing: {
     // Public hosted catalog — serve full inventory without auth requirement.
     requireAuth: false,

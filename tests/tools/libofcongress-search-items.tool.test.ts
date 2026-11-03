@@ -24,7 +24,13 @@ import {
 import { POSTERS_PHOTOS_SEARCH } from '../fixtures/loc-subjects.js';
 import { JAZZ_ENTITY_ROWS } from '../fixtures/loc-text.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
-import { contentText, contractRecovery, structured, wireError } from '../helpers/tool-result.js';
+import {
+  contentText,
+  contractRecovery,
+  renderedContentText,
+  structured,
+  wireError,
+} from '../helpers/tool-result.js';
 
 /** Minimal mock search response from the LOC JSON API */
 function makeSearchResponse(overrides: { results?: object[]; pagination?: object } = {}) {
@@ -85,7 +91,9 @@ describe('locSearchItems upstream text (#65)', () => {
     expect(items[1]!.description).toContain('entitled “I Hate Jazz” and');
     expect(contentText(result)).toContain('entitled “I Hate Jazz” and');
     expect(contentText(result)).toContain('the birthday of Stèphane Grappelli');
-    expect(JSON.stringify(result)).not.toMatch(/&(?:[A-Za-z][A-Za-z0-9]*|#\d+|#[xX][0-9A-Fa-f]+);/);
+    expect(JSON.stringify(structured(result))).not.toMatch(
+      /&(?:[A-Za-z][A-Za-z0-9]*|#\d+|#[xX][0-9A-Fa-f]+);/,
+    );
   });
 
   it('escapes markup in catalog text in content[] only, and keeps identifiers and URLs as sent', async () => {
@@ -122,7 +130,7 @@ describe('locSearchItems upstream text (#65)', () => {
     expect(text).toContain('\n## \\<b>Bold\\</b> title, 1866-<1899>\n');
     expect(text).toContain('**Date:** c1915 \\<Feb.>');
     expect(text).toContain('**Format:** photo_print');
-    expect(text).toContain('\n1\\. Line one line two \\&lt;i\\&gt;\n');
+    expect(renderedContentText(result)).toContain('1. Line one\nline two &lt;i&gt;');
     expect(text).toContain('**Top subjects:** arts \\<b> (2)');
     expect(text).toContain('**ID:** 2009632251');
     expect(text).toContain('**URL:** https://www.loc.gov/item/2009632251/');
@@ -146,6 +154,54 @@ describe('locSearchItems', () => {
   it('registers as libofcongress_search_items with the title Search LOC Items (#49)', () => {
     expect(locSearchItems.name).toBe('libofcongress_search_items');
     expect(locSearchItems.title).toBe('Search LOC Items');
+  });
+
+  it.each([
+    ['relevance', 1, 25, 200, false],
+    ['date', 1, 25, 200, true],
+    ['date_desc', 9, 1000, 404, true],
+  ] as const)(
+    'discloses %s on both surfaces at page %i',
+    async (sort, page, limit, status, empty) => {
+      const fetchSpy = mockFetch(makeSearchResponse(empty ? { results: [] } : {}), status);
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = await runToolContract(locSearchItems, {
+        query: '*',
+        sort,
+        page,
+        limit,
+        collection_slug: 'aaron-copland',
+        format: 'photo',
+        date_start: 1863,
+        date_end: 1863,
+      });
+      expect(result.isError).not.toBe(true);
+      expect(structured(result)).toMatchObject({
+        effectiveSort: sort,
+        effectiveQuery: '*',
+        effectiveCollectionSlug: 'aaron-copland',
+      });
+      expect(contentText(result)).toContain(sort);
+      expect(contentText(result)).toContain('*');
+      const url = new URL(String(fetchSpy.mock.calls[0]![0]));
+      expect(url.searchParams.get('sb')).toBe(sort === 'relevance' ? null : sort);
+      expect(url.searchParams.get('c')).toBe(limit > 100 ? '100' : String(limit));
+      expect(url.searchParams.get('sp')).toBe(String(page));
+      if (empty) expect(structured(result).items).toEqual([]);
+    },
+  );
+
+  it('rejects invalid sort before making a request', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    // Widen only the test driver's input so the real schema sees malformed client data.
+    const result = await runToolContract<Parameters<typeof runToolContract>[0]>(locSearchItems, {
+      query: '*',
+      sort: 'title',
+    });
+    expect(wireError(result).data?.reason).toBe('invalid_arguments');
+    expect(contentText(result)).toContain('sort');
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('returns items and pagination for a basic keyword search', async () => {
@@ -363,7 +419,7 @@ describe('locSearchItems', () => {
     expect(String(getEnrichment(ctx).notice)).toContain('aaron-copland');
   });
 
-  it('rejects format + collection_slug with a typed incompatible_filters failure', async () => {
+  it('combines format + collection_slug upstream', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
     const ctx = createMockContext({ errors: locSearchItems.errors });
@@ -373,16 +429,11 @@ describe('locSearchItems', () => {
       collection_slug: 'aaron-copland',
     });
 
-    const err = await Promise.resolve(locSearchItems.handler(input, ctx)).catch((e: unknown) => e);
-    expect(err).toMatchObject({
-      code: JsonRpcErrorCode.ValidationError,
-      data: { reason: 'incompatible_filters' },
-    });
-    // Rejected before any request — never silently pick one filter and search anyway
-    expect(fetchSpy).not.toHaveBeenCalled();
-    // The message names both conflicting filters; the way out rides the recovery hint
-    expect((err as Error).message).toContain('collection_slug');
-    expect((err as Error).message).toContain('format');
+    const result = await locSearchItems.handler(input, ctx);
+    expect(result.items).toHaveLength(1);
+    const url = new URL(String(fetchSpy.mock.calls[0]![0]));
+    expect(url.pathname).toBe('/collections/aaron-copland/');
+    expect(url.searchParams.get('fa')).toBe('original-format:photo, print, drawing');
   });
 
   it('keeps the internal request URL out of a collection_not_found failure', async () => {
@@ -698,7 +749,7 @@ describe('locSearchItems', () => {
       expect(notice).toMatch(/^Requested limit 1000 exceeds the per-call cap of 100;/);
       expect(notice).not.toContain('Request page 1001');
       expect(notice).toContain('LOC pages through only the first ~100,000');
-      expect(contentText(result)).toContain(notice);
+      expect(renderedContentText(result)).toContain(notice);
     });
 
     it('combines the clamp notice with the ceiling notice for page 1001, which LOC answers 400', async () => {
@@ -727,7 +778,7 @@ describe('locSearchItems', () => {
       const notice = String(structured(result).notice);
       expect(notice).toContain('Requested limit 200 exceeds the per-call cap of 100');
       expect(notice).toContain('No items matched "zyzzyva"');
-      expect(contentText(result)).toContain(notice);
+      expect(renderedContentText(result)).toContain(notice);
     });
   });
 
@@ -938,7 +989,7 @@ describe('locSearchItems', () => {
     expect(sc.notice).toBe(
       `Page 1500 is past LOC's ~100,000-item retrieval ceiling for query "civil rights" — LOC serves nothing that deep, however few items match. Re-run with page 1 to see the real total and page count; if the target items lie past the first 100,000, narrow the search with a date range (date_start/date_end), subject, or location.`,
     );
-    expect(contentText(result)).toContain(String(sc.notice));
+    expect(renderedContentText(result)).toContain(String(sc.notice));
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -991,7 +1042,7 @@ describe('locSearchItems', () => {
       for (const m of mentions) expect(notice).toContain(m);
       expect(notice).toContain('page 1');
       expect(notice).not.toContain('ceiling');
-      expect(contentText(result)).toContain(notice);
+      expect(renderedContentText(result)).toContain(notice);
       // No extra request to tell a bad slug from a deep page.
       expect(fetchSpy).toHaveBeenCalledTimes(1);
     },
@@ -1020,31 +1071,46 @@ describe('locSearchItems', () => {
     expect(contentText(result)).toContain(`Recovery: ${hint}`);
   });
 
-  it('forwards incompatible_filters recovery on both surfaces without repeating it in the message (#44)', async () => {
-    const fetchSpy = mockFetch(makeSearchResponse());
+  it('preserves match-all query, collection records and sort on both surfaces', async () => {
+    const fetchSpy = mockFetch(
+      makeSearchResponse({
+        results: [
+          {
+            id: 'https://www.loc.gov/collections/aaron-copland/about-this-collection/',
+            title: 'Aaron Copland Collection',
+            original_format: ['collection', 'photo, print, drawing'],
+            url: 'https://www.loc.gov/collections/aaron-copland/about-this-collection/',
+          },
+          {
+            id: 'https://www.loc.gov/item/2009632251/',
+            title: 'Test Photo',
+            date: '1922',
+            url: 'https://www.loc.gov/item/2009632251/',
+          },
+        ],
+      }),
+    );
     vi.stubGlobal('fetch', fetchSpy);
     const result = await runToolContract(locSearchItems, {
-      query: 'letters',
+      query: '*',
       format: 'photo',
       collection_slug: 'aaron-copland',
+      sort: 'date_desc',
     });
 
-    const error = wireError(result);
-    const hint = contractRecovery(locSearchItems, 'incompatible_filters');
-    expect(error).toMatchObject({
-      code: JsonRpcErrorCode.ValidationError,
-      data: {
-        reason: 'incompatible_filters',
-        retryable: false,
-        format: 'photo',
-        collectionSlug: 'aaron-copland',
-        recovery: { hint },
-      },
+    expect(structured(result)).toMatchObject({
+      effectiveQuery: '*',
+      effectiveSort: 'date_desc',
+      effectiveCollectionSlug: 'aaron-copland',
     });
-    // The message names the conflict; the next step is stated once, by the recovery line.
-    expect(error.message).not.toMatch(/omit/i);
-    expect(contentText(result)).toContain(`Recovery: ${hint}`);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(contentText(result)).toContain('date_desc');
+    expect(contentText(result)).toContain('*');
+    expect(structured(result).items).toMatchObject([
+      { title: 'Aaron Copland Collection', is_item: false },
+      { title: 'Test Photo', is_item: true },
+    ]);
+    expect(contentText(result)).toContain('Aaron Copland Collection');
+    expect(new URL(String(fetchSpy.mock.calls[0]![0])).searchParams.get('sb')).toBe('date_desc');
   });
 
   it('rejects an inverted date range as invalid_date_range, keeping its data and forwarding recovery (#45)', async () => {
@@ -1303,7 +1369,7 @@ describe('locSearchItems', () => {
       expect(notice).toBe(
         'No items matched "posters" with format "photo" with subject terms "united states" + "history" + "civil war" in location "oklahoma". Every subject term must match; drop one, or the location, to widen the search. Also try broadening the query, widening the date range, or running libofcongress_search_subjects to find the subject heading.',
       );
-      expect(contentText(result)).toContain(notice);
+      expect(renderedContentText(result)).toContain(notice);
     });
 
     it('returns empty facet lists on an out-of-range page', async () => {

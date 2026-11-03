@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { noticeWriter, pageSizeClampNotice } from '@/mcp-server/tools/notices.js';
+import { noticeWriter, pageSizeClampNotice, renderNotice } from '@/mcp-server/tools/notices.js';
 import { fencedText, inlineText } from '@/mcp-server/tools/render-text.js';
 import {
   DATE_STRING_PATTERN,
@@ -31,7 +31,7 @@ const DISJUNCTION = new Intl.ListFormat('en', { type: 'disjunction' });
 export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
   title: 'Search Historical Newspapers',
   description:
-    "Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with the opening of each page's OCR text (~500 characters), publication title, date, the states LOC indexes the title under, and the page URL needed for libofcongress_get_newspaper_page. Filters by keyword, date range, US state, and newspaper title. The excerpt is the page's first lines, not the text around the match: to read where the query occurs, call libofcongress_get_newspaper_page with the returned url field and this query as its match, which returns the passages around each occurrence; omit match for the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text.",
+    "Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with the opening of each page's OCR text (~500 characters), publication title, date, the states LOC indexes the title under, and the page URL needed for libofcongress_get_newspaper_page. Filters by keyword, date range, indexed state/province, and newspaper title. The excerpt is the page's first lines, not the text around the match: to read where the query occurs, call libofcongress_get_newspaper_page with the returned url field and this query as its match, which returns the passages around each occurrence; omit match for the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -49,11 +49,17 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       .describe(
         'End of the date filter, inclusive, in the same forms as date_start (e.g., 1920 or "1912-04-16"). A year or month ends on its last day, so "1912-04" runs through April 30. Omit to run through the current year.',
       ),
+    sort: z
+      .enum(['relevance', 'date', 'date_desc'])
+      .default('relevance')
+      .describe(
+        'Result order: relevance (default), date (oldest first), or date_desc (newest first). Uses LOC catalog dates and upstream ordering.',
+      ),
     state: z
       .string()
       .optional()
       .describe(
-        'Filter to newspapers LOC indexes under this US state: the full state name (e.g., "oklahoma", "new york") or its two-letter postal code (e.g., "OK", "NY"), case-insensitive. Use "district of columbia" (or "DC") for Washington, D.C.; "washington" means Washington state. City and county names match nothing.',
+        'Filter by LOC\'s State/Province facet: a full indexed name (e.g., "oklahoma", "piedmont") or a supported US postal code (e.g., "OK", "NY"), case-insensitive. Use "district of columbia" (or "DC") for Washington, D.C.; "washington" means Washington state. City and county names match nothing.',
       ),
     newspaper_title: z
       .string()
@@ -99,7 +105,7 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
               .array(z.string())
               .optional()
               .describe(
-                'Every US state LOC indexes this newspaper title under (e.g., ["georgia", "south carolina"]), in LOC order. A title indexed against its circulation area lists several, so no entry is necessarily the place of publication — libofcongress_get_newspaper_page returns place_of_publication. Absent when LOC lists no state.',
+                'Every State/Province facet value LOC indexes this newspaper title under (e.g., ["georgia", "south carolina"]), in LOC order. A title indexed against its circulation area lists several, so no entry is necessarily the place of publication — libofcongress_get_newspaper_page returns place_of_publication. Absent when LOC lists none.',
               ),
             newspaper_title: z
               .string()
@@ -129,6 +135,9 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
   // guidance. Reaches both structuredContent and content[] automatically; kept out of
   // the domain output. Keys are disjoint from output (total vs totalCount).
   enrichment: {
+    effectiveSort: z
+      .enum(['relevance', 'date', 'date_desc'])
+      .describe('Applied LOC result order, including empty and out-of-range pages.'),
     effectiveQuery: z
       .string()
       .describe('The keyword query as submitted to the Chronicling America API, after trimming.'),
@@ -148,6 +157,8 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
         'Recovery hint when results are empty or a page is out of range — echoes applied filters and suggests how to broaden — plus disclosure of a capped limit or of the retrieval ceiling. Absent on ordinary result pages.',
       ),
   },
+
+  enrichmentTrailer: { notice: { render: renderNotice } },
 
   errors: [
     {
@@ -231,6 +242,7 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       result = await svc.searchNewspapers(
         {
           query: input.query,
+          sort: input.sort,
           ...(range.dates !== undefined && { dates: range.dates }),
           ...(input.state?.trim() && { state: input.state.trim() }),
           ...(input.newspaper_title?.trim() && { newspaperTitle: input.newspaper_title.trim() }),
@@ -260,6 +272,7 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     const addNotice = noticeWriter(ctx);
 
     ctx.enrich.echo(input.query);
+    ctx.enrich({ effectiveSort: input.sort });
     // Mirror the upstream total for agent reasoning. The empty-result branches below return
     // total: 0 and re-enrich with 0 so totalCount never contradicts the returned total — LOC
     // reports a nonzero pagination.total even for no-match queries. Last write wins.

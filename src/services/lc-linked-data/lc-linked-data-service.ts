@@ -22,10 +22,9 @@ const SUGGEST2_URL = 'https://id.loc.gov/authorities/subjects/suggest2/';
 const UPSTREAM = 'The Library of Congress subject heading service';
 
 /**
- * Fewest headings requested from suggest2, whatever `limit` asks for. The exact-label promotion
- * can only lift a heading the page holds, and keyword ranking can put the exact heading well past
- * a small limit (`civil war` → `Civil war` near 10th). id.loc.gov is fast and off the www.loc.gov
- * request queue, so the larger page costs little.
+ * Fixed initial window eligible for exact-label promotion. Keyword ranking can put the exact
+ * heading past a small limit (`civil war` → `Civil war` near 10th). Keeping this window independent
+ * of limit makes every page a slice of the same ordering.
  */
 const MIN_SUGGEST_COUNT = 50;
 
@@ -50,9 +49,11 @@ interface Suggest2Page {
 
 /** Outcome of a subject-heading search. */
 export interface SubjectSuggestResult {
-  /** Upstream total of matching subject headings — more than `subjects.length` means truncation. */
+  /** Upstream total of matching subject entries, including preceding pages. */
   matchCount: number;
-  /** LCSH subject headings, at most the requested `limit`, an exact-label match first. */
+  /** Position of the next page in the consistently ordered upstream entries. */
+  nextOffset?: number;
+  /** LCSH subject headings in the requested window of the consistently ordered entries. */
   subjects: LcSubjectHeading[];
 }
 
@@ -68,32 +69,67 @@ export class LcLinkedDataService {
    * Search LCSH subject headings. A keyword search ranks base headings such as
    * `World War, 1939-1945` at or near the top; a partial word (`aerial photog`) matches nothing by
    * keyword, so a zero-hit keyword search is retried once left-anchored. Both requests share the
-   * call's one time budget. Each asks for at least {@link MIN_SUGGEST_COUNT} headings so an exact
-   * label ranked past `limit` can still be promoted; the result is then cut to `limit`.
+   * call's one time budget. An exact label in the initial {@link MIN_SUGGEST_COUNT} entries is
+   * promoted before taking any requested slice; offset is zero-based across that fixed ordering.
    */
-  async searchSubjects(query: string, limit: number, ctx: Context): Promise<SubjectSuggestResult> {
+  async searchSubjects(
+    query: string,
+    limit: number,
+    ctx: Context,
+    offset = 0,
+  ): Promise<SubjectSuggestResult> {
     const deadlineAt = Date.now() + LOC_CALL_BUDGET_MS;
-    const count = Math.max(limit, MIN_SUGGEST_COUNT);
-    let page = await this.suggest({ q: query, searchtype: 'keyword', count }, ctx, deadlineAt);
-    if (page.hits.length === 0) {
+    /**
+     * Reordering the fixed initial window never changes its membership. Later raw offsets can
+     * therefore be fetched directly; offsets inside it must slice the same permutation every time.
+     */
+    const start = offset < MIN_SUGGEST_COUNT ? 0 : offset;
+    const count = start === 0 ? Math.min(250, Math.max(MIN_SUGGEST_COUNT, offset + limit)) : limit;
+    let searchtype: 'keyword' | undefined = 'keyword';
+    let page = await this.suggest({ q: query, searchtype, count, offset: start }, ctx, deadlineAt);
+    if (page.count === 0) {
       // Omitting `searchtype` selects the endpoint's left-anchored search.
-      page = await this.suggest({ q: query, count }, ctx, deadlineAt);
+      searchtype = undefined;
+      page = await this.suggest({ q: query, count, offset: start }, ctx, deadlineAt);
     }
 
+    const hits = [...page.hits];
+    if (start === 0) {
+      const wanted = query.trim().toLowerCase();
+      const exact = hits
+        .slice(0, MIN_SUGGEST_COUNT)
+        .findIndex((hit) => hit.aLabel?.toLowerCase() === wanted);
+      if (exact > 0) hits.unshift(...hits.splice(exact, 1));
+    }
+    const end = Math.min(offset + limit, page.count);
+    /**
+     * An offset inside the first 50 can request a 250-entry window crossing suggest2's cap.
+     * Fetch only its raw suffix, under the same deadline and cancellation signal.
+     */
+    if (end > start + count) {
+      const suffix = await this.suggest(
+        { q: query, searchtype, count: end - start - count, offset: start + count },
+        ctx,
+        deadlineAt,
+      );
+      hits.push(...suffix.hits);
+    }
+    const entries = hits.slice(offset - start, offset - start + limit);
     const subjects: LcSubjectHeading[] = [];
-    for (const hit of page.hits) {
+    for (const hit of entries) {
       // `aLabel` is the authorized heading — the value the item search's subject filter accepts.
       if (hit.aLabel && hit.uri) subjects.push({ label: hit.aLabel, uri: hit.uri });
     }
-    const wanted = query.trim().toLowerCase();
-    const exact = subjects.findIndex((s) => s.label.toLowerCase() === wanted);
-    if (exact > 0) subjects.unshift(...subjects.splice(exact, 1));
-
-    return { subjects: subjects.slice(0, limit), matchCount: page.count };
+    const nextOffset = offset + entries.length;
+    return {
+      subjects,
+      matchCount: page.count,
+      ...(entries.length > 0 && nextOffset < page.count && { nextOffset }),
+    };
   }
 
   private async suggest(
-    params: { q: string; searchtype?: 'keyword'; count: number },
+    params: { q: string; searchtype?: 'keyword' | undefined; count: number; offset: number },
     ctx: Context,
     deadlineAt: number,
   ): Promise<Suggest2Page> {
@@ -101,6 +137,7 @@ export class LcLinkedDataService {
       q: params.q,
       ...(params.searchtype && { searchtype: params.searchtype }),
       count: String(params.count),
+      ...(params.offset > 0 && { offset: String(params.offset + 1) }),
     });
     const url = `${SUGGEST2_URL}?${qs}`;
     ctx.log.debug('LC Linked Data subject suggest', { url });

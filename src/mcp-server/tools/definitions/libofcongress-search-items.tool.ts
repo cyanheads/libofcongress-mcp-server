@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { noticeWriter, pageSizeClampNotice } from '@/mcp-server/tools/notices.js';
+import { noticeWriter, pageSizeClampNotice, renderNotice } from '@/mcp-server/tools/notices.js';
 import { inlineText, lineText } from '@/mcp-server/tools/render-text.js';
 import { resolveDateRange, yearBound } from '@/services/loc-api/date-range.js';
 import { getLocApiService, LOC_MAX_PAGE_SIZE } from '@/services/loc-api/loc-api-service.js';
@@ -29,14 +29,22 @@ const facetList = (kind: string) =>
 export const locSearchItems = tool('libofcongress_search_items', {
   title: 'Search LOC Items',
   description:
-    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location, or scope the search to a single curated collection with collection_slug. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Each result carries is_item: pass the id of a result where is_item is true to libofcongress_get_item for full metadata; results where is_item is false are non-item resources (collections, exhibit and research-guide pages, newspaper-page results, catalog.loc.gov records, hdl.loc.gov finding aids) with no item record — open their url instead. Use libofcongress_search_subjects to find an LCSH heading for the subject filter. To discover the subject and location values the filters accept for a search, set include_facets to get its top subject_facets and location_facets.',
+    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location, or scope the search to a single curated collection with collection_slug. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Each result carries is_item: pass the id of a result where is_item is true to libofcongress_get_item for full metadata. Non-item resources include collections, exhibit and research-guide pages, newspaper pages, catalog.loc.gov records, and hdl.loc.gov finding aids. When page_url is present, pass it to libofcongress_get_newspaper_page, optionally using the search query as match; its item_id identifies the issue. A link_notice warns that a retired catalog URL no longer opens its record; otherwise follow a non-item url. Use libofcongress_search_subjects to find an LCSH heading for the subject filter. To discover the subject and location values the filters accept for a search, set include_facets to get its top subject_facets and location_facets.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
       .string()
       .trim()
       .min(1)
-      .describe('Full-text search across metadata and available descriptive text.'),
+      .describe(
+        'Full-text search across metadata and available descriptive text. Use "*" to match all records within the applied filters; relevance order can differ from a queryless LOC browse.',
+      ),
+    sort: z
+      .enum(['relevance', 'date', 'date_desc'])
+      .default('relevance')
+      .describe(
+        'Result order: relevance (default), date (oldest first), or date_desc (newest first). Uses LOC catalog dates and upstream ordering.',
+      ),
     format: z
       .enum(['photo', 'map', 'newspaper', 'manuscript', 'audio', 'film', 'book', 'notated-music'])
       .optional()
@@ -77,7 +85,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
       .string()
       .optional()
       .describe(
-        'Scope the search to one curated collection. Use a slug exactly as returned by libofcongress_browse_collections (e.g., "aaron-copland") — slugs are not derivable from the collection title. Cannot be combined with format; omit format and read each result\'s format field instead. Omit to search all of LOC.',
+        'Scope the search to one curated collection. Pass a slug exactly as returned by libofcongress_browse_collections to libofcongress_search_items.collection_slug (e.g., "aaron-copland") — slugs are not derivable from the collection title. Combine with format to filter material type; use query "*" to browse every matching record. Omit to search all of LOC.',
       ),
     limit: z
       .number()
@@ -103,7 +111,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
             id: z
               .string()
               .describe(
-                'LOC identifier for this result: an item ID, or the bare LCCN of a record whose url is an lccn.loc.gov permalink. When is_item is true, pass it to libofcongress_get_item for full metadata. When is_item is false it is a non-item resource (a collection, exhibit, guide, newspaper page, catalog.loc.gov record, or hdl.loc.gov finding aid), not a get_item input — open url instead.',
+                'LOC identifier for this result: an item ID, or the bare LCCN of a record whose url is an lccn.loc.gov permalink. When is_item is true, pass it to libofcongress_get_item for full metadata. When is_item is false it is a non-item resource (a collection, exhibit, guide, newspaper page, catalog.loc.gov record, or hdl.loc.gov finding aid), not a get_item input. Use page_url for newspaper pages, heed link_notice for retired links, and otherwise follow url.',
               ),
             title: z.string().describe('Item title.'),
             date: z
@@ -120,9 +128,25 @@ export const locSearchItems = tool('libofcongress_search_items', {
             is_item: z
               .boolean()
               .describe(
-                'True when this result is a catalog item whose id resolves through libofcongress_get_item, including records LOC links by an lccn.loc.gov permalink. False for collections, exhibits, research guides, newspaper pages, catalog.loc.gov records, hdl.loc.gov finding aids, and other non-item results, which have no get_item record — follow url instead. Always present on every result.',
+                'True when this result is a catalog item whose id resolves through libofcongress_get_item, including records LOC links by an lccn.loc.gov permalink. False for collections, exhibits, research guides, newspaper pages, catalog.loc.gov records, hdl.loc.gov finding aids, and other non-item results, which have no get_item record. Use page_url for newspaper pages, heed link_notice for retired links, and otherwise follow url. Always present on every result.',
               ),
-            url: z.string().describe('LOC item or collection URL.'),
+            url: z
+              .string()
+              .describe(
+                'Original LOC result URL, preserved even when retired; read link_notice before following it.',
+              ),
+            page_url: z
+              .string()
+              .optional()
+              .describe(
+                'Recognized newspaper page URL: pass to libofcongress_get_newspaper_page as page_url, optionally with this search query as match. That tool returns item_id for the issue.',
+              ),
+            link_notice: z
+              .string()
+              .optional()
+              .describe(
+                'Warning that a retired catalog URL no longer opens its record; no replacement record URL is known.',
+              ),
           })
           .describe('A single LOC item summary.'),
       )
@@ -147,6 +171,9 @@ export const locSearchItems = tool('libofcongress_search_items', {
   // guidance. Reaches both structuredContent and content[] automatically; kept out of
   // the domain output. Keys are disjoint from output (total vs totalCount).
   enrichment: {
+    effectiveSort: z
+      .enum(['relevance', 'date', 'date_desc'])
+      .describe('Applied LOC result order, including empty and out-of-range pages.'),
     effectiveQuery: z.string().describe('The query as submitted to the LOC API, after trimming.'),
     effectiveCollectionSlug: z
       .string()
@@ -180,7 +207,10 @@ export const locSearchItems = tool('libofcongress_search_items', {
   },
 
   enrichmentTrailer: {
-    effectiveSubjectTerms: { render: (terms = []) => `**Subject terms:** ${terms.join(' + ')}` },
+    notice: { render: renderNotice },
+    effectiveSubjectTerms: {
+      render: (terms = []) => `**Subject terms:** ${terms.map(inlineText).join(' + ')}`,
+    },
   },
 
   errors: [
@@ -191,14 +221,6 @@ export const locSearchItems = tool('libofcongress_search_items', {
       when: 'date_start is later than date_end, or date_start is given alone and is later than the current year.',
       recovery:
         'Put the earlier year in date_start and the later one in date_end, and keep a date_start given alone no later than the current year. Omit a bound to leave that side of the range open.',
-    },
-    {
-      reason: 'incompatible_filters',
-      code: JsonRpcErrorCode.ValidationError,
-      retryable: false,
-      when: 'format and collection_slug were both supplied; each selects a different LOC endpoint, so only one can apply.',
-      recovery:
-        "Drop one of the two. To search within the collection, omit format and filter on each result's format field; to search one material type across all of LOC, omit collection_slug.",
     },
     {
       reason: 'collection_not_found',
@@ -259,21 +281,6 @@ export const locSearchItems = tool('libofcongress_search_items', {
     );
     if (!range.ok) throw ctx.fail('invalid_date_range', range.message, range.data);
 
-    // format and collection_slug each select a different LOC base path, so no request can honor
-    // both. Reject rather than silently dropping one — a search the caller did not ask for that
-    // still returns plausible results is worse than a failure naming the choice.
-    if (input.format !== undefined && collectionSlug !== undefined) {
-      throw ctx.fail(
-        'incompatible_filters',
-        `format ("${input.format}") and collection_slug ("${collectionSlug}") cannot be combined — each scopes the search to a different LOC endpoint.`,
-        {
-          field: 'collection_slug',
-          format: input.format,
-          collectionSlug,
-        },
-      );
-    }
-
     // A limit past the per-call cap is a workload request, not an error: serve one capped page.
     const effectiveLimit = Math.min(input.limit, LOC_MAX_PAGE_SIZE);
     const svc = getLocApiService();
@@ -282,6 +289,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
       result = await svc.search(
         {
           query: input.query,
+          sort: input.sort,
           ...(input.format !== undefined && { format: input.format }),
           ...(collectionSlug !== undefined && { collectionSlug }),
           ...(range.dates !== undefined && { dates: range.dates }),
@@ -336,6 +344,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
     const addNotice = noticeWriter(ctx);
 
     ctx.enrich.echo(input.query);
+    ctx.enrich({ effectiveSort: input.sort });
     if (collectionSlug !== undefined) ctx.enrich({ effectiveCollectionSlug: collectionSlug });
     if (subjectTerms !== undefined) ctx.enrich({ effectiveSubjectTerms: subjectTerms });
     // Mirror the upstream total for agent reasoning. The empty-result branches below return
@@ -425,9 +434,18 @@ export const locSearchItems = tool('libofcongress_search_items', {
       // Render both is_item states so a content[]-only client (no structuredContent) can tell a
       // get_item-eligible result from a non-item one — the structured `is_item` flag alone never
       // reaches it. See #31.
-      if (item.is_item)
+      if (item.link_notice) {
+        lines.push('_Non-item result — not a libofcongress_get_item target._');
+        lines.push(`**link_notice:** ${inlineText(item.link_notice)}`);
+      }
+      if (item.page_url) {
+        lines.push(
+          '_Non-item newspaper page — not a libofcongress_get_item target; pass page_url to libofcongress_get_newspaper_page. Optionally use the search query as match. That tool returns item_id for the issue._',
+        );
+        lines.push(`**page_url:** ${item.page_url}`);
+      } else if (!item.link_notice && item.is_item)
         lines.push('_Item — pass this ID to libofcongress_get_item for full metadata._');
-      else
+      else if (!item.link_notice)
         lines.push(
           '_Non-item result (collection, exhibit, guide, newspaper page, catalog record, or finding aid) — not a libofcongress_get_item target; open the URL._',
         );

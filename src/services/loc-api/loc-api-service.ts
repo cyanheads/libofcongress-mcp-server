@@ -20,7 +20,12 @@ import {
   UPSTREAM_UNAVAILABLE,
 } from '@/services/http.js';
 import { decodeText, htmlToText } from './loc-text.js';
-import { lccnFromPermalink, newspaperIssueId, normalizeItemId } from './loc-urls.js';
+import {
+  lccnFromPermalink,
+  newspaperIssueId,
+  normalizeItemId,
+  normalizePageUrl,
+} from './loc-urls.js';
 import { locationStateName } from './state-names.js';
 import type {
   LocCollection,
@@ -124,6 +129,18 @@ const FORMAT_SLUG_MAP: Record<string, string> = {
   film: 'film-and-videos',
   book: 'books',
   'notated-music': 'notated-music',
+};
+
+/** Original-format facets preserve collection routing when a material filter is also given. */
+const FORMAT_FACET_MAP: Record<string, string> = {
+  photo: 'photo, print, drawing',
+  map: 'map',
+  newspaper: 'newspaper',
+  manuscript: 'manuscript/mixed material',
+  audio: 'sound recording',
+  film: 'film, video',
+  book: 'book',
+  'notated-music': 'notated music',
 };
 
 /**
@@ -232,6 +249,15 @@ function normalizeSearchResult(result: RawLocSearchResult): LocItemSummary {
   const is_item = Boolean(lccn || result.url?.includes('/item/') || result.id?.includes('/item/'));
   const id = lccn ?? extractId(result);
   const url = normalizeUrl(result.url ?? `${LOC_BASE}/item/${id}/`);
+  const normalizedPage = normalizePageUrl(url);
+  const page_url =
+    normalizedPage && newspaperIssueId(new URL(normalizedPage).pathname)
+      ? normalizedPage
+      : undefined;
+  const link_notice =
+    URL.canParse(url) && new URL(url).hostname === 'catalog.loc.gov'
+      ? 'This retired catalog link does not open its record; it redirects to the replacement catalog home page.'
+      : undefined;
   // The top-level date can be LOC's padded sort key ("1915-01-01"); the row's item block carries
   // the date as cataloged ("c1915 Feb. 19.") when it has one, but on scores, manuscripts, maps,
   // and catalog-only books a coded value instead ("18950000", "185u", "uuuu"), where the top-level
@@ -247,6 +273,8 @@ function normalizeSearchResult(result: RawLocSearchResult): LocItemSummary {
     ...(format && { format }),
     is_item,
     url,
+    ...(page_url && { page_url }),
+    ...(link_notice && { link_notice }),
   };
 }
 
@@ -634,9 +662,9 @@ export class LocApiService {
    * Search LOC digital collections.
    *
    * `collectionSlug` scopes the search to one curated collection via its own endpoint, which
-   * accepts the same query string and returns the same envelope as /search/. It selects a base
-   * path, so it cannot combine with `format` — callers pick one (the search tool rejects the
-   * pair up front). An unrecognized slug 404s, surfacing as NotFound from fetchSearchPage on
+   * accepts the same query string and returns the same envelope as /search/. With `format`,
+   * the collection endpoint receives an original-format facet; format alone selects its
+   * material endpoint. An unrecognized slug 404s, surfacing as NotFound from fetchSearchPage on
    * page 1; on a later page the same 404 reads as out of range (see fetchSearchPage).
    *
    * `subjectTerms` (from `subjectFacetTerms`, ./subject-terms.ts) and `location` are ANDed into
@@ -649,6 +677,7 @@ export class LocApiService {
       query: string;
       format?: string;
       collectionSlug?: string;
+      sort?: 'relevance' | 'date' | 'date_desc';
       /** A `dates` value from `resolveDateRange` (./date-range.ts), sent as given. */
       dates?: string;
       subjectTerms?: string[];
@@ -676,9 +705,13 @@ export class LocApiService {
     });
     qs.set('c', String(limit));
     qs.set('sp', String(page));
+    if (params.sort && params.sort !== 'relevance') qs.set('sb', params.sort);
     if (params.dates) qs.set('dates', params.dates);
     const fa = (params.subjectTerms ?? []).map((term) => `subject:${term}`);
     if (params.location) fa.push(`location:${params.location}`);
+    if (params.collectionSlug && params.format) {
+      fa.push(`original-format:${FORMAT_FACET_MAP[params.format]}`);
+    }
     if (fa.length > 0) qs.set('fa', fa.join('|'));
 
     const { items, pagination, facets } = await this.fetchSearchPage(
@@ -795,6 +828,7 @@ export class LocApiService {
       dates?: string;
       state?: string;
       newspaperTitle?: string;
+      sort?: 'relevance' | 'date' | 'date_desc';
       limit?: number;
       page?: number;
     },
@@ -805,6 +839,7 @@ export class LocApiService {
     const qs = new URLSearchParams({ fo: 'json', q: params.query, at: 'results,pagination' });
     qs.set('c', String(limit));
     qs.set('sp', String(page));
+    if (params.sort && params.sort !== 'relevance') qs.set('sb', params.sort);
     if (params.dates) qs.set('dates', params.dates);
     const fa: string[] = [];
     // location_state, not location: location also matches city and county names, so "washington"

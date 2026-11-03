@@ -1,0 +1,31 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "libofcongress-mcp-server",
+  "version": "0.5.1",
+  "description": "Search LOC digital collections, browse Chronicling America newspapers with full OCR text, and look up LC Subject Headings via MCP. STDIO or Streamable HTTP.",
+  "author": {
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
+  },
+  "homepage": "https://github.com/cyanheads/libofcongress-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/libofcongress-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "library-of-congress",
+    "loc",
+    "chronicling-america",
+    "newspapers",
+    "lcsh",
+    "subject-headings",
+    "digital-collections",
+    "historical-research",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http"
+  ]
+}

@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { noticeWriter } from '@/mcp-server/tools/notices.js';
+import { noticeWriter, renderNotice } from '@/mcp-server/tools/notices.js';
 import { inlineText, lineText } from '@/mcp-server/tools/render-text.js';
 import {
   getLocApiService,
@@ -200,6 +200,8 @@ export const locGetItem = tool('libofcongress_get_item', {
         'Set when page_offset is past the last page, or when page_limit was capped. Absent otherwise.',
       ),
   },
+
+  enrichmentTrailer: { notice: { render: renderNotice } },
 
   errors: [
     {
