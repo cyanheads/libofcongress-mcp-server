@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.6.1](changelog/0.6.x/0.6.1.md) — 2026-11-13
+
+Document transcriptions for the Lincoln papers and other American Memory collections, a contributor filter and a newspaper language filter with facets, and fixes for LOC outages read as empty results, dropped audio and video resources, and padded dates.
+
 ## [0.6.0](changelog/0.6.x/0.6.0.md) — 2026-11-03 · ⚠️ Breaking
 
 Research navigation, paged subject discovery, and a published research guide.
