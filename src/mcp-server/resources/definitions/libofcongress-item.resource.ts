@@ -75,8 +75,10 @@ export const locItemResource = resource('libofcongress://item/{+item_id}', {
     {
       reason: 'request_timed_out',
       code: JsonRpcErrorCode.Timeout,
+      retryable: true,
       when: 'The Library of Congress did not respond within the 50-second request budget.',
-      recovery: 'Retry in a few minutes; the Library of Congress is responding slowly.',
+      recovery:
+        'Retry this call once, unchanged; a repeat of a slow request can return faster. If it times out again, retry in a few minutes.',
     },
     {
       reason: 'upstream_unavailable',

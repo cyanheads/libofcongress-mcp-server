@@ -1,6 +1,6 @@
 /**
- * @fileoverview Item records and item-search rows captured live from www.loc.gov (2026-10-14 and
- * 2026-10-15).
+ * @fileoverview Item records and item-search rows captured live from www.loc.gov (2026-10-14,
+ * 2026-10-15, and 2026-11-13).
  * Item records are `/item/{id}/?fo=json&at=item,resources,related_items` responses with the `item`
  * block cut to the fields the tests read and some file groups cut to a few representative entries;
  * resource keys and file-entry keys are LOC's own. Multi-page resources keep one captured file
@@ -31,12 +31,22 @@ function pageGroups(
   });
 }
 
-/** FSA photo `2017760320`: `item.date` is the padded sort key, `created_published_date` the cataloged date. */
+/**
+ * FSA photo `2017760320`: `item.date` is the padded sort key, `created_published_date` the cataloged
+ * date. `contributor_names` holds the name with dates and role, `contributors` the same person in
+ * the contributor facet's form (captured 2026-11-13).
+ */
 export const PHOTO_ITEM_2017760320 = {
   item: {
     title: 'Adobe farmhouse of rehabilitation client. Cimarron County, Oklahoma. Dust bowl',
     date: '1936-01-01',
     created_published_date: '1936 Apr.',
+    contributor_names: ['Rothstein, Arthur, 1915-1985, photographer'],
+    contributors: [
+      {
+        'rothstein, arthur': 'https://www.loc.gov/search/?fa=contributor:rothstein,+arthur&fo=json',
+      },
+    ],
     url: 'https://www.loc.gov/item/2017760320/',
   },
   resources: [
@@ -633,4 +643,387 @@ export const AUDIO_ITEM_2023622861 = {
   },
   resources: [],
   related_items: [],
+};
+
+/**
+ * Lomax recording `lomaxbib000571` (captured 2026-11-13): two url-less audio resources, two copies
+ * of one disc side, the first download-restricted. Each holds one file group: the player config
+ * and the MP3 already in `audio`. `item.related_items` links the disc sleeve root-relative
+ * (`/item/lomaxbib000840`); the nested `item.item.date` is day-precise. Player configs cut to a few
+ * keys; top-level related items cut to one.
+ */
+export const AUDIO_ITEM_LOMAXBIB000571 = {
+  item: {
+    title: "Po' Stranger Blues",
+    date: '1939-06-04',
+    created_published: ['Raiford, Florida, June 4, 1939'],
+    item: { date: '19390604' },
+    related_items: [{ title: 'Disc sleeve for AFS Disc #2718', url: '/item/lomaxbib000840' }],
+    url: 'https://www.loc.gov/item/lomaxbib000571/',
+  },
+  resources: [
+    {
+      audio: 'https://tile.loc.gov/storage-services/media/ingested/api/loc.afc.afcss39.2718a2.mp3',
+      download_restricted: true,
+      files: [
+        [
+          {
+            canDownload: false,
+            detailUrl: 'https://www.loc.gov/item/lomaxbib000571/',
+            download:
+              'https://tile.loc.gov/storage-services/media/ingested/api/loc.afc.afcss39.2718a2.mp3',
+            mediaType: 'A',
+            mimetype: 'application/x-audio',
+          },
+          {
+            mimetype: 'audio/mp3',
+            url: 'https://tile.loc.gov/storage-services/media/ingested/api/loc.afc.afcss39.2718a2.mp3',
+          },
+        ],
+      ],
+      media_object_id: 'CEA2B42FC1E40108E0438C93F0280108',
+      poster: null,
+    },
+    {
+      audio: 'https://tile.loc.gov/storage-services/media/afc/lomax/afc1939001_02718a2.mp3',
+      download_restricted: false,
+      files: [
+        [
+          {
+            canDownload: true,
+            detailUrl: 'https://www.loc.gov/item/lomaxbib000571/',
+            download:
+              'https://tile.loc.gov/storage-services/media/afc/lomax/afc1939001_02718a2.mp3',
+            mediaType: 'A',
+            mimetype: 'application/x-audio',
+          },
+          {
+            mimetype: 'audio/mp3',
+            url: 'https://tile.loc.gov/storage-services/media/afc/lomax/afc1939001_02718a2.mp3',
+          },
+        ],
+      ],
+      media_object_id: '04344167D6FE0166E0538C93F0280166',
+      poster: null,
+    },
+  ],
+  related_items: [
+    {
+      id: 'http://www.loc.gov/item/lomaxbib000831/',
+      title: 'Disc sleeve for AFS Disc #2707',
+      url: 'https://www.loc.gov/item/lomaxbib000831/',
+    },
+  ],
+};
+
+/**
+ * Disc sleeve `lomaxbib000840` (captured 2026-11-13), the record `lomaxbib000571` links: every
+ * `item.related_items` entry is a root-relative `/item/` link. Resources cut to none.
+ */
+export const SLEEVE_ITEM_LOMAXBIB000840 = {
+  item: {
+    title: 'Disc sleeve for AFS Disc #2718',
+    date: '1939-06-04',
+    item: { date: '19390604' },
+    related_items: [
+      { title: "Po' Stranger Blues", url: '/item/lomaxbib000571' },
+      { title: 'Dupree Blues', url: '/item/lomaxbib000572' },
+      { title: 'Steal Liza Jane', url: '/item/lomaxbib000573' },
+      { title: 'Sissy in de Barn', url: '/item/lomaxbib000574' },
+    ],
+    url: 'https://www.loc.gov/item/lomaxbib000840/',
+  },
+  resources: [],
+  related_items: [],
+};
+
+/**
+ * Poetry reading `2020729028` (captured 2026-11-13): tape side A is a one-page resource with a
+ * `url`, side B a url-less audio resource whose file group holds the player config and its MP3.
+ * Player configs cut to a few keys; related items cut to none.
+ */
+export const AUDIO_ITEM_2020729028 = {
+  item: {
+    title: 'Reading: Vincent Katz, Michael Lally',
+    date: '1990',
+    created_published: ['14-Nov-90.'],
+    item: { date: '1990' },
+    url: 'https://www.loc.gov/item/2020729028/',
+  },
+  resources: [
+    {
+      audio: 'https://tile.loc.gov/storage-services/service/rbc/stmarks/014B106A/014B106A.mp3',
+      download_restricted: true,
+      files: [
+        [
+          {
+            canDownload: false,
+            detailUrl: 'https://www.loc.gov/item/2020729028/',
+            download:
+              'https://tile.loc.gov/storage-services/service/rbc/stmarks/014B106A/014B106A.mp3',
+            mediaType: 'A',
+            mimetype: 'application/x-audio',
+          },
+        ],
+      ],
+      media_object_id: 'C7D2388A951A1878E053CAE7938CCEB5',
+      poster: null,
+      url: 'https://www.loc.gov/resource/2020729028/',
+    },
+    {
+      audio: 'https://tile.loc.gov/storage-services/service/rbc/stmarks/014B106B/014B106B.mp3',
+      download_restricted: true,
+      files: [
+        [
+          {
+            canDownload: false,
+            detailUrl: 'https://www.loc.gov/item/2020729028/',
+            download:
+              'https://tile.loc.gov/storage-services/service/rbc/stmarks/014B106B/014B106B.mp3',
+            mediaType: 'A',
+            mimetype: 'application/x-audio',
+          },
+          {
+            mimetype: 'audio/mp3',
+            url: 'https://tile.loc.gov/storage-services/service/rbc/stmarks/014B106B/014B106B.mp3',
+          },
+        ],
+      ],
+      media_object_id: 'C7D2388EB49A187AE053CAE7938CEF5C',
+      poster: null,
+    },
+  ],
+  related_items: [],
+};
+
+/**
+ * Folklife video `ncr002372` (captured 2026-11-13): one url-less video resource with no
+ * `download_restricted`, its `image` a root-relative format placeholder. Player config cut to a few
+ * keys; related items cut to none.
+ */
+export const VIDEO_ITEM_NCR002372 = {
+  item: {
+    title: 'Roundup: Going to Camp',
+    date: '1979-10-01',
+    created_published: ['October 1, 1979'],
+    item: { date: '19791001' },
+    url: 'https://www.loc.gov/item/ncr002372/',
+  },
+  resources: [
+    {
+      backgroundimage: null,
+      files: [
+        [
+          {
+            canDownload: true,
+            detailUrl: 'http://hdl.loc.gov/loc.afc/afc96ran.v001',
+            download: 'https://tile.loc.gov/storage-services/media/ammem/Buckaroos/001.mp4',
+            mediaType: 'V',
+            mimetype: 'application/x-video',
+            url: 'https://tile.loc.gov/storage-services/media/ammem/Buckaroos/001.mp4',
+          },
+        ],
+      ],
+      image: '/static/images/original-format/film-video.svg',
+      media_object_id: 'E3628D894807047AE0438C93F028047A',
+      video: 'https://tile.loc.gov/storage-services/media/ammem/Buckaroos/001.mp4',
+      video_stream:
+        'https://tile.loc.gov/streaming-services/iiif/media:ammem:Buckaroos:001/full/full/0/full/default.m3u8',
+    },
+  ],
+  related_items: [],
+};
+
+/**
+ * Edison film `00694298` (captured 2026-11-13): one one-page resource with a `url`, its `image` and
+ * `poster` protocol-relative, `download_restricted: false`. File group cut to the player config,
+ * the MP4, and the GIF; related items cut to none. Its five `contributor_names` (roles after a
+ * comma, one with a parenthesized fuller name) and five `contributors` keys list the same names in
+ * different orders.
+ */
+export const FILM_ITEM_00694298 = {
+  item: {
+    title: 'Sandow',
+    date: '1894',
+    created_published: ['[United States : Edison Manufacturing Co., 1894?]'],
+    item: { date: '1894' },
+    contributor_names: [
+      'Dickson, W. K.-L. (William Kennedy-Laurie), 1860-1935, production',
+      'Sandow, Eugen, 1867-1925, performer',
+      'Heise, William, camera',
+      'Thomas A. Edison, Inc',
+      'Hendricks (Gordon) Collection (Library of Congress)',
+    ],
+    contributors: [
+      {
+        'dickson, w. k.-l. (william kennedy-laurie)':
+          'https://www.loc.gov/search/?fa=contributor:dickson,+w.+k.-l.+%28william+kennedy-laurie%29&fo=json',
+      },
+      { 'heise, william': 'https://www.loc.gov/search/?fa=contributor:heise,+william&fo=json' },
+      {
+        'hendricks (gordon) collection (library of congress)':
+          'https://www.loc.gov/search/?fa=contributor:hendricks+%28gordon%29+collection+%28library+of+congress%29&fo=json',
+      },
+      { 'sandow, eugen': 'https://www.loc.gov/search/?fa=contributor:sandow,+eugen&fo=json' },
+      {
+        'thomas a. edison, inc':
+          'https://www.loc.gov/search/?fa=contributor:thomas+a.+edison,+inc&fo=json',
+      },
+    ],
+    url: 'https://www.loc.gov/item/00694298/',
+  },
+  resources: [
+    {
+      caption: 'Digital viewing copy',
+      download_restricted: false,
+      duration: 54,
+      files: [
+        [
+          {
+            canDownload: true,
+            detailUrl: 'https://www.loc.gov/item/00694298/',
+            download:
+              'https://tile.loc.gov/storage-services/service/mbrs/ntscrm/00179292/00179292.mp4',
+            mediaType: 'V',
+            mimetype: 'application/x-video',
+          },
+          {
+            levels: 1,
+            mimetype: 'video/mp4',
+            size: 50824142,
+            url: 'https://tile.loc.gov/storage-services/service/mbrs/ntscrm/00179292/00179292.mp4',
+          },
+          {
+            height: 375,
+            levels: 1,
+            mimetype: 'image/gif',
+            size: 62935,
+            url: 'https://tile.loc.gov/storage-services/service/mbrs/ntscrm/00179292/00179292.gif',
+            width: 500,
+          },
+        ],
+      ],
+      image: '//tile.loc.gov/storage-services/service/mbrs/ntscrm/00179292/00179292.gif',
+      media_object_id: '10E690C49368CE1FE0635D0C938C56DF',
+      poster: '//tile.loc.gov/storage-services/service/mbrs/ntscrm/00179292/00179292.jpg',
+      url: 'https://www.loc.gov/resource/ntscrm.00179292/',
+      video: 'https://tile.loc.gov/storage-services/service/mbrs/ntscrm/00179292/00179292.mp4',
+      video_stream:
+        'https://tile.loc.gov/streaming-services/iiif/service:mbrs:ntscrm:00179292:00179292/full/full/0/full/default.m3u8',
+    },
+  ],
+  related_items: [],
+};
+
+/** `mal4356500` page N's file group: one JPEG size and the JP2 master. */
+const malPageGroup = (page: number): FileGroup => {
+  const n = String(page).padStart(3, '0');
+  return [
+    {
+      levels: 1,
+      mimetype: 'image/jpeg',
+      url: `https://tile.loc.gov/image-services/iiif/service:mss:mal:435:4356500:${n}/full/pct:25/0/default.jpg`,
+    },
+    {
+      levels: 7,
+      mimetype: 'image/jp2',
+      url: `https://tile.loc.gov/storage-services/service/mss/mal/435/4356500/${n}.jp2`,
+    },
+  ];
+};
+
+/**
+ * Gettysburg Address, Nicolay copy, `mal4356500` (captured 2026-11-13): a month-precision record
+ * whose `item.date` is the padded `1863-11-01` and whose nested `item.item.date` is the compact
+ * `18631100`. One four-page resource with no per-page text service; its `fulltext_file` is the
+ * document's TEI transcription. Page 1's group also holds a url-less `text/xml` entry (its inline
+ * `fulltext` cut). File groups cut to two entries; related items cut to none.
+ */
+export const MANUSCRIPT_ITEM_MAL4356500 = {
+  item: {
+    title:
+      'Abraham Lincoln papers: Series 3. General Correspondence. 1837-1897: Abraham Lincoln, [November 1863] (Gettysburg Address: Nicolay Copy)',
+    date: '1863-11-01',
+    created_published: ['November 1863'],
+    item: { date: '18631100' },
+    url: 'https://www.loc.gov/item/mal4356500/',
+  },
+  resources: [
+    {
+      caption: '',
+      files: [
+        [...malPageGroup(1), { mimetype: 'text/xml', use: 'text' }],
+        malPageGroup(2),
+        malPageGroup(3),
+        malPageGroup(4),
+      ],
+      fulltext_file:
+        'https://tile.loc.gov/storage-services/service/mss/mal/435/4356500/4356500.xml',
+      image:
+        'https://tile.loc.gov/image-services/iiif/service:mss:mal:435:4356500:001/full/pct:6.25/0/default.jpg',
+      pdf: 'https://tile.loc.gov/storage-services/service/mss/mal/435/4356500/4356500.pdf',
+      url: 'https://www.loc.gov/resource/mal.4356500/',
+    },
+  ],
+  related_items: [],
+};
+
+/**
+ * Henry Reed fiddle-tune transcription `afcreed000001` (captured 2026-11-13): a year-precision
+ * record cataloged as a range. `item.date` is the padded `1966-01-01`, the nested `item.item.date`
+ * the compact `19660000`, and the imprint `[Between 1966 and 1968]`. Resources and related items
+ * cut to none.
+ */
+export const SCORE_ITEM_AFCREED000001 = {
+  item: {
+    title: '[Rocky Mountain Goat] [music transcription]',
+    date: '1966-01-01',
+    created_published: ['[Between 1966 and 1968]'],
+    item: { date: '19660000' },
+    url: 'https://www.loc.gov/item/afcreed000001/',
+  },
+  resources: [],
+  related_items: [],
+};
+
+/**
+ * Three rows of `/collections/abraham-lincoln-papers/?q=gettysburg&dates=1863/1863&c=12` (captured
+ * 2026-11-13), one per precision of the compact `item.date`: month (`18631100`), day
+ * (`18631120`), and year (`18630000`), each beside the padded top-level `date`. Cut to the fields
+ * the normalizer reads, plus `dates`.
+ */
+export const LINCOLN_GETTYSBURG_1863_SEARCH = {
+  results: [
+    {
+      id: 'http://www.loc.gov/item/mal4356500/',
+      url: 'https://www.loc.gov/item/mal4356500/',
+      title:
+        'Abraham Lincoln papers: Series 3. General Correspondence. 1837-1897: Abraham Lincoln, [November 1863] (Gettysburg Address: Nicolay Copy)',
+      date: '1863-11-01',
+      dates: ['1863-11'],
+      original_format: ['manuscript/mixed material'],
+      item: { date: '18631100', created_published: ['November 1863'] },
+    },
+    {
+      id: 'http://www.loc.gov/item/mal2812800/',
+      url: 'https://www.loc.gov/item/mal2812800/',
+      title:
+        'Abraham Lincoln papers: Series 1. General Correspondence. 1833-1916: Abraham Lincoln to Edward Everett, Friday, November 20, 1863 (Gettysburg Address)',
+      date: '1863-11-20',
+      dates: ['1863-11-20'],
+      original_format: ['manuscript/mixed material'],
+      item: { date: '18631120', created_published: ['November 20, 1863'] },
+    },
+    {
+      id: 'http://www.loc.gov/item/mal2910600/',
+      url: 'https://www.loc.gov/item/mal2910600/',
+      title:
+        'Abraham Lincoln papers: Series 1. General Correspondence. 1833-1916: Julia K. Fish to Abraham Lincoln, 1863 (Requests manuscript of Gettysburg Address for sale and New York Sanitary Fair)',
+      date: '1863-01-01',
+      dates: ['1863'],
+      original_format: ['manuscript/mixed material'],
+      item: { date: '18630000', created_published: ['1863'] },
+    },
+  ],
+  pagination: { of: 3, perpage: 12, total: 1 },
 };

@@ -15,17 +15,24 @@ import { locGetItem } from '@/mcp-server/tools/definitions/libofcongress-get-ite
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 import { htmlToText } from '@/services/loc-api/loc-text.js';
 import {
+  AUDIO_ITEM_2020729028,
   AUDIO_ITEM_2023622861,
   AUDIO_ITEM_JUKEBOX_68453,
+  AUDIO_ITEM_LOMAXBIB000571,
   BASEBALL_CARD_ITEM_2008676581,
   BOOK_ITEM_00003348,
   BOOK_ITEM_02007458,
   BOOK_ITEM_2005567251,
   BOOK_ITEM_2024769398,
+  FILM_ITEM_00694298,
+  MANUSCRIPT_ITEM_MAL4356500,
   MANUSCRIPT_ITEM_MM77093930,
   MAP_ITEM_98688514,
   NEWSPAPER_ISSUE_SN83030214_1912_04_16,
   PHOTO_ITEM_2017760320,
+  SCORE_ITEM_AFCREED000001,
+  SLEEVE_ITEM_LOMAXBIB000840,
+  VIDEO_ITEM_NCR002372,
 } from '../fixtures/loc-items.js';
 import { MAP_ITEM_77694805 } from '../fixtures/loc-subjects.js';
 import { MANUSCRIPT_RIGHTS_MM77093930, NEWSPAPER_NOTES_SN83030214 } from '../fixtures/loc-text.js';
@@ -331,6 +338,7 @@ describe('locGetItem', () => {
       title: 'Portrait of Abraham Lincoln',
       date: '1865',
       contributors: ['Brady, Mathew B.'],
+      contributor_terms: [],
       subject_headings: ['Presidents--United States--Portraits', 'Lincoln, Abraham, 1809-1865'],
       subject_terms: ['presidents', 'united states', 'portraits', 'lincoln, abraham'],
       notes: [],
@@ -387,6 +395,70 @@ describe('locGetItem', () => {
     expect(text).toContain(
       '**Subject terms:** maps; transportation; united states; railroads; oklahoma',
     );
+  });
+
+  describe('contributor_terms (#92)', () => {
+    it('returns the captured filter-form names beside the cataloged contributors on both surfaces', async () => {
+      vi.stubGlobal('fetch', mockFetch(JSON.stringify(PHOTO_ITEM_2017760320)));
+
+      const result = await runToolContract(locGetItem, { item_id: '2017760320' });
+
+      const sc = structured(result);
+      expect(sc.contributor_terms).toEqual(['rothstein, arthur']);
+      expect(sc.contributors).toEqual(['Rothstein, Arthur, 1915-1985, photographer']);
+      const text = contentText(result);
+      expect(text).toContain('**Contributors:** Rothstein, Arthur, 1915-1985, photographer\n');
+      expect(text).toContain('**Contributor terms:** rothstein, arthur\n');
+    });
+
+    it('joins every term in LOC order with " | ", since a term can carry a comma or a semicolon', async () => {
+      vi.stubGlobal('fetch', mockFetch(JSON.stringify(FILM_ITEM_00694298)));
+
+      const result = await runToolContract(locGetItem, { item_id: '00694298' });
+
+      const terms = [
+        'dickson, w. k.-l. (william kennedy-laurie)',
+        'heise, william',
+        'hendricks (gordon) collection (library of congress)',
+        'sandow, eugen',
+        'thomas a. edison, inc',
+      ];
+      expect(structured(result).contributor_terms).toEqual(terms);
+      expect(renderedContentText(result)).toContain(`Contributor terms: ${terms.join(' | ')}\n`);
+    });
+
+    it('returns an empty list and no line when the record carries no item.contributors', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch(
+          JSON.stringify({
+            item: {
+              title: 'Names only',
+              url: 'https://www.loc.gov/item/names-only/',
+              contributor_names: ['Rothstein, Arthur, 1915-1985, photographer'],
+            },
+          }),
+        ),
+      );
+
+      const result = await runToolContract(locGetItem, { item_id: 'names-only' });
+
+      expect(structured(result).contributor_terms).toEqual([]);
+      expect(contentText(result)).not.toContain('Contributor terms');
+    });
+
+    it('describes contributor_terms as filter values and contributors as matching nothing', () => {
+      expect(locGetItem.output.shape.contributor_terms.description).toMatch(
+        /libofcongress_search_items contributor filter/,
+      );
+      expect(locGetItem.output.shape.contributor_terms.description).toMatch(
+        /newspaper[^.]*institution that digitized/,
+      );
+      expect(locGetItem.output.shape.contributors.description).toMatch(
+        /match nothing as the libofcongress_search_items contributor filter/,
+      );
+      expect(locGetItem.description).toContain('contributor terms');
+    });
   });
 
   describe('date as cataloged (#62)', () => {
@@ -465,6 +537,66 @@ describe('locGetItem', () => {
       expect(locGetItem.output.shape.date.description).toMatch(
         /[Aa]bsent when LOC records only a coded value/,
       );
+    });
+  });
+
+  describe('date at its cataloged precision (#88)', () => {
+    // The compact-date precedence is tabled in loc-api-service.test.ts; these prove it reaches
+    // both surfaces.
+    it.each([
+      { id: 'mal4356500', body: MANUSCRIPT_ITEM_MAL4356500, date: '1863-11', padded: '1863-11-01' },
+      { id: 'afcreed000001', body: SCORE_ITEM_AFCREED000001, date: '1966', padded: '1966-01-01' },
+    ])(
+      'returns $id as $date on both surfaces, never the padded $padded',
+      async ({ id, body, date, padded }) => {
+        serveByHost({ 'www.loc.gov': body });
+
+        const result = await runToolContract(locGetItem, { item_id: id });
+
+        expect(structured(result).date).toBe(date);
+        const text = contentText(result);
+        expect(text).toContain(`**Date:** ${date}\n`);
+        expect(text).not.toContain(padded);
+      },
+    );
+
+    it('keeps the day-precise date of lomaxbib000571 on both surfaces', async () => {
+      serveByHost({ 'www.loc.gov': AUDIO_ITEM_LOMAXBIB000571 });
+
+      const result = await runToolContract(locGetItem, { item_id: 'lomaxbib000571' });
+
+      expect(structured(result).date).toBe('1939-06-04');
+      expect(contentText(result)).toContain('**Date:** 1939-06-04\n');
+    });
+
+    it('keeps the range of afcreed000001 in its imprint beside the year', async () => {
+      serveByHost({ 'www.loc.gov': SCORE_ITEM_AFCREED000001 });
+
+      const result = await runToolContract(locGetItem, { item_id: 'afcreed000001' });
+
+      expect(structured(result)).toMatchObject({
+        date: '1966',
+        imprint: '[Between 1966 and 1968]',
+      });
+    });
+
+    it.each([
+      ['00003348', BOOK_ITEM_00003348, '0w0 d1804 d1806'],
+      ['2024769398', BOOK_ITEM_2024769398, '||||'],
+    ])(
+      'still omits the date of %s when its nested date is the same coded value',
+      async (itemId, body, coded) => {
+        serveByHost({ 'www.loc.gov': { ...body, item: { ...body.item, item: { date: coded } } } });
+
+        const result = await runToolContract(locGetItem, { item_id: itemId });
+
+        expect(structured(result)).not.toHaveProperty('date');
+        expect(contentText(result)).not.toContain('**Date:**');
+      },
+    );
+
+    it('lists the year-month form in the date description', () => {
+      expect(locGetItem.output.shape.date.description).toContain('"1863-11"');
     });
   });
 
@@ -666,6 +798,121 @@ describe('locGetItem', () => {
       );
     });
 
+    describe('resources without a url (#87)', () => {
+      // The resource normalization is tabled in loc-api-service.test.ts; these prove each shape
+      // reaches both surfaces and passes the output contract.
+      it('lists url-less recordings by their audio on both surfaces, never as undefined', async () => {
+        serveItem(AUDIO_ITEM_LOMAXBIB000571);
+
+        const result = await runToolContract(locGetItem, { item_id: 'lomaxbib000571' });
+
+        expect(result.isError).toBeFalsy();
+        const [restricted, open] = AUDIO_ITEM_LOMAXBIB000571.resources;
+        expect(structured(result)).toMatchObject({
+          resources: [
+            { page_count: 0, audio: restricted!.audio, download_restricted: true },
+            { page_count: 0, audio: open!.audio, download_restricted: false },
+          ],
+          pages: [],
+          page_total: 0,
+        });
+        const text = contentText(result);
+        expect(text).toContain(
+          [
+            '**Resources (2):**',
+            `- 0 page(s); audio: ${restricted!.audio}; download restricted: yes`,
+            `- 0 page(s); audio: ${open!.audio}; download restricted: no`,
+            '**Pages:** none listed of 0',
+          ].join('\n'),
+        );
+        expect(text).not.toContain('undefined');
+      });
+
+      it('lists tape side B after side A on both surfaces, paging side A alone', async () => {
+        serveItem(AUDIO_ITEM_2020729028);
+
+        const result = await runToolContract(locGetItem, { item_id: '2020729028' });
+
+        const [sideA, sideB] = AUDIO_ITEM_2020729028.resources;
+        const sc = structured(result);
+        expect(sc).toMatchObject({ page_total: 1, pages: [{ page_url: sideA!.url }] });
+        expect((sc.resources as Array<Record<string, unknown>>)[1]).toEqual({
+          page_count: 0,
+          audio: sideB!.audio,
+          download_restricted: true,
+        });
+        expect(contentText(result)).toContain(
+          [
+            '**Resources (2):**',
+            `- ${sideA!.url} — 1 page(s); audio: ${sideA!.audio}; download restricted: yes`,
+            `- 0 page(s); audio: ${sideB!.audio}; download restricted: yes`,
+            `**Pages 1–1 of 1:**`,
+          ].join('\n'),
+        );
+      });
+
+      it.each([
+        {
+          name: 'a url-less video with a resolved placeholder image',
+          id: 'ncr002372',
+          body: VIDEO_ITEM_NCR002372,
+          line: '- 0 page(s); image: https://www.loc.gov/static/images/original-format/film-video.svg; video: https://tile.loc.gov/storage-services/media/ammem/Buckaroos/001.mp4',
+        },
+        {
+          name: 'a film with an https image and download_restricted: false',
+          id: '00694298',
+          body: FILM_ITEM_00694298,
+          line: '- https://www.loc.gov/resource/ntscrm.00179292/ — 1 page(s); image: https://tile.loc.gov/storage-services/service/mbrs/ntscrm/00179292/00179292.gif; video: https://tile.loc.gov/storage-services/service/mbrs/ntscrm/00179292/00179292.mp4; download restricted: no',
+        },
+      ])('renders $name on both surfaces', async ({ id, body, line }) => {
+        serveItem(body);
+
+        const result = await runToolContract(locGetItem, { item_id: id });
+
+        expect(result.isError).toBeFalsy();
+        const resource = (structured(result).resources as Array<Record<string, unknown>>)[0]!;
+        expect(resource.video).toBe(body.resources[0]!.video);
+        expect(contentText(result)).toContain(`${line}\n`);
+      });
+    });
+
+    describe('has_transcription (#90)', () => {
+      // The fulltext_file test is tabled in loc-api-service.test.ts; these prove the flag's wiring.
+      it('flags the Gettysburg Address resource on both surfaces, its pages without text', async () => {
+        serveItem(MANUSCRIPT_ITEM_MAL4356500);
+
+        const result = await runToolContract(locGetItem, { item_id: 'mal4356500' });
+
+        const sc = structured(result);
+        expect((sc.resources as Array<Record<string, unknown>>)[0]).toMatchObject({
+          has_transcription: true,
+        });
+        expect((sc.pages as Array<{ has_text: boolean }>).some((p) => p.has_text)).toBe(false);
+        const { image, pdf, url } = MANUSCRIPT_ITEM_MAL4356500.resources[0]!;
+        expect(contentText(result)).toContain(
+          `- ${url} — 4 page(s); image: ${image}; pdf: ${pdf}; has transcription\n`,
+        );
+      });
+
+      it('leaves it off a book whose volume text is a .txt file, on both surfaces', async () => {
+        serveItem(BOOK_ITEM_02007458);
+
+        const result = await runToolContract(locGetItem, { item_id: '02007458' });
+
+        expect((structured(result).resources as unknown[])[0]).not.toHaveProperty(
+          'has_transcription',
+        );
+        expect(contentText(result)).not.toContain('has transcription');
+      });
+
+      it('describes has_transcription beside has_text as a reason to read a page', () => {
+        const field =
+          locGetItem.output.shape.resources.element.shape.has_transcription.description ?? '';
+        expect(field).toContain('libofcongress_get_newspaper_page');
+        expect(field).toContain('has_text false');
+        expect(locGetItem.description).toMatch(/has_text.*has_transcription/);
+      });
+    });
     it('lists the diary page 3 url with has_text for the page reader', async () => {
       serveItem(MANUSCRIPT_ITEM_MM77093930);
 
@@ -690,6 +937,7 @@ describe('locGetItem', () => {
       item_id: 'sparse-id',
       title: 'Sparse Item',
       contributors: [],
+      contributor_terms: [],
       subject_headings: [],
       subject_terms: [],
       notes: [],
@@ -721,6 +969,7 @@ describe('locGetItem', () => {
       title: 'Political cartoon',
       summary: 'A political cartoon commenting on the 1884 election.',
       contributors: [],
+      contributor_terms: [],
       subject_headings: [],
       subject_terms: [],
       notes: [],
@@ -753,6 +1002,7 @@ describe('locGetItem', () => {
       item_id: 'open-item',
       title: 'Open Item',
       contributors: [],
+      contributor_terms: [],
       subject_headings: [],
       subject_terms: [],
       notes: [],
@@ -788,6 +1038,7 @@ describe('locGetItem', () => {
       item_id: 'many-related',
       title: 'Item with many related',
       contributors: [],
+      contributor_terms: [],
       subject_headings: [],
       subject_terms: [],
       notes: [],
@@ -820,6 +1071,7 @@ describe('locGetItem', () => {
       item_id: 'multi-resource',
       title: 'Item with many resources',
       contributors: [],
+      contributor_terms: [],
       subject_headings: [],
       subject_terms: [],
       notes: [],
@@ -844,6 +1096,50 @@ describe('locGetItem', () => {
     expect(text).toContain('**Pages:** none listed of 0');
   });
 
+  it('format() renders a resource without a url by its media URL, never as undefined (#87)', () => {
+    const output = locGetItem.output.parse({
+      item_id: 'url-less',
+      title: 'Recordings',
+      contributors: [],
+      contributor_terms: [],
+      subject_headings: [],
+      subject_terms: [],
+      notes: [],
+      languages: [],
+      locations: [],
+      former_ids: [],
+      original_formats: [],
+      online_formats: [],
+      resources: [
+        { page_count: 0, video: 'https://tile.loc.gov/reel-2.mp4', download_restricted: true },
+        { page_count: 0 },
+      ],
+      pages: [],
+      page_total: 0,
+      related_items: [],
+      url: 'https://www.loc.gov/item/url-less/',
+    });
+    const text = (locGetItem.format!(output)[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain(
+      [
+        '**Resources (2):**',
+        '- 0 page(s); video: https://tile.loc.gov/reel-2.mp4; download restricted: yes',
+        '- 0 page(s)',
+        '**Pages:** none listed of 0',
+      ].join('\n'),
+    );
+    expect(text).not.toContain('undefined');
+  });
+
+  it('describes the url-less resource shape and its media fields in the output schema (#87)', () => {
+    const resource = locGetItem.output.shape.resources.element.shape;
+    expect(resource.url.description).toMatch(/Absent on a recording side or film reel/);
+    expect(resource.video.description).toMatch(/MP4/);
+    expect(resource.download_restricted.description).toMatch(/[Aa]bsent when LOC/);
+    expect(resource.page_count.description).toMatch(/0 for a resource without a url/);
+    expect(locGetItem.description).toContain('video');
+  });
+
   it('format() reaches every structuredContent array value on a full window with files (#63)', () => {
     // A full window: the 100-page cap, each page with its files, plus related items.
     const pages = Array.from({ length: 100 }, (_, i) => ({
@@ -859,6 +1155,7 @@ describe('locGetItem', () => {
       item_id: 'mgw1b.721',
       title: 'Diary, January 1 - December 31, 1772',
       contributors: [],
+      contributor_terms: [],
       subject_headings: [],
       subject_terms: [],
       notes: [],
@@ -1056,6 +1353,28 @@ describe('locGetItem', () => {
       expect(structured(result).item_id).toBe('2003542660');
     });
 
+    it('accepts the root-relative item link a record lists in related_items, once resolved (#87)', async () => {
+      // LOC sends the sleeve link as "/item/lomaxbib000840", which item_id rejects as written.
+      const unresolved = await runToolContract(locGetItem, { item_id: '/item/lomaxbib000840' });
+      expect(wireError(unresolved).data).toMatchObject({ reason: 'invalid_item_id' });
+
+      serve(AUDIO_ITEM_LOMAXBIB000571);
+      const first = await runToolContract(locGetItem, { item_id: 'lomaxbib000571' });
+      const sleeveLink = (structured(first).related_items as string[]).find((r) =>
+        r.includes('lomaxbib000840'),
+      );
+      expect(sleeveLink).toBe('https://www.loc.gov/item/lomaxbib000840');
+      expect(contentText(first)).toContain(`**Related items:** `);
+      expect(contentText(first)).toContain(sleeveLink!);
+
+      const spy = serve(SLEEVE_ITEM_LOMAXBIB000840);
+      const result = await runToolContract(locGetItem, { item_id: sleeveLink! });
+
+      expect(result.isError).toBeFalsy();
+      expect(new URL(String(spy.mock.calls[0]![0])).pathname).toBe('/item/lomaxbib000840/');
+      expect(structured(result).item_id).toBe('lomaxbib000840');
+    });
+
     it.each([
       'https://lccn.loc.gov/2005567251/marcxml',
       'lccn.loc.gov/2005-5682940',
@@ -1151,7 +1470,7 @@ describe('locGetItem', () => {
       '**Related items:** http://lccn.loc.gov/2002522665, string-related-id, https://lccn.loc.gov/2009655315',
     );
     expect(text).toContain(
-      '**Contributors:** Lomax, Alan (1915-2002) (Recordist), Guthrie, Woody (1912-1967) (Performer)',
+      '**Contributors:** Lomax, Alan (1915-2002) (Recordist) | Guthrie, Woody (1912-1967) (Performer)',
     );
   });
 

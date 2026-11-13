@@ -97,6 +97,15 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
 
   errors: [
     {
+      reason: 'query_too_long',
+      code: JsonRpcErrorCode.ValidationError,
+      retryable: false,
+      thrownBy: 'service',
+      when: 'The Library of Congress refused the search as too long (HTTP 414), which an over-long query causes.',
+      recovery:
+        'Shorten the query to a few distinctive keywords, then search again. Resending the same query fails the same way.',
+    },
+    {
       reason: 'rate_limit_exceeded',
       code: JsonRpcErrorCode.RateLimited,
       retryable: false,
@@ -115,9 +124,10 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
     {
       reason: 'request_timed_out',
       code: JsonRpcErrorCode.Timeout,
+      retryable: true,
       when: 'The Library of Congress did not respond within the 50-second request budget.',
       recovery:
-        'Retry with a more specific query keyword, or retry in a few minutes; the Library of Congress is responding slowly.',
+        'Retry this call once, unchanged; a repeat of a slow request can return faster. If it times out again, retry with a more specific query keyword, or retry in a few minutes.',
     },
     {
       reason: 'upstream_unavailable',
@@ -176,8 +186,8 @@ export const locBrowseCollections = tool('libofcongress_browse_collections', {
     }
 
     if (result.items.length === 0) {
-      // pages === 0 is the service's sentinel for a page LOC would not serve (404, 400, or 520);
-      // page > 1 separates it from a genuine empty result.
+      // pages === 0 is the service's sentinel for a page LOC would not serve (a 404, or a 400
+      // past the retrieval ceiling); page > 1 separates it from a genuine empty result.
       if (page > 1 && pages === 0) {
         addNotice(
           `Page ${page} is out of range for the collection list${query ? ` matching "${query}"` : ''}. Re-run with page 1 to see the total collection count and page count, then request a page within that range.`,

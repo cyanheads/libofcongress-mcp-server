@@ -185,8 +185,25 @@ describe('request_timed_out — the upstream does not answer within the 50 s bud
       expect(text).toContain('reason request_timed_out');
       expect(`${text} ${JSON.stringify(error)}`).not.toMatch(/loc\.gov|https?:/);
       expect(fetchSpy).toHaveBeenCalledTimes(1);
+      // A www.loc.gov timeout is worth one unchanged retry, so it is marked retryable on both
+      // surfaces; the id.loc.gov subject service keeps its unmarked entry.
+      const retryable = definition !== locSearchSubjects;
+      expect(error.data?.retryable).toBe(retryable ? true : undefined);
+      expect(text.includes('reason request_timed_out · retryable')).toBe(retryable);
     },
   );
+
+  it.each([
+    ...wwwTools.map(({ definition }) => ({ name: definition.name, definition })),
+    { name: 'libofcongress://item/', definition: locItemResource },
+  ])('$name leads its request_timed_out recovery with one unchanged retry', ({ definition }) => {
+    const hint = contractRecovery(definition, 'request_timed_out');
+    expect(hint).toMatch(
+      /^Retry this call once, unchanged; a repeat of a slow request can return faster\. If it times out again, /,
+    );
+    // The server cannot know why a repeat returns faster: no promise about a cache or a duration.
+    expect(hint).not.toMatch(/cache|within seconds|usually/i);
+  });
 
   it('names the narrowing filters in the newspaper search recovery', () => {
     expect(contractRecovery(locSearchNewspapers, 'request_timed_out')).toMatch(
@@ -220,7 +237,7 @@ describe('request_timed_out — the upstream does not answer within the 50 s bud
     expect(call.value).toMatchObject({
       code: JsonRpcErrorCode.Timeout,
       message: 'The Library of Congress did not respond within the 50-second request budget.',
-      data: { reason: 'request_timed_out' },
+      data: { reason: 'request_timed_out', retryable: true },
     });
   });
 
@@ -470,6 +487,64 @@ describe('upstream_unavailable — the upstream cannot be reached or answers wit
       /subject heading service/,
     );
   });
+});
+
+/** LOC's answer to an 8,870-character search URL, captured verbatim. */
+const URI_TOO_LONG_BODY = `<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html><head>
+<title>414 Request-URI Too Long</title>
+</head><body>
+<h1>Request-URI Too Long</h1>
+<p>The requested URL's length exceeds the capacity
+limit for this server.<br />
+</p>
+</body></html>
+`;
+
+// The 414 mapping is tabled in loc-api-service.test.ts; these prove each search tool declares it.
+describe('query_too_long — www.loc.gov refuses an over-long search with HTTP 414', () => {
+  beforeEach(async () => {
+    initLocApiService(config, await createInMemoryStorage());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const searchTools = [
+    { definition: locSearchItems, input: { query: 'railroad strike' } },
+    { definition: locSearchNewspapers, input: { query: 'influenza epidemic' } },
+    { definition: locBrowseCollections, input: { query: 'jazz' } },
+  ] as const;
+
+  it.each(searchTools)(
+    '$definition.name reports a 414 as non-retryable query_too_long on both surfaces, sent once',
+    async ({ definition, input }) => {
+      const fetchSpy = vi.fn(
+        async () =>
+          new Response(URI_TOO_LONG_BODY, {
+            status: 414,
+            headers: { 'Content-Type': 'text/html; charset=iso-8859-1' },
+          }),
+      );
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const result = await runToolContract(definition, input as never);
+
+      const error = wireError(result);
+      const hint = contractRecovery(definition, 'query_too_long');
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'query_too_long', status: 414, retryable: false, recovery: { hint } },
+      });
+      expect(hint).toMatch(/^Shorten the query/);
+      const text = contentText(result);
+      expect(text).toContain(`Recovery: ${hint}`);
+      expect(text).toContain('not retryable');
+      expect(`${text} ${JSON.stringify(error)}`).not.toMatch(TRANSPORT_LEAK);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 /** www.loc.gov soft blocks: the observed challenge, and LOC's documented HTML page on a 200. */

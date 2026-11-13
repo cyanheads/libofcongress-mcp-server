@@ -23,6 +23,9 @@ import {
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 import {
   BOSTON_THROUGH_1769,
+  LUSITANIA_1915_FACETS,
+  LUSITANIA_1915_GERMAN,
+  LUSITANIA_1915_KLINGON_EMPTY,
   TITANIC_1912_04_16,
   TITANIC_1912_SHORT_TITLE_EMPTY,
   TITANIC_1912_WASHINGTON_STATE,
@@ -350,6 +353,31 @@ describe('locSearchNewspapers', () => {
     );
   });
 
+  // The rule is tabled at facetSegment (loc-api-service.test.ts); these prove each input reaches it.
+  it.each([
+    ['state', { state: 'ohio|texas' }],
+    ['newspaper_title', { newspaper_title: 'evening star (washington, d.c.) 1854-1972|the sun' }],
+    ['language', { language: 'german|english' }],
+  ])(
+    'refuses a %s value holding "|" before any request, naming the field on both surfaces',
+    async (field, filter) => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const result = await runToolContract(locSearchNewspapers, { query: 'lusitania', ...filter });
+
+      const error = wireError(result);
+      const hint = contractRecovery(locSearchNewspapers, 'invalid_filter_value');
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        message: `The ${field} value cannot contain "|", which the Library of Congress reads as a separator between filters.`,
+        data: { reason: 'invalid_filter_value', field, retryable: false, recovery: { hint } },
+      });
+      expect(renderedContentText(result)).toContain(`Recovery: ${hint}`);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it('names the exact-title requirement when a newspaper_title search comes back empty, on both surfaces (#59)', async () => {
     vi.stubGlobal('fetch', mockFetch(TITANIC_1912_SHORT_TITLE_EMPTY));
 
@@ -402,6 +430,216 @@ describe('locSearchNewspapers', () => {
     );
     const row = locSearchNewspapers.output.shape.items.element.shape.description;
     expect(String(row.description)).toMatch(/^Opening of the page's OCR text.*as match/);
+  });
+
+  describe('language filter and facets (#91)', () => {
+    /** One facet's values from a captured body, as the tool should return them. */
+    const capturedFacet = (body: string, type: string) =>
+      (
+        JSON.parse(body) as {
+          facets: { type: string; filters: { value: string; count: number }[] }[];
+        }
+      ).facets
+        .find((facet) => facet.type === type)!
+        .filters.map(({ value, count }) => ({ value, count }));
+
+    it('sends language trimmed, after the state and title facets, case as given', async () => {
+      const fetchSpy = mockFetch(LUSITANIA_1915_GERMAN);
+      vi.stubGlobal('fetch', fetchSpy);
+
+      await runToolContract(locSearchNewspapers, {
+        query: 'lusitania',
+        state: 'OH',
+        newspaper_title: 'tägliches cincinnatier volksblatt (cincinnati [ohio]) 1885-1919',
+        language: '  German ',
+      });
+
+      expect(sentFacets(fetchSpy)).toBe(
+        'location_state:ohio|partof_title:tägliches cincinnatier volksblatt (cincinnati [ohio]) 1885-1919|language:German',
+      );
+    });
+
+    it.each(['', '   '])(
+      'treats language %j as unset, never sending language:',
+      async (language) => {
+        const fetchSpy = mockFetch(makeNewspaperSearchResponse());
+        vi.stubGlobal('fetch', fetchSpy);
+
+        await runToolContract(locSearchNewspapers, { query: 'fire', language });
+
+        expect(sentFacets(fetchSpy)).toBeNull();
+      },
+    );
+
+    it("returns each row's languages on both surfaces, a row without them validating", async () => {
+      const captured = (JSON.parse(LUSITANIA_1915_GERMAN) as { results: object[] }).results;
+      const { language: _dropped, ...sparse } = captured[0] as Record<string, unknown>;
+      vi.stubGlobal(
+        'fetch',
+        mockFetch(
+          JSON.stringify({ results: [...captured, sparse], pagination: { of: 3, perpage: 25 } }),
+        ),
+      );
+
+      const result = await runToolContract(locSearchNewspapers, {
+        query: 'lusitania',
+        language: 'german',
+      });
+
+      expect(result.isError).toBeFalsy();
+      const items = structured(result).items as Array<Record<string, unknown>>;
+      expect(items.map((item) => item.languages)).toEqual([
+        ['german'],
+        ['english', 'german'],
+        undefined,
+      ]);
+      expect(items[2]).not.toHaveProperty('languages');
+      const text = contentText(result);
+      expect(text).toContain('**Languages:** german\n');
+      expect(text).toContain('**Languages:** english, german\n');
+      expect(text.match(/\*\*Languages:\*\*/g)).toHaveLength(2);
+    });
+
+    it('requests the facet block when include_facets is true and returns the three facet lists on both surfaces', async () => {
+      const fetchSpy = mockFetch(LUSITANIA_1915_FACETS);
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const result = await runToolContract(locSearchNewspapers, {
+        query: 'lusitania',
+        date_start: '1915-05-07',
+        date_end: '1915-05-09',
+        include_facets: true,
+      });
+
+      expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('at')).toBe(
+        'results,pagination,facets',
+      );
+      const sc = structured(result);
+      expect(sc.newspaper_title_facets).toEqual(
+        capturedFacet(LUSITANIA_1915_FACETS, 'partof_title'),
+      );
+      expect(sc.state_facets).toEqual(capturedFacet(LUSITANIA_1915_FACETS, 'location_state'));
+      expect(sc.language_facets).toEqual(capturedFacet(LUSITANIA_1915_FACETS, 'language'));
+      const rendered = renderedContentText(result);
+      expect(rendered).toContain(
+        'Top newspaper titles: world war history : daily records and comments as appeared in american and foreign newspapers, 1914-1926 (new york) 1928- (153); evening star (washington, d.c.) 1854-1972 (23); new-york tribune (new york [n.y.]) 1866-1924 (21);',
+      );
+      expect(rendered).toContain(
+        'Top states: new york (191); district of columbia (47); alabama (39);',
+      );
+      expect(rendered).toContain(
+        'Top languages: english (498); german (52); polish (4); spanish (4); italian (2); lithuanian (2)',
+      );
+    });
+
+    it('by default sends results and pagination only and carries no facet fields on either surface', async () => {
+      const fetchSpy = mockFetch(LUSITANIA_1915_FACETS);
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const result = await runToolContract(locSearchNewspapers, { query: 'lusitania' });
+
+      expect(new URL(fetchSpy.mock.calls[0]![0] as string).searchParams.get('at')).toBe(
+        'results,pagination',
+      );
+      const sc = structured(result);
+      for (const key of ['newspaper_title_facets', 'state_facets', 'language_facets']) {
+        expect(sc).not.toHaveProperty(key);
+      }
+      expect(contentText(result)).not.toMatch(/Top (newspaper titles|states|languages)/);
+    });
+
+    it('returns the three facet lists empty on an out-of-range page', async () => {
+      vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
+
+      const sc = structured(
+        await runToolContract(locSearchNewspapers, {
+          query: 'lusitania',
+          include_facets: true,
+          page: 9,
+        }),
+      );
+
+      expect(sc).toMatchObject({
+        items: [],
+        pages: 0,
+        newspaper_title_facets: [],
+        state_facets: [],
+        language_facets: [],
+      });
+      expect(String(sc.notice)).toContain('Page 9 is out of range');
+    });
+
+    it('names a language that matches nothing in the empty-result notice, with empty facet lists, on both surfaces', async () => {
+      vi.stubGlobal('fetch', mockFetch(LUSITANIA_1915_KLINGON_EMPTY));
+
+      const result = await runToolContract(locSearchNewspapers, {
+        query: 'lusitania',
+        date_start: '1915-05-07',
+        date_end: '1915-05-09',
+        language: 'klingon',
+        include_facets: true,
+      });
+
+      const sc = structured(result);
+      expect(sc).toMatchObject({
+        items: [],
+        total: 0,
+        newspaper_title_facets: [],
+        state_facets: [],
+        language_facets: [],
+      });
+      expect(sc.notice).toBe(
+        'No newspaper pages matched "lusitania" in dates 1915-05-07–1915-05-09 in language "klingon". Try broadening the date range, removing the language filter, or using different keywords. Historical OCR is approximate — variant spellings are common.',
+      );
+      expect(renderedContentText(result)).toContain(String(sc.notice));
+    });
+
+    it('names the language filter in the out-of-range notice', async () => {
+      vi.stubGlobal('fetch', mockFetch(JSON.stringify({ exception: 'not found' }), 404));
+
+      const sc = structured(
+        await runToolContract(locSearchNewspapers, {
+          query: 'lusitania',
+          language: 'german',
+          page: 9,
+        }),
+      );
+
+      expect(String(sc.notice)).toContain(
+        'Page 9 is out of range for "lusitania" in language "german".',
+      );
+    });
+
+    it('format() renders the three facet lists and each row’s languages', () => {
+      const output = locSearchNewspapers.output.parse({
+        items: [
+          {
+            url: 'https://www.loc.gov/resource/sn83045081/1915-05-08/ed-1/?sp=6&q=lusitania',
+            title: 'Image 6 of Der Deutsche correspondent (Baltimore, Md.), May 8, 1915',
+            languages: ['english', 'german'],
+          },
+        ],
+        total: 71,
+        page: 1,
+        pages: 1,
+        has_next: false,
+        newspaper_title_facets: [
+          { value: 'der deutsche correspondent (baltimore, md.) 1841-1918', count: 4 },
+        ],
+        state_facets: [{ value: 'maryland', count: 4 }],
+        language_facets: [
+          { value: 'german', count: 71 },
+          { value: 'english', count: 40 },
+        ],
+      });
+      const text = (locSearchNewspapers.format!(output)[0] as { type: 'text'; text: string }).text;
+      expect(text).toContain(
+        '**Top newspaper titles:** der deutsche correspondent (baltimore, md.) 1841-1918 (4)\n',
+      );
+      expect(text).toContain('**Top states:** maryland (4)\n');
+      expect(text).toContain('**Top languages:** german (71); english (40)\n');
+      expect(text).toContain('**Languages:** english, german\n');
+    });
   });
 
   it('strips empty state/newspaper_title (form-client payload)', async () => {
@@ -887,18 +1125,27 @@ describe('locSearchNewspapers', () => {
     expect(renderedContentText(result)).toContain(String(sc.notice));
   });
 
-  it('returns the out-of-range sentinel for a 400 within the ceiling', async () => {
-    vi.stubGlobal('fetch', mockFetch('', 400));
-    const result = await runToolContract(locSearchNewspapers, { query: 'blizzard', page: 8 });
+  it.each([
+    [400, 1],
+    [400, 8],
+    [520, 1],
+  ])(
+    'fails HTTP %i on page %i (within the ceiling) as upstream_unavailable carrying the status, on both surfaces (#86)',
+    async (status, page) => {
+      vi.stubGlobal('fetch', mockFetch('', status));
+      const result = await runToolContract(locSearchNewspapers, { query: 'blizzard', page });
 
-    expect(result.isError).toBeFalsy();
-    const sc = structured(result);
-    expect(sc).toMatchObject({ items: [], total: 0, page: 8, pages: 0, has_next: false });
-    expect(String(sc.notice)).toContain('Page 8');
-    expect(String(sc.notice)).toContain('out of range');
-    expect(String(sc.notice)).not.toContain('ceiling');
-    expect(contentText(result)).toContain(String(sc.notice));
-  });
+      const error = wireError(result);
+      const hint = contractRecovery(locSearchNewspapers, 'upstream_unavailable');
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_unavailable', status, recovery: { hint } },
+      });
+      const text = contentText(result);
+      expect(text).toContain(`Recovery: ${hint}`);
+      expect(text).not.toMatch(/No newspaper pages matched|out of range/);
+    },
+  );
 
   it('returns the out-of-range notice, not an error, for a 404 on a later page (#40)', async () => {
     const fetchSpy = mockFetch(JSON.stringify({ exception: 'not found' }), 404);

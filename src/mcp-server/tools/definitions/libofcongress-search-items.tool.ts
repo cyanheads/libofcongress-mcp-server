@@ -11,7 +11,8 @@ import { resolveDateRange, yearBound } from '@/services/loc-api/date-range.js';
 import { getLocApiService, LOC_MAX_PAGE_SIZE } from '@/services/loc-api/loc-api-service.js';
 import { subjectFacetTerms } from '@/services/loc-api/subject-terms.js';
 
-const facetList = (kind: string) =>
+/** `note`, when given, closes the description: what this facet's values mean beyond the filter. */
+const facetList = (kind: string, note?: string) =>
   z
     .array(
       z
@@ -23,13 +24,13 @@ const facetList = (kind: string) =>
     )
     .optional()
     .describe(
-      `LOC's top ${kind} terms across every item matching this search (up to 10), most frequent first. Pass a value as the ${kind} filter to narrow the search. Present only when include_facets is true; empty when LOC reports none.`,
+      `LOC's top ${kind} terms across every item matching this search (up to 10), most frequent first. Pass a value as the ${kind} filter to narrow the search. Present only when include_facets is true; empty when LOC reports none.${note ? ` ${note}` : ''}`,
     );
 
 export const locSearchItems = tool('libofcongress_search_items', {
   title: 'Search LOC Items',
   description:
-    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, or geographic location, or scope the search to a single curated collection with collection_slug. Returns item summaries with titles, dates, descriptions, LOC IDs, and format tags. Each result carries is_item: pass the id of a result where is_item is true to libofcongress_get_item for full metadata. Non-item resources include collections, exhibit and research-guide pages, newspaper pages, catalog.loc.gov records, and hdl.loc.gov finding aids. When page_url is present, pass it to libofcongress_get_newspaper_page, optionally using the search query as match; its item_id identifies the issue. A link_notice warns that a retired catalog URL no longer opens its record; otherwise follow a non-item url. Use libofcongress_search_subjects to find an LCSH heading for the subject filter. To discover the subject and location values the filters accept for a search, set include_facets to get its top subject_facets and location_facets.',
+    'Search the Library of Congress digital collections by keyword. Optionally filter by material format (photos, maps, newspapers, audio, etc.), date range, subject heading, geographic location, or contributor (a creator, photographer, author, or other credited name), or scope the search to a single curated collection with collection_slug. Returns item summaries with titles, dates, descriptions, LOC IDs, format tags, and the contributors LOC credits. Each result carries is_item: pass the id of a result where is_item is true to libofcongress_get_item for full metadata. Non-item resources include collections, exhibit and research-guide pages, newspaper pages, catalog.loc.gov records, and hdl.loc.gov finding aids. When page_url is present, pass it to libofcongress_get_newspaper_page, optionally using the search query as match; its item_id identifies the issue. A link_notice warns that a retired catalog URL no longer opens its record; otherwise follow a non-item url. Use libofcongress_search_subjects to find an LCSH heading for the subject filter. To discover the subject, location, and contributor values the filters accept for a search, set include_facets to get its top subject_facets, location_facets, and contributor_facets.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -75,11 +76,17 @@ export const locSearchItems = tool('libofcongress_search_items', {
       .describe(
         'Geographic location filter (e.g., "oklahoma", "washington d.c."). Lowercase, matches LOC location facets; location_facets (include_facets) lists values for a search.',
       ),
+    contributor: z
+      .string()
+      .optional()
+      .describe(
+        'Contributor filter: a creator, photographer, author, or other name LOC credits, in the form LOC indexes it, without dates or roles (e.g., "lange, dorothea", "united states. farm security administration"). Take values from contributor_facets (include_facets), a result\'s contributor_terms, or libofcongress_get_item contributor_terms; libofcongress_get_item contributors, which carry dates and roles, match nothing. Case is ignored; every other character must match, accents included. With format "newspaper", a page\'s contributor is the institution that digitized it, not an author.',
+      ),
     include_facets: z
       .boolean()
       .default(false)
       .describe(
-        "Also return subject_facets and location_facets: LOC's top subject and location terms across every match, with counts — the values the subject and location filters accept. Default false: facets add time to each search, so request them when you need filter values to narrow by.",
+        "Also return subject_facets, location_facets, and contributor_facets: LOC's top subject, location, and contributor terms across every match, with counts — the values the subject, location, and contributor filters accept. Default false: facets add time to each search, so request them when you need filter values to narrow by.",
       ),
     collection_slug: z
       .string()
@@ -118,7 +125,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
               .string()
               .optional()
               .describe(
-                'Publication or creation date as LOC catalogs it: free text, a year, or a full date (e.g., "c1915 Feb. 19.", "1912"). Absent when LOC records only a coded value ("uuuu", "||||") or none.',
+                'Publication or creation date as LOC catalogs it: free text, a year, a year and month, or a full date (e.g., "c1915 Feb. 19.", "1912", "1863-11", "1863-11-20"). Absent when LOC records only a coded value ("uuuu", "||||") or none.',
               ),
             description: z.string().optional().describe('Brief description or summary.'),
             format: z
@@ -129,6 +136,12 @@ export const locSearchItems = tool('libofcongress_search_items', {
               .boolean()
               .describe(
                 'True when this result is a catalog item whose id resolves through libofcongress_get_item, including records LOC links by an lccn.loc.gov permalink. False for collections, exhibits, research guides, newspaper pages, catalog.loc.gov records, hdl.loc.gov finding aids, and other non-item results, which have no get_item record. Use page_url for newspaper pages, heed link_notice for retired links, and otherwise follow url. Always present on every result.',
+              ),
+            contributor_terms: z
+              .array(z.string())
+              .optional()
+              .describe(
+                'Every contributor LOC credits this result with, in LOC order, each in the form the contributor filter accepts (e.g., "lange, dorothea"). On a newspaper page, the institution that digitized it. Absent when LOC credits none.',
               ),
             url: z
               .string()
@@ -165,6 +178,10 @@ export const locSearchItems = tool('libofcongress_search_items', {
       ),
     subject_facets: facetList('subject'),
     location_facets: facetList('location'),
+    contributor_facets: facetList(
+      'contributor',
+      'On newspaper pages the contributor is the institution that digitized the page, so institutions can appear here beside creators.',
+    ),
   }),
 
   // Agent-facing success-path context — query echo, result count, and empty-result
@@ -202,7 +219,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
       .string()
       .optional()
       .describe(
-        'Recovery hint when results are empty or a page is out of range — echoes applied filters, subject terms and location included, and suggests how to broaden — plus disclosure of a capped limit or of the retrieval ceiling. Absent on ordinary result pages.',
+        'Recovery hint when results are empty or a page is out of range — echoes applied filters, subject terms, location, and contributor included, and suggests how to broaden — plus disclosure of a capped limit or of the retrieval ceiling. Absent on ordinary result pages.',
       ),
   },
 
@@ -221,6 +238,24 @@ export const locSearchItems = tool('libofcongress_search_items', {
       when: 'date_start is later than date_end, or date_start is given alone and is later than the current year.',
       recovery:
         'Put the earlier year in date_start and the later one in date_end, and keep a date_start given alone no later than the current year. Omit a bound to leave that side of the range open.',
+    },
+    {
+      reason: 'invalid_filter_value',
+      code: JsonRpcErrorCode.ValidationError,
+      retryable: false,
+      thrownBy: 'service',
+      when: 'A subject, location, or contributor value has "|" between other characters, which the Library of Congress reads as a separator between filters. A "|" at either end of a value is dropped.',
+      recovery:
+        'Remove the "|" from the value. Each filter takes a single value; to cover two values, run one search for each.',
+    },
+    {
+      reason: 'query_too_long',
+      code: JsonRpcErrorCode.ValidationError,
+      retryable: false,
+      thrownBy: 'service',
+      when: 'The Library of Congress refused the search as too long (HTTP 414), which an over-long query causes.',
+      recovery:
+        'Shorten the query to its most distinctive words, then search again. Resending the same query fails the same way.',
     },
     {
       reason: 'collection_not_found',
@@ -248,9 +283,10 @@ export const locSearchItems = tool('libofcongress_search_items', {
     {
       reason: 'request_timed_out',
       code: JsonRpcErrorCode.Timeout,
+      retryable: true,
       when: 'The Library of Congress did not respond within the 50-second request budget.',
       recovery:
-        'Narrow the search so it returns faster: add a format, subject, or location filter, or a tighter date_start/date_end range, then retry. If a narrow search also times out, retry in a few minutes.',
+        'Retry this call once, unchanged; a repeat of a slow request can return faster. If it times out again, narrow the search: add a format, subject, or location filter, or a tighter date_start/date_end range, then retry. If a narrow search also times out, retry in a few minutes.',
     },
     {
       reason: 'upstream_unavailable',
@@ -267,6 +303,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
     const collectionSlug = input.collection_slug?.trim() || undefined;
     const subjectTerms = input.subject?.trim() ? subjectFacetTerms(input.subject) : undefined;
     const location = input.location?.trim() || undefined;
+    const contributor = input.contributor?.trim() || undefined;
 
     ctx.log.info('libofcongress_search_items', {
       query: input.query,
@@ -295,6 +332,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
           ...(range.dates !== undefined && { dates: range.dates }),
           ...(subjectTerms !== undefined && { subjectTerms }),
           ...(location !== undefined && { location }),
+          ...(contributor !== undefined && { contributor }),
           includeFacets: input.include_facets,
           limit: effectiveLimit,
           page: input.page,
@@ -340,6 +378,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
     const facets = result.facets && {
       subject_facets: result.facets.subject,
       location_facets: result.facets.location,
+      contributor_facets: result.facets.contributor,
     };
     const addNotice = noticeWriter(ctx);
 
@@ -368,8 +407,10 @@ export const locSearchItems = tool('libofcongress_search_items', {
         (subjectTerms
           ? ` with subject terms ${subjectTerms.map((t) => `"${t}"`).join(' + ')}`
           : '') +
-        (location ? ` in location "${location}"` : '');
-      // pages === 0 is the service's sentinel for a page LOC would not serve (404, 400, or 520).
+        (location ? ` in location "${location}"` : '') +
+        (contributor ? ` with contributor "${contributor}"` : '');
+      // pages === 0 is the service's sentinel for a page LOC would not serve (a 404, or a 400
+      // past the retrieval ceiling).
       if (pages === 0 && page > 1) {
         addNotice(
           ceilingReached
@@ -382,10 +423,19 @@ export const locSearchItems = tool('libofcongress_search_items', {
         ctx.enrich.total(0);
         return { items: [], total: 0, page, pages: 0, has_next: false, ...facets };
       }
+      // The other filters every match must also carry, named so the caller can drop one.
+      const otherFilters = [location && 'location', contributor && 'contributor']
+        .filter(Boolean)
+        .join(' or ');
+      // A contributor matches only in LOC's indexed form, which get_item's contributors lack; on
+      // newspaper pages it is the digitizing institution, so a person's name finds no page.
+      const contributorHint = contributor
+        ? ` The contributor must match a value LOC indexes, without dates or roles: take it from contributor_facets (include_facets) or contributor_terms.${input.format === 'newspaper' ? ' Newspaper pages credit the institution that digitized them, not an author.' : ''}`
+        : '';
       addNotice(
         subjectTerms
-          ? `No items matched "${input.query}"${scope}. Every subject term must match; drop one${location ? ', or the location,' : ''} to widen the search. Also try broadening the query, widening the date range, or running libofcongress_search_subjects to find the subject heading.`
-          : `No items matched "${input.query}"${scope}. Try broadening the query, widening the date range, or running libofcongress_search_subjects to find the exact subject heading.`,
+          ? `No items matched "${input.query}"${scope}. Every subject term must match; drop one${otherFilters ? `, or the ${otherFilters},` : ''} to widen the search. Also try broadening the query, widening the date range, or running libofcongress_search_subjects to find the subject heading.${contributorHint}`
+          : `No items matched "${input.query}"${scope}. Try broadening the query, widening the date range, or running libofcongress_search_subjects to find the exact subject heading.${contributorHint}`,
       );
       ctx.enrich.total(0);
       return { items: [], total: 0, page, pages: 0, has_next: false, ...facets };
@@ -421,6 +471,7 @@ export const locSearchItems = tool('libofcongress_search_items', {
     for (const [label, values] of [
       ['Top subjects', result.subject_facets],
       ['Top locations', result.location_facets],
+      ['Top contributors', result.contributor_facets],
     ] as const) {
       if (values?.length)
         lines.push(
@@ -451,6 +502,10 @@ export const locSearchItems = tool('libofcongress_search_items', {
         );
       if (item.date) lines.push(`**Date:** ${inlineText(item.date)}`);
       if (item.format) lines.push(`**Format:** ${inlineText(item.format)}`);
+      // A term can hold a comma or "; " ("louisiana state university; baton rouge, la") and never
+      // "|", LOC's separator between filters, so entries join with " | " and each stays whole.
+      if (item.contributor_terms)
+        lines.push(`**Contributor terms:** ${item.contributor_terms.map(inlineText).join(' | ')}`);
       if (item.description) lines.push(lineText(item.description));
       lines.push(`**URL:** ${item.url}`);
     }

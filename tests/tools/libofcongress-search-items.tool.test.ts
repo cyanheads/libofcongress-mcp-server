@@ -20,8 +20,9 @@ import {
   COBB_PHOTO_SEARCH,
   CODED_DATE_SEARCH,
   IDENTITY_SHAPES_SEARCH,
+  LINCOLN_GETTYSBURG_1863_SEARCH,
 } from '../fixtures/loc-items.js';
-import { POSTERS_PHOTOS_SEARCH } from '../fixtures/loc-subjects.js';
+import { LANGE_PHOTOS_1936_SEARCH, POSTERS_PHOTOS_SEARCH } from '../fixtures/loc-subjects.js';
 import { JAZZ_ENTITY_ROWS } from '../fixtures/loc-text.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
 import {
@@ -350,6 +351,31 @@ describe('locSearchItems', () => {
     );
   });
 
+  // The rule is tabled at facetSegment (loc-api-service.test.ts); these prove each input reaches it.
+  it.each([
+    ['subject', { subject: 'United States--Oklahoma|Tulsa' }],
+    ['location', { location: 'oklahoma|tulsa' }],
+    ['contributor', { contributor: 'lange, dorothea|rothstein, arthur' }],
+  ])(
+    'refuses a %s value holding "|" before any request, naming the field on both surfaces',
+    async (field, filter) => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const result = await runToolContract(locSearchItems, { query: 'photos', ...filter });
+
+      const error = wireError(result);
+      const hint = contractRecovery(locSearchItems, 'invalid_filter_value');
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        message: `The ${field} value cannot contain "|", which the Library of Congress reads as a separator between filters.`,
+        data: { reason: 'invalid_filter_value', field, retryable: false, recovery: { hint } },
+      });
+      expect(renderedContentText(result)).toContain(`Recovery: ${hint}`);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it('strips empty subject/location strings (form-client payload)', async () => {
     const fetchSpy = mockFetch(makeSearchResponse());
     vi.stubGlobal('fetch', fetchSpy);
@@ -620,16 +646,22 @@ describe('locSearchItems', () => {
     expect(String(enrichment.notice)).toMatch(/100,000|partition/);
   });
 
-  it('reports a generic out-of-range page (400 within the ceiling) without ceiling language', async () => {
+  it('fails a 400 within the ceiling as upstream_unavailable carrying the status, on both surfaces (#86)', async () => {
     vi.stubGlobal('fetch', mockFetch('', 400));
-    const ctx = createMockContext({ errors: locSearchItems.errors });
-    const input = locSearchItems.input.parse({ query: 'niche query', limit: 25, page: 8 });
-    const result = await locSearchItems.handler(input, ctx);
+    const result = await runToolContract(locSearchItems, {
+      query: 'niche query',
+      limit: 25,
+      page: 8,
+    });
 
-    expect(result.items).toHaveLength(0);
-    const notice = String(getEnrichment(ctx).notice);
-    expect(notice).toContain('out of range');
-    expect(notice).not.toContain('ceiling');
+    const error = wireError(result);
+    const hint = contractRecovery(locSearchItems, 'upstream_unavailable');
+    expect(error).toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: { reason: 'upstream_unavailable', status: 400, recovery: { hint } },
+    });
+    expect(contentText(result)).toContain(`Recovery: ${hint}`);
+    expect(contentText(result)).not.toContain('out of range');
   });
 
   it('rejects empty query at schema level', () => {
@@ -993,17 +1025,31 @@ describe('locSearchItems', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a 520 on page > 1 on the out-of-range path', async () => {
-    vi.stubGlobal('fetch', mockFetch('', 520));
-    const result = await runToolContract(locSearchItems, { query: 'niche query', page: 3 });
+  it.each([
+    [400, 1],
+    [520, 1],
+    [520, 3],
+  ])(
+    'fails HTTP %i on page %i as upstream_unavailable carrying the status, not as an empty result (#86)',
+    async (status, page) => {
+      vi.stubGlobal('fetch', mockFetch('', status));
+      const result = await runToolContract(locSearchItems, {
+        query: 'gettysburg address',
+        collection_slug: 'abraham-lincoln-papers',
+        limit: 3,
+        page,
+      });
 
-    expect(result.isError).toBeFalsy();
-    const sc = structured(result);
-    expect(sc).toMatchObject({ items: [], total: 0, page: 3, pages: 0, has_next: false });
-    expect(String(sc.notice)).toContain('Page 3');
-    expect(String(sc.notice)).toContain('out of range');
-    expect(String(sc.notice)).not.toContain('ceiling');
-  });
+      const error = wireError(result);
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_unavailable', status },
+      });
+      const text = contentText(result);
+      expect(text).toContain('reason upstream_unavailable');
+      expect(text).not.toMatch(/No items matched|out of range/);
+    },
+  );
 
   it.each([
     {
@@ -1206,7 +1252,7 @@ describe('locSearchItems', () => {
       const items = structured(result).items as Array<{ id: string; date?: string }>;
       expect(items.map((i) => [i.id, i.date])).toEqual([
         ['scsm000191', '1895'],
-        ['magbell.02800101', '1913-06-01'],
+        ['magbell.02800101', '1913-06'],
         ['98688858', '185?'],
         ['2024769398', undefined],
       ]);
@@ -1215,7 +1261,7 @@ describe('locSearchItems', () => {
       for (const coded of ['18950000', '19130600', '185u', '||||']) {
         expect(text).not.toContain(coded);
       }
-      expect(text).toContain('**Date:** 1913-06-01\n');
+      expect(text).toContain('**Date:** 1913-06\n');
       expect(text.split('\n\n').find((block) => block.includes('**ID:** 2024769398\n'))).toBe(
         [
           '## Railroad Safety Advisory Committee',
@@ -1231,6 +1277,40 @@ describe('locSearchItems', () => {
       const date = locSearchItems.output.shape.items.element.shape.date;
       expect(date.description).toMatch(/as LOC catalogs it/);
       expect(date.description).toMatch(/[Aa]bsent when LOC records only a coded value/);
+    });
+  });
+
+  describe('compact item.date at its own precision (#88)', () => {
+    // The row precedence is tabled in loc-api-service.test.ts; this proves it reaches both surfaces.
+    it('returns the year- and month-precision Lincoln rows unpadded and the day-precise row unchanged', async () => {
+      serveByHost({ 'www.loc.gov': LINCOLN_GETTYSBURG_1863_SEARCH });
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'gettysburg',
+        collection_slug: 'abraham-lincoln-papers',
+        date_start: 1863,
+        date_end: 1863,
+        limit: 12,
+      });
+
+      const items = structured(result).items as Array<{ id: string; date?: string }>;
+      expect(items.map((i) => [i.id, i.date])).toEqual([
+        ['mal4356500', '1863-11'],
+        ['mal2812800', '1863-11-20'],
+        ['mal2910600', '1863'],
+      ]);
+      const text = contentText(result);
+      for (const date of ['1863-11', '1863-11-20', '1863']) {
+        expect(text).toContain(`**Date:** ${date}\n`);
+      }
+      for (const padded of ['1863-11-01', '1863-01-01']) {
+        expect(text).not.toContain(padded);
+      }
+    });
+
+    it('lists the year-month form in the date description', () => {
+      const date = locSearchItems.output.shape.items.element.shape.date;
+      expect(date.description).toContain('"1863-11"');
     });
   });
 
@@ -1386,6 +1466,249 @@ describe('locSearchItems', () => {
 
       expect(sc).toMatchObject({ items: [], pages: 0, subject_facets: [], location_facets: [] });
       expect(String(sc.notice)).toContain('with subject terms "world war"');
+    });
+  });
+
+  describe('contributor filter, facets, and terms (#92)', () => {
+    const LANGE_BODY = JSON.stringify(LANGE_PHOTOS_1936_SEARCH);
+    const EMPTY_BODY = JSON.stringify({
+      results: [],
+      pagination: { of: 0, perpage: 25 },
+      facets: [],
+    });
+    const sentFa = (spy: ReturnType<typeof mockFetch>) =>
+      new URL(spy.mock.calls[0]![0] as string).searchParams.get('fa');
+    const sourceHint =
+      'The contributor must match a value LOC indexes, without dates or roles: take it from contributor_facets (include_facets) or contributor_terms.';
+
+    // The value grammar and the combined fa value are tabled at search() (loc-api-service.test.ts);
+    // these prove the input reaches it trimmed, and that a blank value is no filter.
+    it('sends the trimmed contributor as its fa segment', async () => {
+      const fetchSpy = mockFetch(LANGE_BODY);
+      vi.stubGlobal('fetch', fetchSpy);
+
+      await runToolContract(locSearchItems, {
+        query: 'lange',
+        format: 'photo',
+        contributor: '  lange, dorothea  ',
+      });
+
+      expect(sentFa(fetchSpy)).toBe('contributor:lange, dorothea');
+    });
+
+    it.each(['', '   '])('sends no filter for contributor %j', async (contributor) => {
+      const fetchSpy = mockFetch(LANGE_BODY);
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const result = await runToolContract(locSearchItems, { query: 'lange', contributor });
+
+      expect(sentFa(fetchSpy)).toBeNull();
+      expect(result.isError).toBeFalsy();
+    });
+
+    it('returns contributor_facets in LOC order on both surfaces, beside the other facets', async () => {
+      vi.stubGlobal('fetch', mockFetch(LANGE_BODY));
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'lange',
+        format: 'photo',
+        date_start: 1936,
+        date_end: 1936,
+        include_facets: true,
+      });
+
+      const sc = structured(result);
+      expect(sc.contributor_facets).toEqual([
+        { value: 'lange, dorothea', count: 776 },
+        { value: 'united states. resettlement administration', count: 27 },
+        { value: 'united states. farm security administration', count: 22 },
+        { value: 'rothstein, arthur', count: 12 },
+        { value: 'lee, russell', count: 6 },
+        { value: 'mydans, carl', count: 3 },
+        { value: 'united states. office of war information', count: 2 },
+        {
+          value: 'united states. office of coordinator of information. foreign information service',
+          count: 1,
+        },
+      ]);
+      expect(sc.location_facets).toHaveLength(10);
+      expect(sc.subject_facets).toEqual([]);
+      const text = contentText(result);
+      expect(text).toContain(
+        '**Top contributors:** lange, dorothea (776); united states. resettlement administration (27); united states. farm security administration (22); rothstein, arthur (12); lee, russell (6); mydans, carl (3); united states. office of war information (2); united states. office of coordinator of information. foreign information service (1)\n',
+      );
+      expect(text).toContain('**Top locations:** united states (724); california (333);');
+    });
+
+    it('carries no contributor_facets on either surface by default', async () => {
+      vi.stubGlobal('fetch', mockFetch(LANGE_BODY));
+
+      const result = await runToolContract(locSearchItems, { query: 'lange', format: 'photo' });
+
+      expect(structured(result)).not.toHaveProperty('contributor_facets');
+      expect(contentText(result)).not.toContain('Top contributors');
+    });
+
+    it('returns empty contributor_facets when LOC lists none and on an out-of-range page', async () => {
+      vi.stubGlobal('fetch', mockFetch(makeSearchResponse()));
+      const none = await runToolContract(locSearchItems, { query: 'lange', include_facets: true });
+      expect(structured(none).contributor_facets).toEqual([]);
+      expect(contentText(none)).not.toContain('Top contributors');
+
+      vi.stubGlobal('fetch', mockFetch('', 404));
+      const past = structured(
+        await runToolContract(locSearchItems, { query: 'lange', page: 9, include_facets: true }),
+      );
+      expect(past).toMatchObject({ items: [], pages: 0, contributor_facets: [] });
+    });
+
+    it("returns a row's contributor_terms on both surfaces, and none for a row LOC sends none for", async () => {
+      vi.stubGlobal('fetch', mockFetch(LANGE_BODY));
+
+      const result = await runToolContract(locSearchItems, { query: 'lange' });
+
+      const { items } = locSearchItems.output.parse(structured(result));
+      expect(items[0]).not.toHaveProperty('contributor_terms');
+      expect(items[1]?.contributor_terms).toEqual([
+        'lange, dorothea',
+        'united states. resettlement administration',
+      ]);
+      expect(items[2]?.contributor_terms).toEqual(['lange, dorothea']);
+      const text = contentText(result);
+      expect(text).toContain(
+        '**Contributor terms:** lange, dorothea | united states. resettlement administration\n',
+      );
+      expect(text).toContain('**Contributor terms:** lange, dorothea\n');
+      expect(text.match(/\*\*Contributor terms:\*\*/g)).toHaveLength(2);
+    });
+
+    it('keeps each contributor term whole in content when a term holds "; "', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch(
+          JSON.stringify({
+            results: [
+              {
+                id: 'http://www.loc.gov/item/sn88064499/1915-05-08/ed-1/',
+                title: 'Image 1 of The daily news',
+                url: 'https://www.loc.gov/resource/sn88064499/1915-05-08/ed-1/?sp=1',
+                contributor: [
+                  'louisiana state university; baton rouge, la',
+                  'montana historical society; helena, mt',
+                ],
+              },
+            ],
+            pagination: { of: 1, total: 1 },
+          }),
+        ),
+      );
+
+      const result = await runToolContract(locSearchItems, { query: 'lusitania' });
+
+      expect(locSearchItems.output.parse(structured(result)).items[0]?.contributor_terms).toEqual([
+        'louisiana state university; baton rouge, la',
+        'montana historical society; helena, mt',
+      ]);
+      expect(contentText(result)).toContain(
+        '**Contributor terms:** louisiana state university; baton rouge, la | montana historical society; helena, mt\n',
+      );
+    });
+
+    it('names the contributor in the zero-result notice on both surfaces, with where its values come from', async () => {
+      vi.stubGlobal('fetch', mockFetch(EMPTY_BODY));
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'lange',
+        format: 'photo',
+        contributor: 'Rothstein, Arthur, 1915-1985, photographer',
+      });
+
+      const notice = String(structured(result).notice);
+      expect(notice).toBe(
+        `No items matched "lange" with format "photo" with contributor "Rothstein, Arthur, 1915-1985, photographer". Try broadening the query, widening the date range, or running libofcongress_search_subjects to find the exact subject heading. ${sourceHint}`,
+      );
+      expect(renderedContentText(result)).toContain(notice);
+    });
+
+    it('lists the contributor among the filters to drop when subject terms are set', async () => {
+      vi.stubGlobal('fetch', mockFetch(EMPTY_BODY));
+
+      const sc = structured(
+        await runToolContract(locSearchItems, {
+          query: 'lange',
+          subject: 'Migrant agricultural laborers',
+          location: 'california',
+          contributor: 'lange, dorothea',
+        }),
+      );
+
+      expect(sc.notice).toBe(
+        `No items matched "lange" with subject terms "migrant agricultural laborers" in location "california" with contributor "lange, dorothea". Every subject term must match; drop one, or the location or contributor, to widen the search. Also try broadening the query, widening the date range, or running libofcongress_search_subjects to find the subject heading. ${sourceHint}`,
+      );
+    });
+
+    it('adds under format newspaper that pages credit the digitizing institution, on both surfaces', async () => {
+      vi.stubGlobal('fetch', mockFetch(EMPTY_BODY));
+
+      const result = await runToolContract(locSearchItems, {
+        query: 'turnverein',
+        format: 'newspaper',
+        contributor: 'lange, dorothea',
+      });
+
+      const notice = String(structured(result).notice);
+      expect(notice).toBe(
+        `No items matched "turnverein" with format "newspaper" with contributor "lange, dorothea". Try broadening the query, widening the date range, or running libofcongress_search_subjects to find the exact subject heading. ${sourceHint} Newspaper pages credit the institution that digitized them, not an author.`,
+      );
+      expect(renderedContentText(result)).toContain(notice);
+    });
+
+    it('adds neither contributor sentence without a contributor filter', async () => {
+      vi.stubGlobal('fetch', mockFetch(EMPTY_BODY));
+
+      const sc = structured(
+        await runToolContract(locSearchItems, { query: 'turnverein', format: 'newspaper' }),
+      );
+
+      expect(String(sc.notice)).not.toContain('contributor');
+      expect(String(sc.notice)).not.toContain('digitized');
+    });
+
+    it('names the contributor in the out-of-range notice', async () => {
+      vi.stubGlobal('fetch', mockFetch('', 404));
+
+      const sc = structured(
+        await runToolContract(locSearchItems, {
+          query: 'lange',
+          contributor: 'lange, dorothea',
+          page: 9,
+        }),
+      );
+
+      expect(sc.notice).toBe(
+        'Page 9 is out of range for "lange" with contributor "lange, dorothea". Re-run with page 1 to see the total match count and page count, then request a page within that range.',
+      );
+    });
+
+    it('describes where contributor values come from, what does not match, and what newspaper pages credit', () => {
+      const input = String(locSearchItems.input.shape.contributor.description);
+      for (const source of ['contributor_facets', 'contributor_terms', 'libofcongress_get_item']) {
+        expect(input).toContain(source);
+      }
+      expect(input).toMatch(/libofcongress_get_item contributors[^.]*match nothing/);
+      expect(input).toMatch(/newspaper[^.]*institution that digitized/);
+      expect(String(locSearchItems.output.shape.contributor_facets.description)).toMatch(
+        /newspaper[^.]*institution that digitized/,
+      );
+      const row = String(
+        locSearchItems.output.shape.items.element.shape.contributor_terms.description,
+      );
+      expect(row).toMatch(/contributor filter/);
+      expect(row).toMatch(/newspaper[^.]*institution that digitized/);
+      expect(locSearchItems.input.shape.include_facets.description).toContain('contributor_facets');
+      expect(locSearchItems.errors?.find((e) => e.reason === 'invalid_filter_value')?.when).toMatch(
+        /contributor/,
+      );
     });
   });
 

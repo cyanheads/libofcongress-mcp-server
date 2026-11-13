@@ -13,14 +13,17 @@ import { locGetItem } from '@/mcp-server/tools/definitions/libofcongress-get-ite
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 import type { LocItemDetail } from '@/services/loc-api/types.js';
 import {
+  AUDIO_ITEM_LOMAXBIB000571,
   BOOK_ITEM_00003348,
   BOOK_ITEM_02007458,
   BOOK_ITEM_2005567251,
+  MANUSCRIPT_ITEM_MAL4356500,
   MANUSCRIPT_ITEM_MM77093930,
   PHOTO_ITEM_2017760320,
+  SCORE_ITEM_AFCREED000001,
 } from '../fixtures/loc-items.js';
 import { MANUSCRIPT_RIGHTS_MM77093930, NEWSPAPER_NOTES_SN83030214 } from '../fixtures/loc-text.js';
-import { readItemResourceError } from '../helpers/item-resource-read.js';
+import { readItemResource, readItemResourceError } from '../helpers/item-resource-read.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
 import { contractRecovery } from '../helpers/tool-result.js';
 
@@ -114,6 +117,16 @@ const callItemResource = async (
   ctx: Parameters<typeof locItemResource.handler>[1],
 ): Promise<LocItemDetail> => (await locItemResource.handler(params, ctx)) as LocItemDetail;
 
+/**
+ * The record a client receives from a `resources/read` of `uri` served by the production resource
+ * factory: the JSON text of the one content entry, parsed.
+ */
+async function readItemResourceRecord(uri: string): Promise<LocItemDetail> {
+  const { result } = await readItemResource(uri);
+  expect(result.contents).toHaveLength(1);
+  return JSON.parse(result.contents[0]!.text) as LocItemDetail;
+}
+
 describe('locItemResource', () => {
   beforeEach(async () => {
     // A test that forgets its stub fails here instead of reaching LOC, which blocks for an hour.
@@ -190,6 +203,20 @@ describe('locItemResource', () => {
     expect(result.date).toBe('1936 Apr.');
   });
 
+  it.each([
+    ['mal4356500', MANUSCRIPT_ITEM_MAL4356500, '1863-11'],
+    ['afcreed000001', SCORE_ITEM_AFCREED000001, '1966'],
+  ])(
+    'returns the date of %s at its cataloged precision on the wire (#88)',
+    async (itemId, body, date) => {
+      serveByHost({ 'www.loc.gov': body });
+
+      const record = await readItemResourceRecord(`libofcongress://item/${itemId}`);
+
+      expect(record).toMatchObject({ item_id: itemId, date });
+    },
+  );
+
   it('omits a coded catalog date (#69)', async () => {
     serveByHost({ 'www.loc.gov': BOOK_ITEM_00003348 });
     const ctx = createResourceContext({ uri: new URL('libofcongress://item/00003348') });
@@ -265,6 +292,47 @@ describe('locItemResource', () => {
     const result = await callItemResource(params, ctx);
 
     expect(result.related_items).toEqual(['string-related-id', 'https://lccn.loc.gov/2009655315']);
+  });
+
+  it('carries url-less recordings and the resolved related link on the wire, like the tool (#87)', async () => {
+    serveByHost({ 'www.loc.gov': AUDIO_ITEM_LOMAXBIB000571 });
+
+    const record = await readItemResourceRecord('libofcongress://item/lomaxbib000571');
+
+    const [restricted, open] = AUDIO_ITEM_LOMAXBIB000571.resources;
+    expect(record.resources).toEqual([
+      { page_count: 0, audio: restricted!.audio, download_restricted: true },
+      { page_count: 0, audio: open!.audio, download_restricted: false },
+    ]);
+    expect(record).toMatchObject({ pages: [], page_total: 0 });
+    expect(record.related_items).toContain('https://www.loc.gov/item/lomaxbib000840');
+  });
+
+  it('carries has_transcription on the wire, like the tool (#90)', async () => {
+    serveByHost({ 'www.loc.gov': MANUSCRIPT_ITEM_MAL4356500 });
+
+    const record = await readItemResourceRecord('libofcongress://item/mal4356500');
+
+    expect(record.resources).toEqual([
+      expect.objectContaining({
+        url: 'https://www.loc.gov/resource/mal.4356500/',
+        page_count: 4,
+        has_transcription: true,
+      }),
+    ]);
+  });
+
+  it('carries contributor_terms beside contributors on the wire, like the tool (#92)', async () => {
+    serveByHost({ 'www.loc.gov': PHOTO_ITEM_2017760320 });
+
+    const record = await readItemResourceRecord('libofcongress://item/2017760320');
+
+    expect(record.contributor_terms).toEqual(['rothstein, arthur']);
+    expect(record.contributors).toEqual(['Rothstein, Arthur, 1915-1985, photographer']);
+
+    serveByHost({ 'www.loc.gov': MANUSCRIPT_ITEM_MAL4356500 });
+    const without = await readItemResourceRecord('libofcongress://item/mal4356500');
+    expect(without.contributor_terms).toEqual([]);
   });
 
   it('resolves a raw multi-segment id end-to-end from URI to request URL', async () => {

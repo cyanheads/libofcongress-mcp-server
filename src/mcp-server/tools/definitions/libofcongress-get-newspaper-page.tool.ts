@@ -12,10 +12,40 @@ import { getLocApiService } from '@/services/loc-api/loc-api-service.js';
 import { normalizePageUrl } from '@/services/loc-api/loc-urls.js';
 import { matchPageText } from '@/services/loc-api/page-text-match.js';
 
+/**
+ * Notice wording by what the text covers. A document transcription is one file for every page, read
+ * by people rather than OCR, so its notices name the document and its file instead of the page and
+ * the OCR text service.
+ */
+const NOTICES = {
+  page: {
+    unavailable:
+      'OCR is digitized for this page, but the full text was not returned this call. Retry libofcongress_get_newspaper_page; a persistent empty result means the OCR text service is temporarily unavailable.',
+    unparseable:
+      "LOC lists text for this page, but its text service answered with a body that could not be read as text (unparseable). Retrying will not change it; read the page's image at page_url instead.",
+    empty: "LOC's text for this page is empty; the page may be blank.",
+    noMatch:
+      'Nothing on this page matched the match terms. OCR misreads and words split across a line break can hide an occurrence, and libofcongress_search_newspapers matches more loosely than this literal scan; try another spelling or fewer words, or omit match to read the whole page.',
+    cut: (shown: number) =>
+      `Showing ${shown} passages, chosen around the rarest match terms first; match_count counts every occurrence on the page. Omit match to read the whole page, which holds the rest; a narrower match (a quoted phrase or a rarer word) needs fewer passages.`,
+  },
+  document: {
+    unavailable:
+      "LOC holds a transcription of this page's document, but it was not returned this call. Retry libofcongress_get_newspaper_page; a persistent empty result means LOC's file service is temporarily unavailable.",
+    unparseable:
+      "LOC lists a transcription of this page's document, but the file it served could not be read as one (unparseable). Retrying will not change it; read the page's image at page_url instead.",
+    empty: "LOC's transcription of this page's document is empty.",
+    noMatch:
+      "Nothing in this document's transcription matched the match terms. This is a literal scan, and a word split across a line break can hide an occurrence; try another spelling or fewer words, or omit match to read the whole transcription.",
+    cut: (shown: number) =>
+      `Showing ${shown} passages, chosen around the rarest match terms first; match_count counts every occurrence in the document. Omit match to read the whole transcription, which holds the rest; a narrower match (a quoted phrase or a rarer word) needs fewer passages.`,
+  },
+} as const;
+
 export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
   title: 'Get Newspaper Page',
   description:
-    'Retrieve the full text of one LOC page — a historical newspaper page, or a book or manuscript page — or, with match, only the passages around your search terms, with its publication metadata: for newspapers the title, issue date, place of publication, indexed states, and edition; for every page its sequence, the page count, and the item_title and item_id of the issue, book, or manuscript it belongs to — pass item_id to libofcongress_get_item to list every page of the item. Pass the url field from a libofcongress_search_newspapers result, or a pages[].page_url from libofcongress_get_item (has_text true), or a Chronicling America page link (…/ed-N/seq-M/) — do not construct this URL manually. A dense newspaper page runs to 50,000 characters: to find the article a search hit on, pass the search query as match and read the passages around it rather than the whole page. The text is OCR, or for some manuscripts a volunteer transcription; OCR quality varies by digitization batch and era, and 19th-century and degraded materials may contain fragmented text, garbled words, and line-break artifacts that are surfaced as-is. When a page exists but has no digitized text, ocr_available is false and ocr_text is empty — this is a data property, not an error.',
+    'Retrieve the full text of one LOC page — a historical newspaper page, or a book or manuscript page — or, with match, only the passages around your search terms, with its publication metadata: for newspapers the title, issue date, place of publication, indexed states, and edition; for every page its sequence, the page count, and the item_title and item_id of the issue, book, or manuscript it belongs to — pass item_id to libofcongress_get_item to list every page of the item. Pass the url field from a libofcongress_search_newspapers result, or a pages[].page_url from libofcongress_get_item (has_text true, or any page of a resource with has_transcription true), or a Chronicling America page link (…/ed-N/seq-M/) — do not construct this URL manually. A dense newspaper page runs to 50,000 characters, and the transcription of a long pamphlet past 200,000: to find the article a search hit on, or one passage of a long document, pass the search query as match and read the passages around it rather than the whole text. The text is OCR, or for some manuscripts a volunteer transcription; for manuscripts and printed pamphlets LOC transcribed as one document (the Lincoln papers among them), it is that transcription of the whole document, the same on every page of it (text_scope "document", credited in text_attribution when LOC names a transcriber); a manuscript\'s comes without the editors\' notes or the wording the writer canceled. OCR quality varies by digitization batch and era, and 19th-century and degraded materials may contain fragmented text, garbled words, and line-break artifacts that are surfaced as-is. When a page exists but has no digitized text, ocr_available is false and ocr_text is empty — this is a data property, not an error.',
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     page_url: z
@@ -81,12 +111,24 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     ocr_text: z
       .string()
       .describe(
-        'Full plain text of this page: OCR, or for some manuscripts a volunteer transcription. Empty string when match is set (read matches instead), when ocr_available is false, or when the page is blank or its text could not be retrieved (see notice). May contain fragmented words, line-break artifacts, and misspellings inherent to historical OCR — do not attempt to repair.',
+        'Full plain text of this page: OCR, or for some manuscripts a volunteer transcription — or, when text_scope is "document", the transcription of the whole document the page belongs to, paragraphs separated by a blank line. Empty string when match is set (read matches instead), when ocr_available is false, or when the page is blank or its text could not be retrieved (see notice). May contain fragmented words, line-break artifacts, and misspellings inherent to historical OCR — do not attempt to repair.',
       ),
     ocr_available: z
       .boolean()
       .describe(
-        'True when LOC lists OCR or transcribed text for this page, even if the text it returns is empty (see notice). False for image-only pages where no text has been produced.',
+        'True when LOC lists OCR or transcribed text for this page, or a transcription of the document it belongs to, even if the text it returns is empty (see notice). False for image-only pages where no text has been produced.',
+      ),
+    text_scope: z
+      .enum(['page', 'document'])
+      .optional()
+      .describe(
+        'What ocr_text and matches cover, set whenever ocr_available is true: "page" — the text of this page alone; "document" — a transcription of the whole document this page belongs to, the same text on every page of it (LOC keeps it as one file, with page markers too sparse to cut it by page), so read it once rather than page by page. Absent when the page has no text.',
+      ),
+    text_attribution: z
+      .string()
+      .optional()
+      .describe(
+        'Who transcribed and annotated the document transcription, as LOC credits it (e.g., "Transcribed and annotated by the Lincoln Studies Center, Knox College. Galesburg, Illinois."). Present only with text_scope "document", when LOC names one.',
       ),
     matches: z
       .array(z.string())
@@ -99,7 +141,7 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       .int()
       .optional()
       .describe(
-        'Present when match is set and text retrieval did not fail: occurrences of every match term on the page, including those beyond the passages returned. 0 when nothing matched or the page has no text. Absent when retrieval failed and the count is unknown; see notice.',
+        'Present when match is set and text retrieval did not fail: occurrences of every match term on the page, or in the whole document when text_scope is "document", including those beyond the passages returned. 0 when nothing matched or the page has no text. Absent when retrieval failed and the count is unknown; see notice.',
       ),
   }),
 
@@ -110,7 +152,7 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       .string()
       .optional()
       .describe(
-        "Set when ocr_available is true but the page's text came back empty, saying why: the text service did not answer this call (retry), its answer could not be read as text (retrying will not help), or the page's text is empty — a blank page, including one LOC sends as the placeholder [NO TEXT AVAILABLE FOR THIS PAGE]. Distinguishes these from a genuinely image-only page (where ocr_available is false), which carries no notice. With match set on a page that has text, set instead when nothing matched or when some occurrences fall outside the passages returned — those are read on the whole page, by calling again without match. Absent otherwise.",
+        "Set when ocr_available is true but the page's text came back empty, saying why: the text service or the document's transcription file did not answer this call (retry), its answer could not be read as text (retrying will not help), or the page's text is empty — a blank page, including one LOC sends as the placeholder [NO TEXT AVAILABLE FOR THIS PAGE]. Distinguishes these from a genuinely image-only page (where ocr_available is false), which carries no notice. With match set on a page that has text, set instead when nothing matched or when some occurrences fall outside the passages returned — those are read on the whole page or transcription, by calling again without match. Absent otherwise.",
       ),
   },
 
@@ -151,8 +193,10 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     {
       reason: 'request_timed_out',
       code: JsonRpcErrorCode.Timeout,
+      retryable: true,
       when: 'The Library of Congress did not respond within the 50-second request budget.',
-      recovery: 'Retry in a few minutes; the Library of Congress is responding slowly.',
+      recovery:
+        'Retry this call once, unchanged; a repeat of a slow request can return faster. If it times out again, retry in a few minutes.',
     },
     {
       reason: 'upstream_unavailable',
@@ -206,14 +250,9 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     // goes out as a notice reaching both surfaces (#31). It keys on the fetched text: under match,
     // the returned ocr_text is empty on every page.
     const { ocrMiss, ...page } = fetched;
+    const notices = NOTICES[page.text_scope === 'document' ? 'document' : 'page'];
     if (page.ocr_available && !page.ocr_text) {
-      ctx.enrich.notice(
-        ocrMiss === 'unavailable'
-          ? 'OCR is digitized for this page, but the full text was not returned this call. Retry libofcongress_get_newspaper_page; a persistent empty result means the OCR text service is temporarily unavailable.'
-          : ocrMiss === 'unparseable'
-            ? "LOC lists text for this page, but its text service answered with a body that could not be read as text (unparseable). Retrying will not change it; read the page's image at page_url instead."
-            : "LOC's text for this page is empty; the page may be blank.",
-      );
+      ctx.enrich.notice(notices[ocrMiss ?? 'empty']);
     }
 
     const match = input.match?.trim();
@@ -221,13 +260,9 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
     // A page without text keeps only its text-state notice above; these two need text to scan.
     const found = matchPageText(page.ocr_text, match);
     if (page.ocr_text && found.matchCount === 0) {
-      ctx.enrich.notice(
-        'Nothing on this page matched the match terms. OCR misreads and words split across a line break can hide an occurrence, and libofcongress_search_newspapers matches more loosely than this literal scan; try another spelling or fewer words, or omit match to read the whole page.',
-      );
+      ctx.enrich.notice(notices.noMatch);
     } else if (found.cut) {
-      ctx.enrich.notice(
-        `Showing ${found.passages.length} passages, chosen around the rarest match terms first; match_count counts every occurrence on the page. Omit match to read the whole page, which holds the rest; a narrower match (a quoted phrase or a rarer word) needs fewer passages.`,
-      );
+      ctx.enrich.notice(notices.cut(found.passages.length));
     }
     return { ...page, ocr_text: '', matches: found.passages, match_count: found.matchCount };
   },
@@ -254,6 +289,15 @@ export const locGetNewspaperPage = tool('libofcongress_get_newspaper_page', {
       lines.push(`**Pages in issue:** ${result.segment_count}`);
     }
     lines.push(`**OCR available:** ${result.ocr_available ? 'Yes' : 'No'}`);
+    if (result.text_scope === 'document') {
+      lines.push(
+        '**Text scope:** document (a transcription of the whole document, the same on every page)',
+      );
+    } else if (result.text_scope) {
+      lines.push(`**Text scope:** ${result.text_scope}`);
+    }
+    if (result.text_attribution)
+      lines.push(`**Text attribution:** ${inlineText(result.text_attribution)}`);
     if (result.match_count !== undefined) lines.push(`**Match count:** ${result.match_count}`);
     result.matches?.forEach((passage, i) => {
       lines.push('', `**Passage ${i + 1}**`, fencedText(passage));

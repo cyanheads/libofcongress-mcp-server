@@ -8,7 +8,13 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { McpError, notFound, rateLimited, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import {
+  McpError,
+  notFound,
+  rateLimited,
+  serviceUnavailable,
+  validationError,
+} from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { createPacer, type Pacer, type RetryAttempt } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
@@ -19,6 +25,7 @@ import {
   retryWithinBudget,
   UPSTREAM_UNAVAILABLE,
 } from '@/services/http.js';
+import { daysInMonth } from './date-range.js';
 import { decodeText, htmlToText } from './loc-text.js';
 import {
   lccnFromPermalink,
@@ -27,6 +34,7 @@ import {
   normalizePageUrl,
 } from './loc-urls.js';
 import { locationStateName } from './state-names.js';
+import { teiReadingText } from './tei-text.js';
 import type {
   LocCollection,
   LocFacetValue,
@@ -34,6 +42,7 @@ import type {
   LocItemPage,
   LocItemResource,
   LocItemSummary,
+  LocNewspaperFacets,
   LocNewspaperPage,
   LocNewspaperPageDetail,
   LocPagination,
@@ -77,16 +86,17 @@ function isBeyondRetrievalCeiling(page: number, perPage: number): boolean {
 /**
  * The status LOC answered a search page it would not serve with — see
  * {@link LocApiService.fetchSearchPage}. 404: the result set ends before the page. 400: the
- * terminal status of the retrieval-ceiling redirect. 520: an older out-of-range answer.
+ * terminal status of the retrieval-ceiling redirect, accepted only for a page past the ceiling.
  */
-type OutOfRangeStatus = 400 | 404 | 520;
+type OutOfRangeStatus = 400 | 404;
 
 /**
  * The empty result for a page LOC would not serve. `pages: 0` is the sentinel handlers key their
  * out-of-range notice on; `ceilingReached` separates "asked past the ~100k retrieval ceiling"
  * (recovery: partition by facet) from an overshoot (recovery: page within the reported count).
- * A 404 is always an overshoot — LOC is saying the results ran out, so facet-partition advice
- * would be wrong even for a page number past the ceiling.
+ * A 400 reaches here only past the ceiling, so it always means the ceiling. A 404 is always an
+ * overshoot — LOC is saying the results ran out, so facet-partition advice would be wrong even
+ * for a page number past the ceiling.
  */
 function outOfRangePage(
   page: number,
@@ -101,7 +111,7 @@ function outOfRangePage(
       perPage,
       pages: 0,
       hasNext: false,
-      ceilingReached: status !== 404 && isBeyondRetrievalCeiling(page, perPage),
+      ceilingReached: status === 400,
     },
   };
 }
@@ -194,11 +204,16 @@ function joinedText(value: string | string[] | undefined): string | undefined {
 
 /**
  * A related-record reference as one string: a string entry decoded, an object entry by `id`, then
- * `url`, then its decoded `title`. Undefined when the entry carries none of them.
+ * `url`, then its decoded `title`. Undefined when the entry carries none of them. A link (a string
+ * entry, `id`, or `url`) LOC sends relative is resolved by {@link normalizeUrl}
+ * (`/item/lomaxbib000840` → `https://www.loc.gov/item/lomaxbib000840`), which the get_item tool
+ * then accepts; a title is never a link and stays as sent.
  */
 function relatedItemRef(rel: RawLocRelatedItem): string | undefined {
-  if (typeof rel === 'string') return decodeText(rel) || undefined;
-  return rel.id || rel.url || (rel.title && decodeText(rel.title)) || undefined;
+  if (typeof rel === 'string') return normalizeUrl(decodeText(rel)) || undefined;
+  const link = rel.id || rel.url;
+  if (link) return normalizeUrl(link);
+  return (rel.title && decodeText(rel.title)) || undefined;
 }
 
 function extractId(result: RawLocSearchResult): string {
@@ -212,9 +227,14 @@ function extractId(result: RawLocSearchResult): string {
   return rawId.replace(/^https?:\/\/[^/]+\//, '').replace(/\/$/, '');
 }
 
+/**
+ * A LOC URL made absolute: protocol-relative (`//lccn.loc.gov/…`, `//tile.loc.gov/…`) on https,
+ * root-relative (`/static/images/…`, `/item/<id>`) against `https://www.loc.gov`. Any other value —
+ * an absolute URL, a bare ID — is returned exactly as sent.
+ */
 function normalizeUrl(raw: string): string {
-  // LOC sometimes returns protocol-relative URLs (//lccn.loc.gov/...) — normalize to https:
   if (raw.startsWith('//')) return `https:${raw}`;
+  if (raw.startsWith('/')) return `${LOC_BASE}${raw}`;
   return raw;
 }
 
@@ -229,6 +249,26 @@ export function isCodedDate(value: string): boolean {
   return (
     /^\d*[u|][\d|u]*$/.test(value) || /^\d{7,}$/.test(value) || /(?:^|\s)d\d{4}(?=\s|$)/.test(value)
   );
+}
+
+/**
+ * The date an eight-digit compact sort number names, at its own precision: `YYYY0000` → `YYYY`,
+ * `YYYYMM00` → `YYYY-MM`, `YYYYMMDD` → `YYYY-MM-DD`. Undefined for any other value and for a number
+ * that is no calendar date (year `0000`, month 13, day 32, 30 February, a `00` month with a day). LOC sends the
+ * number where the readable date is padded to a day it never recorded (`18631100` beside
+ * `1863-11-01`). A year can stand for a cataloged range (`19660000` for `[Between 1966 and 1968]`):
+ * it is the year LOC indexes, and the range stays in the imprint.
+ */
+export function compactDate(value: string): string | undefined {
+  const match = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
+  if (!match) return;
+  const [, year = '', month = '', day = ''] = match;
+  if (year === '0000') return;
+  if (month === '00') return day === '00' ? year : undefined;
+  if (day === '00') return Number(month) <= 12 ? `${year}-${month}` : undefined;
+  return Number(month) <= 12 && Number(day) <= daysInMonth(Number(year), Number(month))
+    ? `${year}-${month}-${day}`
+    : undefined;
 }
 
 /** The first of `candidates` that holds a date: decoded, non-empty, and not {@link isCodedDate}. */
@@ -260,11 +300,16 @@ function normalizeSearchResult(result: RawLocSearchResult): LocItemSummary {
       : undefined;
   // The top-level date can be LOC's padded sort key ("1915-01-01"); the row's item block carries
   // the date as cataloged ("c1915 Feb. 19.") when it has one, but on scores, manuscripts, maps,
-  // and catalog-only books a coded value instead ("18950000", "185u", "uuuu"), where the top-level
-  // date ("1895", "185?") stands in. The item block's shape varies by endpoint, so only a string
-  // there is read.
-  const itemDate = result.item?.date;
-  const date = catalogedDate(typeof itemDate === 'string' ? itemDate : undefined, result.date);
+  // and catalog-only books a coded value instead: a compact sort number, read at its own precision
+  // ("18631100" → "1863-11", where the top-level date is "1863-11-01"), or a MARC placeholder
+  // ("185u", "uuuu"), where the top-level date ("185?") stands in. The item block's shape varies
+  // by endpoint, so only a string there is read.
+  const rawItemDate = result.item?.date;
+  const itemDate = typeof rawItemDate === 'string' ? rawItemDate : undefined;
+  const date = catalogedDate(itemDate, itemDate && compactDate(itemDate), result.date);
+  // Passed through whole: the long lists are collection landing rows, and the contributor facet's
+  // top 10 cannot stand in for a collection's full list.
+  const contributorTerms = extractStringArray(result.contributor);
   return {
     id,
     title,
@@ -272,6 +317,7 @@ function normalizeSearchResult(result: RawLocSearchResult): LocItemSummary {
     ...(description && { description }),
     ...(format && { format }),
     is_item,
+    ...(contributorTerms.length > 0 && { contributor_terms: contributorTerms }),
     url,
     ...(page_url && { page_url }),
     ...(link_notice && { link_notice }),
@@ -285,6 +331,40 @@ function facetValues(facets: RawLocFacet[], type: string): LocFacetValue[] {
       ? [{ value: decodeText(value), count }]
       : [],
   );
+}
+
+/**
+ * One `fa` segment, `<facet>:<value>` — every caller-supplied filter value is sent through here
+ * (the `original-format` segment carries a fixed catalog value). LOC splits `fa` at `|`, so a
+ * value holding one would be cut short and the rest read as a separate filter (a keyless remainder
+ * is silently dropped). An empty segment at either end is no filter to LOC (`location:oklahoma|`
+ * answers as `location:oklahoma` does), so `|` and spaces at the ends of `value` are dropped. A
+ * value with `|` anywhere else, or with nothing left, is refused before any request, as a
+ * validation error naming `field`, the caller's input name for the filter. `toFacetValue` turns
+ * the cleaned value into the form the facet indexes (a postal code into its state name).
+ *
+ * @throws McpError ValidationError with `data.reason: 'invalid_filter_value'` when `value` holds
+ *   `|` between other characters or holds nothing else.
+ */
+export function facetSegment(
+  field: string,
+  facet: string,
+  value: string,
+  toFacetValue: (term: string) => string = (term) => term,
+): string {
+  const isEdge = (char: string | undefined) => char === '|' || char?.trim() === '';
+  let start = 0;
+  let end = value.length;
+  while (start < end && isEdge(value[start])) start += 1;
+  while (end > start && isEdge(value[end - 1])) end -= 1;
+  const term = value.slice(start, end);
+  if (term === '' || term.includes('|')) {
+    throw validationError(
+      `The ${field} value cannot contain "|", which the Library of Congress reads as a separator between filters.`,
+      { reason: 'invalid_filter_value', field, retryable: false },
+    );
+  }
+  return `${facet}:${toFacetValue(term)}`;
 }
 
 function normalizePagination(
@@ -332,10 +412,36 @@ type RawItemResource = NonNullable<RawLocItemResponse['resources']>[number];
 type RawFileGroup = NonNullable<RawItemResource['files']>[number];
 
 /**
+ * Whether a resource's `fulltext_file` is a TEI document transcription: an https tile.loc.gov URL
+ * with no port or credentials whose path ends `.xml` (the American Memory `<tei2>` files of the
+ * Lincoln and Bell papers, California Gold, and the Rare Book printed ephemera and pamphlets).
+ * `itemPages` lists such a resource with `has_transcription` and `getNewspaperPage` reads the file,
+ * so the two never disagree. The path is tested, not the whole string: a newspaper page's ALTO
+ * text-service URL carries `.xml` only in its query. Book and By the People resources name a `.txt`
+ * file, which is not read, and a file anywhere else is never fetched. The URL parser drops the
+ * default port, so an explicit `:443` names the same request and passes.
+ */
+function isTranscriptionFile(fulltextFile: string): boolean {
+  const link = normalizeUrl(fulltextFile);
+  if (!URL.canParse(link)) return false;
+  const { protocol, hostname, port, username, password, pathname } = new URL(link);
+  return (
+    protocol === 'https:' &&
+    hostname === 'tile.loc.gov' &&
+    port === '' &&
+    username === '' &&
+    password === '' &&
+    pathname.endsWith('.xml')
+  );
+}
+
+/**
  * An item's resources and the window of its pages. Pages run across every resource in order;
  * page N of a resource is its `files[N-1]` group, addressed as the resource URL plus `?sp=N` (a
- * one-page resource by its bare URL — LOC's own page links). A resource without a URL has no
- * addressable page and is left out.
+ * one-page resource by its bare URL — LOC's own page links). Every resource is listed. One without
+ * a URL — a recording, tape side, or film reel, sent with only its `audio` or `video` — has no
+ * addressable page: its one file group is the player config and the media file it already names,
+ * so it lists with `page_count` 0 and `page_total` stays the sum of `page_count`.
  */
 function itemPages(
   rawResources: RawItemResource[],
@@ -344,16 +450,23 @@ function itemPages(
   const resources: LocItemResource[] = [];
   const all: Array<{ pageUrl: string; group: RawFileGroup }> = [];
   for (const raw of rawResources) {
-    if (!raw.url) continue;
-    const url = normalizeUrl(raw.url);
-    const groups = raw.files ?? [];
+    const url = raw.url ? normalizeUrl(raw.url) : undefined;
+    const groups = url ? (raw.files ?? []) : [];
     resources.push({
-      url,
+      ...(url && { url }),
       page_count: groups.length,
-      ...(raw.image && { image: raw.image }),
-      ...(raw.pdf && { pdf: raw.pdf }),
-      ...(raw.audio && { audio: raw.audio }),
+      ...(raw.image && { image: normalizeUrl(raw.image) }),
+      ...(raw.pdf && { pdf: normalizeUrl(raw.pdf) }),
+      ...(raw.audio && { audio: normalizeUrl(raw.audio) }),
+      ...(raw.video && { video: normalizeUrl(raw.video) }),
+      // typeof-guarded: an unrestricted download is a fact, not a missing value.
+      ...(typeof raw.download_restricted === 'boolean' && {
+        download_restricted: raw.download_restricted,
+      }),
+      ...(raw.fulltext_file &&
+        isTranscriptionFile(raw.fulltext_file) && { has_transcription: true }),
     });
+    if (!url) continue;
     groups.forEach((group, i) => {
       all.push({ pageUrl: groups.length === 1 ? url : withSequence(url, i + 1), group });
     });
@@ -407,7 +520,8 @@ export class LocApiService {
    * One FIFO queue in front of www.loc.gov. `minStartGapMs` spaces consecutive starts by the
    * configured delay; the window holds LOC's documented 20-per-minute ceiling whatever that delay
    * is, since a window alone admits all 20 starts in the same millisecond. id.loc.gov and the
-   * tile.loc.gov OCR fetch are different hosts under different limits and stay off it.
+   * tile.loc.gov OCR and transcription fetches are different hosts under different limits and
+   * stay off it.
    */
   private readonly pacer: Pacer;
   /**
@@ -608,8 +722,15 @@ export class LocApiService {
    *   result set with 404. Page 1 of an existing endpoint is never out of range (an empty
    *   result set is a 200), so a 404 there still throws NotFound — for a `/collections/{slug}/`
    *   search it is the only signal that the slug does not exist.
-   * - **400 or 520** — the retrieval-ceiling redirect terminates as 400; 520 is an older
-   *   out-of-range answer.
+   * - **400 on a page past the retrieval ceiling** — the ceiling redirect terminates as 400. A
+   *   400 on any other page has no known out-of-range cause, so it is not accepted: like a 520
+   *   or any other error status, it fails through {@link send} as `upstream_unavailable`.
+   *
+   * `limit` is the page size sent as `c`, so the ceiling is judged at the size LOC serves.
+   *
+   * A 414 means the search URL is longer than LOC accepts — in practice an over-long query, the
+   * one unbounded input — so it fails as the caller's `query_too_long` validation error rather
+   * than an outage an identical retry would hit again.
    *
    * Withholds the request `url` from error data for the same reason as `fetchJson` above —
    * here the query string carries the caller's own search terms.
@@ -621,16 +742,24 @@ export class LocApiService {
     ctx: Context,
     normalize: (result: RawLocSearchResult) => T,
   ): Promise<{ items: T[]; pagination: LocPagination; facets: RawLocFacet[] }> {
+    const allowStatus = isBeyondRetrievalCeiling(page, limit) ? [400, 414] : [414];
     const res = await retryWithinBudget(
       async (
         attempt,
       ): Promise<{ data: RawLocSearchResponse } | { outOfRange: OutOfRangeStatus }> => {
-        const response = await this.fetch(url, ctx, attempt, { allowStatus: [400, 520] });
+        const response = await this.fetch(url, ctx, attempt, { allowStatus });
         const { status } = response;
+        if (status === 414) {
+          throw validationError(`${LOC_UPSTREAM} refused this search as too long (HTTP 414).`, {
+            reason: 'query_too_long',
+            status,
+            retryable: false,
+          });
+        }
         if (status === 404 && page === 1) {
           throw notFound('LOC resource not found');
         }
-        if (status === 404 || status === 400 || status === 520) {
+        if (status === 404 || status === 400) {
           ctx.log.debug('LOC search returned out-of-range page', { status, url });
           return { outOfRange: status };
         }
@@ -667,10 +796,11 @@ export class LocApiService {
    * material endpoint. An unrecognized slug 404s, surfacing as NotFound from fetchSearchPage on
    * page 1; on a later page the same 404 reads as out of range (see fetchSearchPage).
    *
-   * `subjectTerms` (from `subjectFacetTerms`, ./subject-terms.ts) and `location` are ANDed into
-   * one `fa` value. With `includeFacets`, the request also asks for LOC's facet block and the
-   * response's subject and location facets come back as LOC's top values; without it, `facets` is
-   * absent. The facet block costs LOC measurable time per search, so it is opt-in.
+   * `subjectTerms` (from `subjectFacetTerms`, ./subject-terms.ts), `location`, and `contributor`
+   * are ANDed into one `fa` value, each sent as given. With `includeFacets`, the request also asks
+   * for LOC's facet block and the response's subject, location, and contributor facets come back
+   * as LOC's top values; without it, `facets` is absent. The facet block costs LOC measurable time
+   * per search, so it is opt-in.
    */
   async search(
     params: {
@@ -682,6 +812,8 @@ export class LocApiService {
       dates?: string;
       subjectTerms?: string[];
       location?: string;
+      /** A contributor facet value; LOC matches it case-insensitively, every other character exactly. */
+      contributor?: string;
       includeFacets?: boolean;
       limit?: number;
       page?: number;
@@ -697,7 +829,7 @@ export class LocApiService {
         ? `${LOC_BASE}/${formatSlug}/`
         : `${LOC_BASE}/search/`;
 
-    // `at=facets` cannot select facet types: it returns all ten (~21 KB), of which two are read.
+    // `at=facets` cannot select facet types: it returns all ten (~21 KB), of which three are read.
     const qs = new URLSearchParams({
       fo: 'json',
       q: params.query,
@@ -707,8 +839,11 @@ export class LocApiService {
     qs.set('sp', String(page));
     if (params.sort && params.sort !== 'relevance') qs.set('sb', params.sort);
     if (params.dates) qs.set('dates', params.dates);
-    const fa = (params.subjectTerms ?? []).map((term) => `subject:${term}`);
-    if (params.location) fa.push(`location:${params.location}`);
+    const fa = (params.subjectTerms ?? []).map((term) => facetSegment('subject', 'subject', term));
+    if (params.location) fa.push(facetSegment('location', 'location', params.location));
+    if (params.contributor) {
+      fa.push(facetSegment('contributor', 'contributor', params.contributor));
+    }
     if (params.collectionSlug && params.format) {
       fa.push(`original-format:${FORMAT_FACET_MAP[params.format]}`);
     }
@@ -728,6 +863,7 @@ export class LocApiService {
         facets: {
           subject: facetValues(facets, 'subject'),
           location: facetValues(facets, 'location'),
+          contributor: facetValues(facets, 'contributor'),
         },
       }),
     };
@@ -778,13 +914,31 @@ export class LocApiService {
     // Summary is prose; joining keeps a multi-paragraph record whole where taking the
     // first entry would silently drop the rest.
     const summary = joinedText(item.summary);
-    // On Prints & Photographs records item.date is a padded sort key ("1936-01-01");
-    // created_published_date is the date as cataloged ("1936 Apr."). A coded item.date ("uuuu",
-    // "0w0 d1804 d1806") is no date, and is left out.
-    const date = catalogedDate(item.created_published_date, item.date);
+    // item.date can be a padded sort key: "1936-01-01" on Prints & Photographs records, whose
+    // created_published_date is the date as cataloged ("1936 Apr."), and "1863-11-01" on records
+    // cataloged to a month or year, whose nested item.item.date is the compact number read at its
+    // own precision ("18631100" → "1863-11"). A coded item.date ("uuuu", "0w0 d1804 d1806") is no
+    // date, and is left out.
+    const rawNestedDate = item.item?.date;
+    const nestedDate = typeof rawNestedDate === 'string' ? rawNestedDate : undefined;
+    const date = catalogedDate(
+      item.created_published_date,
+      nestedDate && compactDate(nestedDate),
+      item.date,
+    );
     // The publication statement (place, publisher, date) is catalog text: decoded once, its
     // brackets ("2013-<2021>") kept as data.
     const imprint = joinedText(item.created_published);
+    // contributor_names carries dates and roles in no one pattern ("Heise, William, camera",
+    // "Lomax, John A. (John Avery), 1867-1948 (Collector)"), so the filter form cannot be derived
+    // from it; item.contributors keys each contributor by that form. An entry of any other shape
+    // names no term and is skipped: the record still returns.
+    const contributorTerms = [item.contributors ?? []]
+      .flat()
+      .filter(
+        (entry: unknown) => typeof entry === 'object' && entry !== null && !Array.isArray(entry),
+      )
+      .flatMap((entry) => Object.keys(entry).map(decodeText));
 
     return {
       item_id: itemId,
@@ -792,6 +946,7 @@ export class LocApiService {
       ...(date && { date }),
       ...(imprint && { imprint }),
       contributors: extractStringArray(item.contributor_names),
+      contributor_terms: contributorTerms,
       subject_headings: extractStringArray(item.subject_headings),
       subject_terms: extractStringArray(item.subject),
       notes: extractStringArray(item.notes),
@@ -820,7 +975,14 @@ export class LocApiService {
     };
   }
 
-  /** Search historical newspaper pages via the /newspapers/ endpoint */
+  /**
+   * Search historical newspaper pages via the /newspapers/ endpoint.
+   *
+   * `state`, `newspaperTitle`, and `language` are ANDed into one `fa` value. With
+   * `includeFacets`, the request also asks for LOC's facet block (35–40 KB on this endpoint) and
+   * the title, state, and language facets come back as LOC's top values — each value the form its
+   * filter accepts; without it, `facets` is absent.
+   */
   async searchNewspapers(
     params: {
       query: string;
@@ -828,15 +990,26 @@ export class LocApiService {
       dates?: string;
       state?: string;
       newspaperTitle?: string;
+      /** A language name as LOC's `language` facet indexes it (e.g. "german"), sent as given. */
+      language?: string;
       sort?: 'relevance' | 'date' | 'date_desc';
+      includeFacets?: boolean;
       limit?: number;
       page?: number;
     },
     ctx: Context,
-  ): Promise<{ items: LocNewspaperPage[]; pagination: LocPagination }> {
+  ): Promise<{
+    items: LocNewspaperPage[];
+    pagination: LocPagination;
+    facets?: LocNewspaperFacets;
+  }> {
     const limit = Math.min(params.limit ?? 25, LOC_MAX_PAGE_SIZE);
     const page = params.page ?? 1;
-    const qs = new URLSearchParams({ fo: 'json', q: params.query, at: 'results,pagination' });
+    const qs = new URLSearchParams({
+      fo: 'json',
+      q: params.query,
+      at: params.includeFacets ? 'results,pagination,facets' : 'results,pagination',
+    });
     qs.set('c', String(limit));
     qs.set('sp', String(page));
     if (params.sort && params.sort !== 'relevance') qs.set('sb', params.sort);
@@ -845,12 +1018,17 @@ export class LocApiService {
     // location_state, not location: location also matches city and county names, so "washington"
     // would pull in D.C. and every Washington County. partof_title matches only a title's full
     // catalog string (case-insensitive, no wildcard), so it is sent as given.
-    if (params.state) fa.push(`location_state:${locationStateName(params.state)}`);
-    if (params.newspaperTitle) fa.push(`partof_title:${params.newspaperTitle}`);
+    if (params.state) {
+      fa.push(facetSegment('state', 'location_state', params.state, locationStateName));
+    }
+    if (params.newspaperTitle) {
+      fa.push(facetSegment('newspaper_title', 'partof_title', params.newspaperTitle));
+    }
+    if (params.language) fa.push(facetSegment('language', 'language', params.language));
     if (fa.length > 0) qs.set('fa', fa.join('|'));
 
     const url = `${LOC_BASE}/newspapers/?${qs}`;
-    const { items, pagination } = await this.fetchSearchPage(
+    const { items, pagination, facets } = await this.fetchSearchPage(
       url,
       page,
       limit,
@@ -868,6 +1046,7 @@ export class LocApiService {
         // state), so no single entry is the place of publication — carry the whole facet. location
         // never stands in: it mixes cities, counties, and "united states".
         const states = extractStringArray(r.location_state);
+        const languages = extractStringArray(r.language);
         const date = extractFirstString(r.date);
         return {
           url: r.url ?? '',
@@ -876,20 +1055,34 @@ export class LocApiService {
           ...(date && { date }),
           ...(states.length > 0 && { states }),
           ...(rawTitle && { newspaper_title: rawTitle }),
+          ...(languages.length > 0 && { languages }),
         };
       },
     );
-    return { items, pagination };
+    return {
+      items,
+      pagination,
+      ...(params.includeFacets && {
+        facets: {
+          newspaper_title: facetValues(facets, 'partof_title'),
+          state: facetValues(facets, 'location_state'),
+          language: facetValues(facets, 'language'),
+        },
+      }),
+    };
   }
 
   /**
    * Retrieve the text of one page — newspaper, book, or manuscript — via its resource URL. The
    * text comes from the response's top-level `fulltext_service`, the per-page text service for the
-   * requested `sp`. `resource.fulltext_file` is never read: on books and manuscripts it is the
-   * whole volume's text (the same file for every page), and on newspaper pages it is the same URL
-   * as `fulltext_service`. The page fetch and the text fetch share one call budget; the text leg
-   * gets whatever the page fetch left. `ocrMiss`, when set, says why `ocr_text` is empty on a page
-   * that has text; a blank page has none.
+   * requested `sp` (`text_scope: "page"`). A page with no text service whose `resource.fulltext_file`
+   * is a TEI transcription on tile.loc.gov ({@link isTranscriptionFile}) reads that file instead: the
+   * whole document's transcription, the same text on every page of it (`text_scope: "document"`),
+   * credited by `resource.fulltext_attribution`. Any other `fulltext_file` is not read: on books
+   * and By the People manuscripts it is the whole volume's plain text (the same file for every
+   * page), and on newspaper pages it is the same URL as `fulltext_service`. The page fetch
+   * and the text fetch share one call budget; the text leg gets whatever the page fetch left.
+   * `ocrMiss`, when set, says why `ocr_text` is empty on a page that has text; a blank page has none.
    */
   async getNewspaperPage(
     pageUrl: string,
@@ -943,13 +1136,23 @@ export class LocApiService {
       ? normalizeItemId(normalizeUrl(item.url))
       : newspaperIssueId(parsed.pathname);
 
-    // Only a non-empty string is a text service: image-only pages carry `{}` in its place.
+    // Only a non-empty string is a text service: pages without one carry `{}` in its place.
     const textService =
       typeof data.fulltext_service === 'string' && data.fulltext_service.trim()
         ? data.fulltext_service
         : undefined;
-    const ocrAvailable = textService !== undefined;
-    const ocr = textService ? await this.fetchOcrText(textService, ctx, deadlineAt) : { text: '' };
+    const transcription =
+      !textService &&
+      typeof res.fulltext_file === 'string' &&
+      isTranscriptionFile(res.fulltext_file)
+        ? normalizeUrl(res.fulltext_file)
+        : undefined;
+    const attribution = transcription && extractFirstString(res.fulltext_attribution);
+    const ocr = textService
+      ? await this.fetchOcrText(textService, ctx, deadlineAt)
+      : transcription
+        ? await this.fetchTranscription(transcription, ctx, deadlineAt)
+        : { text: '' };
 
     return {
       page_url: pageUrl,
@@ -963,39 +1166,95 @@ export class LocApiService {
       ...(sequence !== undefined && { sequence }),
       ...(segmentCount !== undefined && { segment_count: segmentCount }),
       ocr_text: 'text' in ocr ? ocr.text : '',
-      ocr_available: ocrAvailable,
+      ocr_available: textService !== undefined || transcription !== undefined,
+      ...(textService && { text_scope: 'page' as const }),
+      ...(transcription && { text_scope: 'document' as const }),
+      ...(attribution && { text_attribution: attribution }),
       ...('miss' in ocr && { ocrMiss: ocr.miss }),
     };
   }
 
   /**
    * The text behind a page's `fulltext_service`, or the reason it cannot be had: `unavailable`
-   * when the call ran out of budget, the service failed, or it answered with an HTML page (LOC's
-   * soft block under load) — a retry can help; `unparseable` when the service answered with any
-   * other body that is not its JSON text shape (a retry cannot). The page
-   * reports `ocr_available` either way. Retried within what the page fetch left of the budget, and
-   * off the www.loc.gov pacer and block check: tile.loc.gov is a different host under different
-   * limits. A cancelled call rethrows rather than degrading.
+   * when {@link fetchTileBody} could not get the body (a retry can help); `unparseable` when the
+   * service answered with a body that is not its JSON text shape (a retry cannot). The page
+   * reports `ocr_available` either way.
    */
   private async fetchOcrText(
     serviceUrl: string,
     ctx: Context,
     deadlineAt: number,
   ): Promise<{ text: string } | { miss: OcrMiss }> {
+    const fetched = await this.fetchTileBody(serviceUrl, ctx, deadlineAt, {
+      label: 'OCR text',
+      operation: 'loc-api-ocr-text',
+    });
+    if ('miss' in fetched) return fetched;
+    const text = parseFullText(fetched.body);
+    if (text === undefined) {
+      ctx.log.warning('OCR text service returned an unparseable body', {
+        bytes: fetched.body.length,
+      });
+      return { miss: 'unparseable' };
+    }
+    return { text };
+  }
+
+  /**
+   * The reading text of a document's TEI transcription ({@link teiReadingText}), or the reason it
+   * cannot be had: `unavailable` when {@link fetchTileBody} could not get the file (a retry can
+   * help); `unparseable` when the file is not a `<tei2>` transcription or does not parse (a retry
+   * cannot).
+   */
+  private async fetchTranscription(
+    fileUrl: string,
+    ctx: Context,
+    deadlineAt: number,
+  ): Promise<{ text: string } | { miss: OcrMiss }> {
+    const fetched = await this.fetchTileBody(fileUrl, ctx, deadlineAt, {
+      label: 'Transcription',
+      operation: 'loc-api-transcription',
+    });
+    if ('miss' in fetched) return fetched;
+    const text = teiReadingText(fetched.body);
+    if (text === undefined) {
+      ctx.log.warning('Transcription file is not a TEI transcription or does not parse', {
+        bytes: fetched.body.length,
+      });
+      return { miss: 'unparseable' };
+    }
+    return { text };
+  }
+
+  /**
+   * The body of one tile.loc.gov file, or `unavailable` when this call cannot have it: no budget
+   * left, a network fault past its retries, an error status (a 404 or 429 included), the budget
+   * running out mid-read, or an HTML page in place of the file (LOC's soft block under load). A
+   * secondary read beside the page fetch, so every failure degrades rather than failing the call,
+   * except a cancelled call, which rethrows. Retried within what the page fetch left of the
+   * budget, and off the www.loc.gov pacer and block check: tile.loc.gov is a different host under
+   * different limits. An echoed `q=` is stripped first, since tile.loc.gov 404s on it. `read`
+   * names the file in logs (`label`) and in retry telemetry (`operation`).
+   */
+  private async fetchTileBody(
+    url: string,
+    ctx: Context,
+    deadlineAt: number,
+    read: { label: string; operation: string },
+  ): Promise<{ body: string } | { miss: 'unavailable' }> {
     if (deadlineAt <= Date.now()) {
-      ctx.log.warning('OCR text fetch skipped — no time left in the call budget');
+      ctx.log.warning(`${read.label} fetch skipped — no time left in the call budget`);
       return { miss: 'unavailable' };
     }
     let body: string;
     try {
-      // Strip q= to avoid echoed search terms causing tile.loc.gov 404s.
-      const parsedUrl = new URL(serviceUrl);
+      const parsedUrl = new URL(url);
       parsedUrl.searchParams.delete('q');
-      const textUrl = parsedUrl.toString();
-      ctx.log.debug('Fetching OCR text', { url: textUrl });
-      const ocr = await retryWithinBudget(
+      const fileUrl = parsedUrl.toString();
+      ctx.log.debug(`Fetching ${read.label}`, { url: fileUrl });
+      const file = await retryWithinBudget(
         async ({ signal }) => {
-          const response = await fetch(textUrl, {
+          const response = await fetch(fileUrl, {
             headers: { 'User-Agent': this.userAgent },
             signal,
           });
@@ -1003,28 +1262,23 @@ export class LocApiService {
             ? { status: response.status, text: await readText(response, signal) }
             : { status: response.status };
         },
-        { ctx, operation: 'loc-api-ocr-text', deadlineAt, upstream: LOC_UPSTREAM },
+        { ctx, operation: read.operation, deadlineAt, upstream: LOC_UPSTREAM },
       );
-      if (ocr.text === undefined) {
-        ctx.log.warning('OCR text service returned error', { status: ocr.status });
+      if (file.text === undefined) {
+        ctx.log.warning(`${read.label} service returned error`, { status: file.status });
         return { miss: 'unavailable' };
       }
-      body = ocr.text;
+      body = file.text;
     } catch (err) {
       if (ctx.signal.aborted) throw err;
-      ctx.log.warning('OCR text fetch failed', { error: String(err) });
+      ctx.log.warning(`${read.label} fetch failed`, { error: String(err) });
       return { miss: 'unavailable' };
     }
     if (HTML_RESPONSE_RE.test(body)) {
-      ctx.log.warning('OCR text service returned an HTML page — a transient block');
+      ctx.log.warning(`${read.label} service returned an HTML page — a transient block`);
       return { miss: 'unavailable' };
     }
-    const text = parseFullText(body);
-    if (text === undefined) {
-      ctx.log.warning('OCR text service returned an unparseable body', { bytes: body.length });
-      return { miss: 'unparseable' };
-    }
-    return { text };
+    return { body };
   }
 
   /** Browse LOC curated digital collections */

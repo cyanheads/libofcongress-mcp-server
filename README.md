@@ -35,7 +35,7 @@ Library of Congress digital collections, Chronicling America historic newspapers
 
 | Tool | Description |
 |:-----|:------------|
-| `libofcongress_search_items` | Search LOC digital collections by keyword with format, date range, subject, location, and collection filters. |
+| `libofcongress_search_items` | Search LOC digital collections by keyword with format, date range, subject, location, contributor, and collection filters. |
 | `libofcongress_get_item` | Retrieve full metadata for a specific LOC digital item — imprint, contributors, subjects, rights, formats, its digital resources, and a paged list of its pages. |
 | `libofcongress_search_newspapers` | Search historical newspaper pages in the Chronicling America corpus, with an excerpt of each page's opening OCR text. |
 | `libofcongress_get_newspaper_page` | Retrieve the full text and metadata of one page — a newspaper page, or a book or manuscript page from `libofcongress_get_item` — or only the passages around a search term. |
@@ -58,26 +58,28 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 ### `libofcongress_search_items` <sub>tool</sub>
 
-- Filters: eight material formats (`photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`), inclusive year range (`date_start`/`date_end`), `subject` (an LCSH heading from `libofcongress_search_subjects` or a facet term), location, and `collection_slug` (from `libofcongress_browse_collections`, combinable with `format`); up to 100 results per page — a larger `limit` (up to 1000) is served as 100 with `effectiveLimit` and a notice
+- Filters: eight material formats (`photo`, `map`, `newspaper`, `manuscript`, `audio`, `film`, `book`, `notated-music`), inclusive year range (`date_start`/`date_end`), `subject` (an LCSH heading from `libofcongress_search_subjects` or a facet term), location, `contributor` (a name as LOC indexes it, without dates or roles), and `collection_slug` (from `libofcongress_browse_collections`, combinable with `format`); up to 100 results per page — a larger `limit` (up to 1000) is served as 100 with `effectiveLimit` and a notice
 - Use `query: "*"` to browse without a keyword. `sort` accepts `relevance` (default), `date` (oldest first), or `date_desc` (newest first); `effectiveSort` echoes the order LOC applies before pagination
-- Each result carries `date` as LOC catalogs it and `is_item`: `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for other resources. Newspaper rows include `page_url` for `libofcongress_get_newspaper_page`; retired catalog links carry `link_notice` and retain their original URL. Other non-item rows can be opened at `url`
-- `include_facets: true` adds `subject_facets` and `location_facets` (LOC's top 10 terms across all matches, each with its item count); off by default since it slows every search. A zero-result notice names the subject terms and location applied
+- Each result carries `date` as LOC catalogs it and `is_item`: `true` for catalog items whose `id` resolves via `libofcongress_get_item`, `false` for other resources. Newspaper rows include `page_url` for `libofcongress_get_newspaper_page`; retired catalog links carry `link_notice` and retain their original URL. Other non-item rows can be opened at `url`. `contributor_terms` lists the contributors LOC credits a row with, in the form the `contributor` filter accepts
+- `include_facets: true` adds `subject_facets`, `location_facets`, and `contributor_facets` (LOC's top 10 terms across all matches, each with its item count); off by default since it slows every search. A zero-result notice names the subject terms, location, and contributor applied
+- A subject, location, or contributor value with `|` inside it is rejected as `invalid_filter_value` (a `|` at either end is dropped); a query LOC refuses as too long fails as `query_too_long`
 
 ---
 
 ### `libofcongress_get_item` <sub>tool</sub>
 
 - Takes a search result's `id` (simple or multi-segment, e.g. `sn95047246/1935-09-05/ed-1`), a loc.gov item link, or an `lccn.loc.gov` permalink; any other URL is rejected as `invalid_item_id` before any request
-- Returns the `imprint`, contributors with roles, LCSH `subject_headings`, `subject_terms` (the lowercase terms the search `subject` filter accepts), notes, summary, languages, locations, `rights_information` as plain text, physical description, call number, former IDs, formats, and `access_restricted`; fields absent upstream are omitted
-- `resources` lists each digital resource with its page count, `image`, `pdf`, and `audio` (MP3). `pages` lists 50 pages at a time by default (`page_offset`, `page_limit`, `page_total`, `next_page_offset`; at most 100 per call — a larger `page_limit`, up to 1000, is served as 100 with `effectivePageLimit` and a notice), each with a `page_url` and `has_text` that read through `libofcongress_get_newspaper_page`. `include_files: true` adds each page's download URLs
+- Returns the `imprint`, contributors with roles and `contributor_terms` (the names the search `contributor` filter accepts), LCSH `subject_headings`, `subject_terms` (the lowercase terms the search `subject` filter accepts), notes, summary, languages, locations, `rights_information` as plain text, physical description, call number, former IDs, formats, and `access_restricted`; fields absent upstream are omitted
+- `resources` lists every digital resource with its page count, `image`, `pdf`, `audio` (MP3), `video` (MP4), and `download_restricted`; a recording, tape side, or film reel LOC sends with only its media file has no `url` and no pages. `has_transcription` marks a resource whose document has one transcription, which `libofcongress_get_newspaper_page` returns for any of its pages. `pages` lists 50 pages at a time by default (`page_offset`, `page_limit`, `page_total`, `next_page_offset`; at most 100 per call — a larger `page_limit`, up to 1000, is served as 100 with `effectivePageLimit` and a notice), each with a `page_url` and `has_text` that read through `libofcongress_get_newspaper_page`. `include_files: true` adds each page's download URLs
 
 ---
 
 ### `libofcongress_search_newspapers` <sub>tool</sub>
 
-- Filters: keyword, inclusive date range down to the day (`date_start`/`date_end` take an integer year or a `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` string), indexed state/province (full name or supported US postal code), and newspaper title (the exact `newspaper_title` of a search result); up to 100 results per page — a larger `limit` (up to 1000) is served as 100 with `effectiveLimit` and a notice
+- Filters: keyword, inclusive date range down to the day (`date_start`/`date_end` take an integer year or a `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` string), indexed state/province (full name or supported US postal code), newspaper title (the exact `newspaper_title` of a search result), and `language` (as LOC indexes it, e.g. `german`; a bilingual page matches each of its languages); up to 100 results per page — a larger `limit` (up to 1000) is served as 100 with `effectiveLimit` and a notice
 - `sort` accepts `relevance` (default), `date` (oldest first), or `date_desc` (newest first); `effectiveSort` echoes the applied order
-- Each result carries the opening ~500 characters of the page's OCR text, `states`, and the `url` that `libofcongress_get_newspaper_page` takes verbatim
+- Each result carries the opening ~500 characters of the page's OCR text, `states`, `languages`, and the `url` that `libofcongress_get_newspaper_page` takes verbatim
+- `include_facets: true` adds `newspaper_title_facets`, `state_facets`, and `language_facets` (LOC's top 10 values across all matches, each with LOC's page count), the values the `newspaper_title`, `state`, and `language` filters accept unchanged; off by default since LOC's facet block is large. A `|` inside a filter value is rejected as `invalid_filter_value` (one at either end is dropped); a query LOC refuses as too long fails as `query_too_long`
 - The excerpt is the page's first lines, not the text around the match; pass the same query as `match` to `libofcongress_get_newspaper_page` for the passages around it
 
 ---
@@ -86,6 +88,7 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 - Takes the `url` from a `libofcongress_search_newspapers` result, or a `pages[].page_url` from `libofcongress_get_item` (newspaper, book, and manuscript pages alike), plus Chronicling America page links; a link that names no single page, any other host, or a malformed path or `sp` is rejected as `invalid_page_url` before any request
 - Returns the page's text as `ocr_text` with `newspaper_title`, `date`, `place_of_publication`, `states`, `edition`, `sequence`, `segment_count`, `item_title`, and `item_id` (pass it to `libofcongress_get_item` to list the item's pages). `ocr_available: false` marks an image-only page, and a `notice` explains an empty result: the text service did not answer (retry), the body could not be read as text, or the page is blank
+- A manuscript or printed pamphlet LOC transcribed as one document (the Lincoln papers, for one) returns that whole transcription as `ocr_text` on any of its pages, `text_scope: "document"`, with `text_attribution` when LOC names a transcriber; a page with a text service of its own is `text_scope: "page"`. A manuscript's transcription omits the editors' notes and the wording the writer canceled
 - `match` returns only the passages around a term — pass the query you searched with. Space-separated words are separate terms and a double-quoted span is one phrase, matched case-insensitively. `matches` holds up to 10 passages of about 300 characters either side of each occurrence, `match_count` counts every occurrence, and `ocr_text` is empty; a notice says when nothing matched or some occurrences fall outside the passages. If text retrieval fails, both match fields are absent because the result is unknown; blank and image-only pages still report zero
 
 ---
@@ -103,6 +106,7 @@ All resource data is also reachable via `libofcongress_get_item`. Use `libofcong
 
 - Optional keyword filter on collection name and description; up to 100 collections per page — a larger `limit` (up to 1000) is served as a 100-collection page with `effectiveLimit` and a notice
 - Each collection carries a `slug` for `libofcongress_search_items`'s `collection_slug` (taken from the loc.gov route, not derivable from the title); `item_count` is approximate and omitted when LOC doesn't provide it
+- A keyword LOC refuses as too long fails as `query_too_long`
 
 ---
 
@@ -119,7 +123,7 @@ Library of Congress-specific:
 
 - Request queue in front of `www.loc.gov`: calls start in arrival order, at least `LOC_REQUEST_DELAY_MS` apart (default 3100ms, ~19 req/min), never exceeding LOC's 20 per minute. A call that cannot start in time fails as `server_busy` with `retryAfter`
 - Rate-limit handling: a 429 triggers LOC's 1-hour block, and calls fail without sending anything until it lifts (never retried); a Cloudflare challenge or HTML page instead of JSON fails as `upstream_unavailable` with `retryAfter: 60`. `libofcongress_search_subjects` (`id.loc.gov`) is unaffected
-- A 50-second budget per tool call covers queue wait, retries, and the OCR fetch, so a slow upstream fails as `request_timed_out`; other upstream failures (dropped connections, 5xx or 403, empty or truncated bodies) fail as `upstream_unavailable` with a retry hint
+- A 50-second budget per tool call covers queue wait, retries, and the OCR or transcription fetch, so a slow upstream fails as `request_timed_out`, which on the `www.loc.gov` tools is retryable with a recovery that leads with one unchanged retry; other upstream failures (dropped connections, any other error status, empty or truncated bodies) fail as `upstream_unavailable` with a retry hint
 - Pages past the end of the results or past the retrieval ceiling return an empty result with a notice, not an error
 - Newspaper OCR is surfaced as-is; 19th-century or degraded pages may contain garbled text
 
@@ -183,7 +187,7 @@ See [`.env.example`](./.env.example) for the full list of optional overrides.
 
 ### Local development
 
-Requires [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+Requires [Bun v1.4.4](https://bun.sh/) or higher (or Node.js v24+).
 
 ```sh
 git clone https://github.com/cyanheads/libofcongress-mcp-server.git

@@ -351,3 +351,96 @@ export const VHP_ITEM_AFC2001001_119910 = {
   resources: [],
   related_items: [],
 };
+
+/**
+ * `/photos/?q=lange&dates=1936/1936&fo=json&c=100&at=results,pagination,facets` (captured
+ * 2026-11-13) — 779 matches. Results cut to three of the hundred rows: one without `contributor`,
+ * one crediting two contributors, one crediting Lange alone. The facet block is cut to the location
+ * and contributor types, each entry to its count, title, and value; the contributor facet lists
+ * eight values.
+ */
+export const LANGE_PHOTOS_1936_SEARCH = {
+  results: [
+    {
+      id: 'http://www.loc.gov/item/2017759800/',
+      url: 'https://www.loc.gov/item/2017759800/',
+      title: 'Dorothea Lange, Resettlement Administration photographer, in California',
+      date: '1936-01-01',
+      description: ['1 negative : nitrate ; 2 1/4 x 2 1/4 inches or smaller.'],
+      original_format: ['photo, print, drawing'],
+      item: { date: '1936 Feb.' },
+    },
+    {
+      id: 'http://www.loc.gov/item/2018645771/',
+      url: 'https://www.loc.gov/item/2018645771/',
+      title: "[Dorothea Lange's holographic captions for photos in LOTs 344-345, page 2]",
+      date: '1936-01-01',
+      description: ['1 item (1 holograph leaf)'],
+      original_format: ['photo, print, drawing'],
+      contributor: ['lange, dorothea', 'united states. resettlement administration'],
+      item: { date: '[1936 or 1937]' },
+    },
+    {
+      id: 'http://www.loc.gov/item/2017762891/',
+      url: 'https://www.loc.gov/item/2017762891/',
+      title:
+        'Destitute pea pickers in California. Mother of seven children. Age thirty-two. Nipomo, California',
+      date: '1936',
+      description: [
+        '1 negative : nitrate ; 4 x 5 in. | Photograph shows Florence Thompson with three of her children in a photograph known as "Migrant Mother." For background information, see "Dorothea Lange\'s M̀igrant Mother\' photographs ..." http://www.loc.gov/rr/print/list/128_migm.html',
+      ],
+      original_format: ['photo, print, drawing'],
+      contributor: ['lange, dorothea'],
+      item: { date: '1936 March.' },
+    },
+  ],
+  pagination: { current: 1, from: 1, to: 100, of: 779, perpage: 100, results: '1 - 100', total: 8 },
+  facets: [
+    {
+      filters: [
+        { count: 724, title: 'United States', value: 'united states' },
+        { count: 333, title: 'California', value: 'california' },
+        { count: 72, title: 'Utah', value: 'utah' },
+        { count: 58, title: 'Kern County', value: 'kern county' },
+        { count: 56, title: 'Mississippi', value: 'mississippi' },
+        { count: 43, title: 'Texas', value: 'texas' },
+        { count: 40, title: 'Garfield County', value: 'garfield county' },
+        { count: 34, title: 'New Jersey', value: 'new jersey' },
+        { count: 33, title: 'Los Angeles County', value: 'los angeles county' },
+        { count: 30, title: 'Alabama', value: 'alabama' },
+      ],
+      title: 'Location',
+      type: 'location',
+    },
+    {
+      filters: [
+        { count: 776, title: 'Lange, Dorothea', value: 'lange, dorothea' },
+        {
+          count: 27,
+          title: 'United States. Resettlement Administration',
+          value: 'united states. resettlement administration',
+        },
+        {
+          count: 22,
+          title: 'United States. Farm Security Administration',
+          value: 'united states. farm security administration',
+        },
+        { count: 12, title: 'Rothstein, Arthur', value: 'rothstein, arthur' },
+        { count: 6, title: 'Lee, Russell', value: 'lee, russell' },
+        { count: 3, title: 'Mydans, Carl', value: 'mydans, carl' },
+        {
+          count: 2,
+          title: 'United States. Office of War Information',
+          value: 'united states. office of war information',
+        },
+        {
+          count: 1,
+          title: 'United States. Office of Coordinator of Information. Foreign Information Service',
+          value: 'united states. office of coordinator of information. foreign information service',
+        },
+      ],
+      title: 'Contributor',
+      type: 'contributor',
+    },
+  ],
+};

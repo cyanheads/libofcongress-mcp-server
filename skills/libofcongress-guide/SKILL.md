@@ -4,7 +4,7 @@ description: Follow collection, item, and page identifiers with libofcongress_* 
 license: Apache-2.0
 metadata:
   author: "cyanheads"
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Scope
@@ -19,8 +19,8 @@ Use these tools for Library of Congress digital collections, Chronicling America
 | Item ID | A `libofcongress_search_items` result with `is_item` true, or the `item_id` returned by `libofcongress_get_newspaper_page` | `libofcongress_get_item` |
 | Page URL | `libofcongress_search_newspapers`, a newspaper row's `page_url` in `libofcongress_search_items`, or `pages[].page_url` in `libofcongress_get_item` | `libofcongress_get_newspaper_page`; do not construct page URLs |
 | Subject label | `libofcongress_search_subjects` | Subject-filter `libofcongress_search_items` with the label, not the authority URI |
-| Subject/location facet value | Facets returned by `libofcongress_search_items`; an item's `subject_terms` also supplies subject values | Narrow the corresponding item search |
-| Newspaper title | The full `newspaper_title` returned by `libofcongress_search_newspapers` | Restrict another newspaper search to that title; copy it unchanged |
+| Subject/location/contributor facet value | `subject_facets`, `location_facets`, and `contributor_facets` from `libofcongress_search_items` with `include_facets`; an item's `subject_terms` also supplies subject values, and a search row's or an item's `contributor_terms` supplies contributor values (an item's `contributors` carry dates and roles and match nothing) | Narrow the corresponding item search; a newspaper page or issue credits the institution that digitized it, not an author |
+| Newspaper title, state, or language | The full `newspaper_title`, `states`, or `languages` of a `libofcongress_search_newspapers` row, or `newspaper_title_facets`, `state_facets`, and `language_facets` with `include_facets` | Restrict another newspaper search to that value; pass it unchanged |
 
 ## Gates
 
@@ -51,4 +51,4 @@ For subject-led discovery, resolve LCSH wording with `libofcongress_search_subje
 
 ### Read a book or manuscript
 
-Use `libofcongress_get_item` to obtain the page inventory and follow `next_page_offset` until the relevant pages are listed. Read pages marked `has_text` with `libofcongress_get_newspaper_page`, despite that tool's newspaper name. Passage matching scans one page at a time; it does not search the whole volume. For citations, use the item's contributors, title, imprint, and cataloged date, retaining uncertainty when a field is absent.
+Use `libofcongress_get_item` to obtain the page inventory and follow `next_page_offset` until the relevant pages are listed. Read pages marked `has_text` with `libofcongress_get_newspaper_page`, despite that tool's newspaper name. A resource marked `has_transcription` holds one transcription of its whole document: any of its pages returns it, even with `has_text` false, and it is the same on every page (`text_scope` "document"), so read one page rather than each. Otherwise passage matching scans one page at a time; it does not search the whole volume. For citations, use the item's contributors, title, imprint, and cataloged date, retaining uncertainty when a field is absent.

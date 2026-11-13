@@ -17,7 +17,7 @@ import { normalizeItemId } from '@/services/loc-api/loc-urls.js';
 export const locGetItem = tool('libofcongress_get_item', {
   title: 'Get LOC Item',
   description:
-    "Retrieve the full metadata record for a specific LOC digital item. Returns the imprint (place, publisher, and date of publication), contributors, LCSH subject headings and the subject terms the search subject filter accepts, summary, languages, locations, rights information, physical description, call number, original and online formats, access restrictions, former catalog IDs, notes, and related items, plus the item's digital resources (each with its page count, representative image, PDF, and audio) and a window of its pages. Each page has a page_url and has_text; pass a page_url with has_text true to libofcongress_get_newspaper_page to read that page's text (newspaper, book, and manuscript pages alike). A long item lists 50 pages per call: continue with page_offset set to next_page_offset. Set include_files for each listed page's downloadable files (TIFF, JP2, JPEG sizes, text). Use after libofcongress_search_items on a result whose is_item is true. Pass the result id — a simple ID, an LCCN, or a slash-separated newspaper path — or a loc.gov item link (`https://www.loc.gov/item/<id>/`) or LCCN permalink (`https://lccn.loc.gov/<lccn>`), which is read as its id. Non-item results (is_item: false) — collections, exhibits, guides, newspaper pages, catalog.loc.gov records, hdl.loc.gov finding aids — have no item record and cannot be retrieved here.",
+    "Retrieve the full metadata record for a specific LOC digital item. Returns the imprint (place, publisher, and date of publication), contributors as cataloged and the contributor terms the search contributor filter accepts, LCSH subject headings and the subject terms the search subject filter accepts, summary, languages, locations, rights information, physical description, call number, original and online formats, access restrictions, former catalog IDs, notes, and related items, plus the item's digital resources (each with its page count, representative image, PDF, audio or video file, and download restriction; a recording, tape side, or film reel LOC sends with only its media file has no url and no pages) and a window of its pages. Each page has a page_url and has_text; pass a page_url with has_text true to libofcongress_get_newspaper_page to read that page's text (newspaper, book, and manuscript pages alike). A resource with has_transcription true holds one transcription of its whole document: pass any of its page_urls, even with has_text false, to read it. A long item lists 50 pages per call: continue with page_offset set to next_page_offset. Set include_files for each listed page's downloadable files (TIFF, JP2, JPEG sizes, text). Use after libofcongress_search_items on a result whose is_item is true. Pass the result id — a simple ID, an LCCN, or a slash-separated newspaper path — or a loc.gov item link (`https://www.loc.gov/item/<id>/`) or LCCN permalink (`https://lccn.loc.gov/<lccn>`), which is read as its id. Non-item results (is_item: false) — collections, exhibits, guides, newspaper pages, catalog.loc.gov records, hdl.loc.gov finding aids — have no item record and cannot be retrieved here.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     item_id: z
@@ -61,7 +61,7 @@ export const locGetItem = tool('libofcongress_get_item', {
       .string()
       .optional()
       .describe(
-        'Publication or creation date as LOC catalogs it: free text, a year, or a full date (e.g., "1936 Apr.", "1909-1911.", "1894", "1912-04-16"). Absent when LOC records only a coded value ("uuuu", "||||") or none.',
+        'Publication or creation date as LOC catalogs it: free text, a year, a year and month, or a full date (e.g., "1936 Apr.", "1909-1911.", "1894", "1863-11", "1912-04-16"). Absent when LOC records only a coded value ("uuuu", "||||") or none.',
       ),
     imprint: z
       .string()
@@ -72,7 +72,12 @@ export const locGetItem = tool('libofcongress_get_item', {
     contributors: z
       .array(z.string())
       .describe(
-        'Contributors, creators, or photographers as LOC catalogs them, role included (e.g., "Washington, George, 1732-1799 (Author)"). One person can appear once per role. Empty when LOC lists none.',
+        'Contributors, creators, or photographers as LOC catalogs them, often with dates and a role (e.g., "Rothstein, Arthur, 1915-1985, photographer", "Washington, George, 1732-1799 (Author)"). One person can appear once per role. These match nothing as the libofcongress_search_items contributor filter; use contributor_terms. Empty when LOC lists none.',
+      ),
+    contributor_terms: z
+      .array(z.string())
+      .describe(
+        'The same contributors in the form the libofcongress_search_items contributor filter accepts: names without dates or roles (e.g., "rothstein, arthur"), in LOC order. On a newspaper issue, the institution that digitized it, not an author. Empty when LOC lists none.',
       ),
     subject_headings: z
       .array(z.string())
@@ -122,8 +127,15 @@ export const locGetItem = tool('libofcongress_get_item', {
       .array(
         z
           .object({
-            url: z.string().describe('LOC resource URL; its pages are this URL plus ?sp=N.'),
-            page_count: z.number().describe('Pages (file groups) in this resource.'),
+            url: z
+              .string()
+              .optional()
+              .describe(
+                'LOC resource URL; its pages are this URL plus ?sp=N. Absent on a recording side or film reel LOC lists with only its audio or video file, which has no pages.',
+              ),
+            page_count: z
+              .number()
+              .describe('Pages (file groups) in this resource; 0 for a resource without a url.'),
             image: z
               .string()
               .optional()
@@ -136,6 +148,24 @@ export const locGetItem = tool('libofcongress_get_item', {
               .string()
               .optional()
               .describe('Audio stream (MP3) of a sound recording. Absent when LOC gives none.'),
+            video: z
+              .string()
+              .optional()
+              .describe(
+                'Video file (MP4) of a film or video recording. Absent when LOC gives none.',
+              ),
+            download_restricted: z
+              .boolean()
+              .optional()
+              .describe(
+                "True when LOC restricts downloading this resource's audio or video file, false when it does not. Absent when LOC does not say.",
+              ),
+            has_transcription: z
+              .literal(true)
+              .optional()
+              .describe(
+                "True when this resource's document has a transcription: libofcongress_get_newspaper_page returns it whole for any of this resource's pages, even though those pages list has_text false. Absent otherwise.",
+              ),
           })
           .describe('One digital resource of the item, such as a photo, a volume, or a recording.'),
       )
@@ -149,7 +179,7 @@ export const locGetItem = tool('libofcongress_get_item', {
             page_url: z
               .string()
               .describe(
-                'LOC page URL. Pass to libofcongress_get_newspaper_page to read its text when has_text is true.',
+                "LOC page URL. Pass to libofcongress_get_newspaper_page to read its text when has_text is true, or its document's transcription when its resource has has_transcription.",
               ),
             has_text: z
               .boolean()
@@ -238,8 +268,10 @@ export const locGetItem = tool('libofcongress_get_item', {
     {
       reason: 'request_timed_out',
       code: JsonRpcErrorCode.Timeout,
+      retryable: true,
       when: 'The Library of Congress did not respond within the 50-second request budget.',
-      recovery: 'Retry in a few minutes; the Library of Congress is responding slowly.',
+      recovery:
+        'Retry this call once, unchanged; a repeat of a slow request can return faster. If it times out again, retry in a few minutes.',
     },
     {
       reason: 'upstream_unavailable',
@@ -321,9 +353,13 @@ export const locGetItem = tool('libofcongress_get_item', {
     lines.push(`**ID:** ${result.item_id}`);
     if (result.date) lines.push(`**Date:** ${inlineText(result.date)}`);
     if (result.imprint) lines.push(`**Imprint:** ${inlineText(result.imprint)}`);
+    // A contributor can hold a comma or "; " ("louisiana state university; baton rouge, la") and
+    // never "|", LOC's separator between filters, so entries join with " | " and each stays whole.
     if (result.contributors.length > 0)
-      lines.push(`**Contributors:** ${list(result.contributors, ', ')}`);
-    // Headings and terms can carry commas ("World War, 1939-1945"), so entries join with "; ".
+      lines.push(`**Contributors:** ${list(result.contributors, ' | ')}`);
+    if (result.contributor_terms.length > 0)
+      lines.push(`**Contributor terms:** ${list(result.contributor_terms, ' | ')}`);
+    // Headings and terms carry commas ("World War, 1939-1945"), so their entries join with "; ".
     if (result.subject_headings.length > 0)
       lines.push(`**Subject headings:** ${list(result.subject_headings, '; ')}`);
     if (result.subject_terms.length > 0)
@@ -357,7 +393,12 @@ export const locGetItem = tool('libofcongress_get_item', {
         if (r.image) parts.push(`image: ${r.image}`);
         if (r.pdf) parts.push(`pdf: ${r.pdf}`);
         if (r.audio) parts.push(`audio: ${r.audio}`);
-        lines.push(`- ${r.url} — ${parts.join('; ')}`);
+        if (r.video) parts.push(`video: ${r.video}`);
+        if (r.download_restricted !== undefined)
+          parts.push(`download restricted: ${r.download_restricted ? 'yes' : 'no'}`);
+        if (r.has_transcription) parts.push('has transcription');
+        // A recording side or film reel without a url is known by the media file in its parts.
+        lines.push(r.url ? `- ${r.url} — ${parts.join('; ')}` : `- ${parts.join('; ')}`);
       }
     }
     if (result.pages.length > 0) {

@@ -28,10 +28,26 @@ const dateBoundInput = z.union([
 /** Joins the empty-result advice: "a or b", "a, b, or c". */
 const DISJUNCTION = new Intl.ListFormat('en', { type: 'disjunction' });
 
+/** One include_facets list: LOC's top values of the facet behind the `filter` input. */
+const facetList = (filter: string, noun: string) =>
+  z
+    .array(
+      z
+        .object({
+          value: z.string().describe(`The ${noun}, exactly as the ${filter} filter accepts it.`),
+          count: z.number().describe(`Newspaper pages LOC tallies under this ${noun}.`),
+        })
+        .describe(`One ${filter} facet value.`),
+    )
+    .optional()
+    .describe(
+      `LOC's top ${noun}s across every page matching this search (up to 10), most frequent first. Pass a value unchanged as the ${filter} filter to narrow the search; a count is LOC's tally and can differ from the total that filtered search reports. Present only when include_facets is true; empty when LOC lists none.`,
+    );
+
 export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
   title: 'Search Historical Newspapers',
   description:
-    "Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with the opening of each page's OCR text (~500 characters), publication title, date, the states LOC indexes the title under, and the page URL needed for libofcongress_get_newspaper_page. Filters by keyword, date range, indexed state/province, and newspaper title. The excerpt is the page's first lines, not the text around the match: to read where the query occurs, call libofcongress_get_newspaper_page with the returned url field and this query as its match, which returns the passages around each occurrence; omit match for the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text.",
+    "Search historical newspaper pages in the Chronicling America corpus. Returns matching pages with the opening of each page's OCR text (~500 characters), publication title, date, the states LOC indexes the title under, the page's languages, and the page URL needed for libofcongress_get_newspaper_page. Filters by keyword, date range, indexed state/province, newspaper title, and language. The excerpt is the page's first lines, not the text around the match: to read where the query occurs, call libofcongress_get_newspaper_page with the returned url field and this query as its match, which returns the passages around each occurrence; omit match for the full page text. OCR quality varies: 19th-century and degraded materials may contain fragmented or garbled text. To discover the newspaper_title, state, and language values the filters accept for a search, set include_facets to get its top newspaper_title_facets, state_facets, and language_facets.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   input: z.object({
     query: z
@@ -59,13 +75,25 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       .string()
       .optional()
       .describe(
-        'Filter by LOC\'s State/Province facet: a full indexed name (e.g., "oklahoma", "piedmont") or a supported US postal code (e.g., "OK", "NY"), case-insensitive. Use "district of columbia" (or "DC") for Washington, D.C.; "washington" means Washington state. City and county names match nothing.',
+        'Filter by LOC\'s State/Province facet: a full indexed name (e.g., "oklahoma", "piedmont") or a supported US postal code (e.g., "OK", "NY"), case-insensitive. Use "district of columbia" (or "DC") for Washington, D.C.; "washington" means Washington state. City and county names match nothing. state_facets (include_facets) lists the top states for a search.',
       ),
     newspaper_title: z
       .string()
       .optional()
       .describe(
-        'Filter to one newspaper. Pass the newspaper_title value of a libofcongress_search_newspapers result exactly (case-insensitive), e.g., "new-york tribune (new york [n.y.]) 1866-1924" — the full catalog title with place and run. A shortened title such as "New-York Tribune" matches nothing.',
+        'Filter to one newspaper. Pass the newspaper_title value of a libofcongress_search_newspapers result exactly (case-insensitive), e.g., "new-york tribune (new york [n.y.]) 1866-1924" — the full catalog title with place and run. A shortened title such as "New-York Tribune" matches nothing. newspaper_title_facets (include_facets) lists the top titles for a search in this form.',
+      ),
+    language: z
+      .string()
+      .optional()
+      .describe(
+        'Filter by page language, named as LOC indexes it (e.g., "german", "english", "spanish"), case-insensitive. A bilingual page matches each of its languages. language_facets (include_facets) lists the languages a search covers.',
+      ),
+    include_facets: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Also return newspaper_title_facets, state_facets, and language_facets: LOC's top newspaper titles, states, and languages across every matching page, with counts — values the newspaper_title, state, and language filters accept unchanged. Default false: LOC's facet block is large, so request facets when you need filter values to narrow by.",
       ),
     limit: z
       .number()
@@ -113,6 +141,12 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
               .describe(
                 'The newspaper\'s full catalog title with place and run (e.g., "the seattle star (seattle, wash.) 1899-1947"). Pass it unchanged as newspaper_title to search only this paper.',
               ),
+            languages: z
+              .array(z.string())
+              .optional()
+              .describe(
+                'Every language LOC tags this page with (e.g., ["english", "german"]), in LOC order; a bilingual page lists each. Pass one as language to search only pages in it. Absent when LOC lists none.',
+              ),
           })
           .describe('A single newspaper page search result.'),
       )
@@ -129,6 +163,9 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       .describe(
         "True when a retrievable next page follows this one. Never promises a page past LOC's ~100,000-item retrieval ceiling.",
       ),
+    newspaper_title_facets: facetList('newspaper_title', 'newspaper title'),
+    state_facets: facetList('state', 'state'),
+    language_facets: facetList('language', 'language'),
   }),
 
   // Agent-facing success-path context — query echo, result count, and empty-result
@@ -178,6 +215,24 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
         'Put the earlier date in date_start and the later one in date_end, and keep a date_start given alone no later than the current year. Omit a bound to leave that side of the range open.',
     },
     {
+      reason: 'invalid_filter_value',
+      code: JsonRpcErrorCode.ValidationError,
+      retryable: false,
+      thrownBy: 'service',
+      when: 'A state, newspaper_title, or language value has "|" between other characters, which the Library of Congress reads as a separator between filters. A "|" at either end of a value is dropped.',
+      recovery:
+        'Remove the "|" from the value. Each filter takes a single value; to cover two values, run one search for each.',
+    },
+    {
+      reason: 'query_too_long',
+      code: JsonRpcErrorCode.ValidationError,
+      retryable: false,
+      thrownBy: 'service',
+      when: 'The Library of Congress refused the search as too long (HTTP 414), which an over-long query causes.',
+      recovery:
+        'Shorten the query to its most distinctive words, then search again. Resending the same query fails the same way.',
+    },
+    {
       reason: 'rate_limit_exceeded',
       code: JsonRpcErrorCode.RateLimited,
       retryable: false,
@@ -196,9 +251,10 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     {
       reason: 'request_timed_out',
       code: JsonRpcErrorCode.Timeout,
+      retryable: true,
       when: 'The Library of Congress did not respond within the 50-second request budget.',
       recovery:
-        'Narrow the search so it returns faster: add a tighter date_start/date_end range, a state, or a newspaper_title, then retry. If a narrow search also times out, retry in a few minutes.',
+        'Retry this call once, unchanged; a repeat of a slow request can return faster. If it times out again, narrow the search: add a tighter date_start/date_end range, a state, or a newspaper_title, then retry. If a narrow search also times out, retry in a few minutes.',
     },
     {
       reason: 'upstream_unavailable',
@@ -233,6 +289,7 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     }
     const range = resolveDateRange(bounds.date_start, bounds.date_end);
     if (!range.ok) throw ctx.fail('invalid_date_range', range.message, range.data);
+    const language = input.language?.trim() || undefined;
 
     // A limit past the per-call cap is a workload request, not an error: serve one capped page.
     const effectiveLimit = Math.min(input.limit, LOC_MAX_PAGE_SIZE);
@@ -246,6 +303,8 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
           ...(range.dates !== undefined && { dates: range.dates }),
           ...(input.state?.trim() && { state: input.state.trim() }),
           ...(input.newspaper_title?.trim() && { newspaperTitle: input.newspaper_title.trim() }),
+          ...(language !== undefined && { language }),
+          includeFacets: input.include_facets,
           limit: effectiveLimit,
           page: input.page,
         },
@@ -269,6 +328,11 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     }
 
     const { total, page, pages, hasNext, ceilingReached } = result.pagination;
+    const facets = result.facets && {
+      newspaper_title_facets: result.facets.newspaper_title,
+      state_facets: result.facets.state,
+      language_facets: result.facets.language,
+    };
     const addNotice = noticeWriter(ctx);
 
     ctx.enrich.echo(input.query);
@@ -291,8 +355,10 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
         (input.date_start || input.date_end
           ? ` in dates ${input.date_start ?? ''}–${input.date_end ?? ''}`
           : '') +
-        (newspaperTitle ? ` with newspaper_title "${newspaperTitle}"` : '');
-      // pages === 0 is the service's sentinel for a page LOC would not serve (404, 400, or 520).
+        (newspaperTitle ? ` with newspaper_title "${newspaperTitle}"` : '') +
+        (language ? ` in language "${language}"` : '');
+      // pages === 0 is the service's sentinel for a page LOC would not serve (a 404, or a 400
+      // past the retrieval ceiling).
       if (pages === 0 && page > 1) {
         addNotice(
           ceilingReached
@@ -300,7 +366,7 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
             : `Page ${page} is out of range for "${input.query}"${scope}. Re-run with page 1 to see the total match count and page count, then request a page within that range.`,
         );
         ctx.enrich.total(0);
-        return { items: [], total: 0, page, pages: 0, has_next: false };
+        return { items: [], total: 0, page, pages: 0, has_next: false, ...facets };
       }
       // LOC answers a wrong title and a right title with no keyword hits the same way, so the
       // notice states the exact-value requirement whenever a title filter was set.
@@ -310,13 +376,14 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       const advice = DISJUNCTION.format([
         ...(input.date_start || input.date_end ? ['broadening the date range'] : []),
         ...(input.state ? ['removing the state filter'] : []),
+        ...(language ? ['removing the language filter'] : []),
         'using different keywords',
       ]);
       addNotice(
         `No newspaper pages matched "${input.query}"${scope}.${titleHint} Try ${advice}. Historical OCR is approximate — variant spellings are common.`,
       );
       ctx.enrich.total(0);
-      return { items: [], total: 0, page, pages: 0, has_next: false };
+      return { items: [], total: 0, page, pages: 0, has_next: false, ...facets };
     }
 
     // Non-empty results are always returned: LOC's total can under-report the retrievable depth,
@@ -336,6 +403,7 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
       page,
       pages,
       has_next: hasNext,
+      ...facets,
     };
   },
 
@@ -344,12 +412,24 @@ export const locSearchNewspapers = tool('libofcongress_search_newspapers', {
     lines.push(
       `**Total:** ${result.total} | **Page:** ${result.page} of ${result.pages} | **has_next:** ${result.has_next}`,
     );
+    // Facet values can carry commas, so entries join with "; ".
+    for (const [label, values] of [
+      ['Top newspaper titles', result.newspaper_title_facets],
+      ['Top states', result.state_facets],
+      ['Top languages', result.language_facets],
+    ] as const) {
+      if (values?.length)
+        lines.push(
+          `**${label}:** ${values.map((f) => `${inlineText(f.value)} (${f.count})`).join('; ')}`,
+        );
+    }
     // Catalog text goes through inlineText, each OCR excerpt into a fenced block; URLs render as sent.
     for (const item of result.items) {
       lines.push(`\n## ${inlineText(item.title)}`);
       if (item.newspaper_title) lines.push(`**Publication:** ${inlineText(item.newspaper_title)}`);
       if (item.date) lines.push(`**Date:** ${inlineText(item.date)}`);
       if (item.states) lines.push(`**States:** ${item.states.map(inlineText).join(', ')}`);
+      if (item.languages) lines.push(`**Languages:** ${item.languages.map(inlineText).join(', ')}`);
       if (item.description) lines.push(fencedText(item.description));
       lines.push(`**URL:** ${item.url}`);
     }

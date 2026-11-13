@@ -37,7 +37,8 @@ function dayKey(year: number, month: number, day: number): number {
   return year * 10_000 + month * 100 + day;
 }
 
-function daysInMonth(year: number, month: number): number {
+/** Days in a Gregorian calendar month; `month` is 1 to 12. */
+export function daysInMonth(year: number, month: number): number {
   if (month === 2) return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
   return [4, 6, 9, 11].includes(month) ? 30 : 31;
 }

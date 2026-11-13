@@ -13,6 +13,11 @@ export type RawLocSearchResult = {
   original_format?: string[];
   online_format?: string[];
   subject?: string[];
+  /**
+   * Every contributor LOC credits the result with, in the contributor facet's form ("lange,
+   * dorothea", "wgbh (television station : boston, mass.)"). On a newspaper page, the institution
+   * that digitized it. Absent, never empty, when LOC credits none.
+   */
   contributor?: string[];
   location?: string[];
   /**
@@ -20,6 +25,10 @@ export type RawLocSearchResult = {
    * location[] for newspapers. Multi-valued: a title indexed against several states lists each.
    */
   location_state?: string[];
+  /**
+   * Language names as LOC's `language` facet indexes them (e.g. ["english", "german"]); a
+   * bilingual newspaper page lists each.
+   */
   language?: string[];
   /** Canonical publication title for Chronicling America results (e.g. "The Evening World") */
   partof_title?: string[];
@@ -34,8 +43,10 @@ export type RawLocSearchResult = {
   /**
    * Per-result detail block (e.g. `total`, `digitized`); shape varies by endpoint. On item search
    * rows, `date` is the date as cataloged ("c1915 Feb. 19.") where the top-level `date` can be a
-   * padded sort key ("1915-01-01"), or a coded catalog value ("18950000", "185u", "uuuu") where
-   * the top-level `date` is the readable one ("1895", "185?") or absent.
+   * padded sort key ("1915-01-01"); a compact sort number that names the date at its own precision
+   * ("18631100", "18630000") where the top-level `date` is padded to a day ("1863-11-01",
+   * "1863-01-01"); or a MARC placeholder ("185u", "uuuu") where the top-level `date` is the
+   * readable one ("185?") or absent.
    */
   item?: { date?: unknown; [key: string]: unknown };
 };
@@ -101,20 +112,37 @@ export type RawLocItemResponse = {
     id?: string;
     title?: string | string[];
     /**
-     * On Prints & Photographs records, a padded sort key ("1936-01-01"); elsewhere the date as
-     * cataloged, or a coded catalog value ("uuuu", "||||", "0w0 d1804 d1806").
+     * A padded sort key on Prints & Photographs records ("1936-01-01") and on records cataloged to
+     * a month or year ("1863-11-01"); elsewhere the date as cataloged, or a coded catalog value
+     * ("uuuu", "||||", "0w0 d1804 d1806").
      */
     date?: string;
     /** The date as cataloged ("1936 Apr.", "1909-1911."); sent on Prints & Photographs records. */
     created_published_date?: string;
+    /**
+     * The catalog record's own block. Its `date` is LOC's compact sort number ("18631100",
+     * "19660000") on manuscripts, scores, recordings, and films, cataloged text or a plain year
+     * ("1936 Apr.", "1894") elsewhere, and the same coded value as `date` where that is coded
+     * ("||||"). Only a string `date` is read.
+     */
+    item?: { date?: unknown };
     /**
      * The imprint as cataloged — place, publisher, and date ("Boston : Estes and Lauriat, 1894."),
      * or a date alone on photos and manuscripts ("1936 Apr."). An array on most records, with a
      * second entry for a copyright or phonogram date ("℗2017").
      */
     created_published?: string | string[];
-    /** Contributor names with roles (e.g. "Washington, George, 1732-1799 (Author)"). */
+    /**
+     * Contributor names as cataloged, often with dates and a role: "Rothstein, Arthur, 1915-1985,
+     * photographer", "Washington, George, 1732-1799 (Author)", "Lange, Dorothea.".
+     */
     contributor_names?: string[];
+    /**
+     * The same contributors in the contributor facet's form, each a single-key object mapping that
+     * form to LOC's search link for it (`{ "rothstein, arthur": "https://www.loc.gov/search/?fa=…" }`).
+     * An array, in an order of its own, on every captured record; a lone object reads as one entry.
+     */
+    contributors?: Array<Record<string, string>> | Record<string, string>;
     /** Subject facet terms: lowercase heading components without dates (e.g. "civil war"). */
     subject?: string[];
     /** LCSH headings as cataloged (e.g. "United States--History--Civil War, 1861-1865"). */
@@ -144,14 +172,28 @@ export type RawLocItemResponse = {
    * group per page, in page order: page N is addressed as `url` + `?sp=N`.
    */
   resources?: Array<{
+    /**
+     * Absent on a sound recording or film part (a recording, a tape side, a reel) LOC sends with
+     * only its `audio` or `video`, which can be every resource of the item; its one file group is
+     * the player config and that file.
+     */
     url?: string;
     caption?: string;
-    /** Representative image. */
+    /** Representative image; protocol-relative (`//tile.loc.gov/…`) or root-relative on some records. */
     image?: string;
     /** Whole-resource PDF. */
     pdf?: string;
     /** Audio stream (MP3) of a sound recording. */
     audio?: string;
+    /** Video file (MP4) of a film or video recording. */
+    video?: string;
+    /** LOC's download restriction on the media file, as sent; `false` is a fact, kept. */
+    download_restricted?: boolean;
+    /**
+     * The whole resource's text file: a TEI transcription (`…/4356500.xml`) on Lincoln papers and
+     * other American Memory manuscripts, a `.txt` volume text on books and crowd transcriptions.
+     */
+    fulltext_file?: string;
     /**
      * One group per page: every derivative of that page (IIIF sizes, JP2, TIFF master, text).
      * A `text/plain` entry carries the page's text service; it may have no `url` of its own.
@@ -194,25 +236,35 @@ export type RawLocNewspaperPageResponse = {
   resource?: {
     url?: string;
     /**
-     * Not read: on books and manuscripts it is the whole volume's text file, the same for every
-     * page; on newspaper pages it equals the top-level `fulltext_service`.
+     * Read only on a page without `fulltext_service`, and only when it is a TEI transcription on
+     * tile.loc.gov (`https://tile.loc.gov/…/<id>.xml`, the whole document's, the same for every
+     * page). Otherwise not read: on books and By the People manuscripts it is the whole volume's
+     * `.txt` file, the same for every page; on newspaper pages it equals the top-level
+     * `fulltext_service`.
      */
     fulltext_file?: string;
+    /**
+     * Who transcribed the `fulltext_file` (e.g. "Transcribed and annotated by the Lincoln Studies
+     * Center, Knox College. Galesburg, Illinois.").
+     */
+    fulltext_attribution?: string;
     /** Number of pages (segments) in the issue. */
     segment_count?: number;
   };
   /**
    * Text-service URL for the requested page (`sp`), present under `at=…,fulltext_service` when
-   * the page has OCR or transcribed text. Answers `{ "<segment>": { "full_text": "…" } }`. An
-   * image-only page carries an empty object (`{}`) here instead of a URL.
+   * the page has OCR or transcribed text. Answers `{ "<segment>": { "full_text": "…" } }`. A page
+   * with no text of its own — image-only, or one whose document's transcription is
+   * `resource.fulltext_file` — carries an empty object (`{}`) here instead of a URL.
    */
   fulltext_service?: string | Record<string, unknown> | null;
 };
 
 /**
- * Why a page with text returned none: `unavailable` — the text service failed, answered with an
- * HTML page, or the call ran out of time (a retry can help); `unparseable` — the service answered
- * with another body that is not its JSON text shape (a retry cannot).
+ * Why a page with text returned none: `unavailable` — the text service or transcription file
+ * failed, answered with an HTML page, or the call ran out of time (a retry can help);
+ * `unparseable` — the service answered with another body that is not its JSON text shape, or the
+ * transcription file is not a `<tei2>` transcription or does not parse (a retry cannot).
  */
 export type OcrMiss = 'unavailable' | 'unparseable';
 
@@ -230,6 +282,11 @@ export type LocItemSummary = {
    * `hdl.loc.gov` finding aids, which have no `/item/` record.
    */
   is_item: boolean;
+  /**
+   * The raw row `contributor` list, decoded and whole, in LOC order: values the search contributor
+   * filter takes. Absent when LOC sends none.
+   */
+  contributor_terms?: string[];
   url: string;
   /** Accepted newspaper page URL for getNewspaperPage; the original url stays intact. */
   page_url?: string;
@@ -240,8 +297,12 @@ export type LocItemSummary = {
 /** One facet value of a search, with the number of matching items that carry it. */
 export type LocFacetValue = { value: string; count: number };
 
-/** The subject and location facets of a search, each LOC's top values. */
-export type LocSearchFacets = { subject: LocFacetValue[]; location: LocFacetValue[] };
+/** The subject, location, and contributor facets of a search, each LOC's top values. */
+export type LocSearchFacets = {
+  subject: LocFacetValue[];
+  location: LocFacetValue[];
+  contributor: LocFacetValue[];
+};
 
 /** Normalized pagination info */
 export type LocPagination = {
@@ -265,7 +326,13 @@ export type LocItemDetail = {
   date?: string;
   /** The imprint (place, publisher, date) as cataloged, entries space-joined. Absent when LOC sends none. */
   imprint?: string;
+  /** Contributor names as cataloged, from the raw `contributor_names`. */
   contributors: string[];
+  /**
+   * The keys of the raw `item.contributors`, in LOC order: values the item search's contributor
+   * filter matches, which `contributors` entries do not.
+   */
+  contributor_terms: string[];
   /** LCSH headings as cataloged, from the raw `subject_headings`. */
   subject_headings: string[];
   /** Subject facet terms, from the raw `subject` — values the item search's subject filter matches. */
@@ -294,13 +361,20 @@ export type LocItemDetail = {
   url: string;
 };
 
-/** One digital resource of an item, e.g. a photo, a scanned volume, or a recording. */
+/**
+ * One digital resource of an item, e.g. a photo, a scanned volume, or a recording. A recording side
+ * or film reel LOC sends without a `url` has no pages (`page_count` 0); its media file identifies it.
+ */
 export type LocItemResource = {
-  url: string;
+  url?: string;
   page_count: number;
   image?: string;
   pdf?: string;
   audio?: string;
+  video?: string;
+  download_restricted?: boolean;
+  /** Set when the resource's document has a transcription: a `.xml` `fulltext_file` on tile.loc.gov. */
+  has_transcription?: true;
 };
 
 /** One page of an item resource. */
@@ -322,6 +396,18 @@ export type LocNewspaperPage = {
   /** Every state in LOC's location_state facet, in LOC order. Absent when LOC sends none. */
   states?: string[];
   newspaper_title?: string;
+  /** Every language LOC tags the page with, in LOC order. Absent when LOC sends none. */
+  languages?: string[];
+};
+
+/**
+ * The facets of a newspaper search that feed its filters, each LOC's top values: `newspaper_title`
+ * from `partof_title`, `state` from `location_state`, `language` from `language`.
+ */
+export type LocNewspaperFacets = {
+  newspaper_title: LocFacetValue[];
+  state: LocFacetValue[];
+  language: LocFacetValue[];
 };
 
 /** Normalized newspaper page full detail */
@@ -342,6 +428,13 @@ export type LocNewspaperPageDetail = {
   segment_count?: number;
   ocr_text: string;
   ocr_available: boolean;
+  /**
+   * What `ocr_text` covers, set whenever `ocr_available` is: `page` — the page's own text, from
+   * its text service; `document` — the whole document's TEI transcription, the same on every page.
+   */
+  text_scope?: 'page' | 'document';
+  /** Who transcribed a `document`-scope text, decoded. Absent when LOC names no one. */
+  text_attribution?: string;
 };
 
 /** Normalized collection record */

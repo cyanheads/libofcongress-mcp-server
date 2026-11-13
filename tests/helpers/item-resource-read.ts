@@ -1,6 +1,6 @@
 /**
  * @fileoverview Reads the item resource through the production resource factory and returns the
- * JSON-RPC `error` a client receives — the surface where a declared `errors[]` recovery is filled.
+ * JSON-RPC response a client receives — its `error` is where a declared `errors[]` recovery is filled.
  * @module tests/helpers/item-resource-read
  */
 
@@ -11,12 +11,18 @@ const PROTOCOL_VERSION = '2026-07-28';
 
 type WorkerHandler = ReturnType<typeof createWorkerHandler>;
 
+/** The parts of a `resources/read` JSON-RPC response the tests read; one is set per response. */
+interface ResourceReadResponse {
+  error: Record<string, unknown>;
+  result: { contents: Array<{ text: string }> };
+}
+
 /**
  * Reads `uri` through the production resource factory, served by `createWorkerHandler`, and
- * returns the JSON-RPC `error` the client receives. Calling `handler()` directly skips the
+ * returns the JSON-RPC response the client receives. Calling `handler()` directly skips the
  * factory, which is where a declared `errors[]` recovery hint is filled in.
  */
-export async function readItemResourceError(uri: string): Promise<Record<string, unknown>> {
+export async function readItemResource(uri: string): Promise<ResourceReadResponse> {
   const worker = createWorkerHandler({
     name: 'libofcongress-mcp-server',
     title: 'libofcongress-mcp-server',
@@ -60,5 +66,10 @@ export async function readItemResourceError(uri: string): Promise<Record<string,
           .map((line) => line.slice(5).trim())
           .join('\n')
       : text;
-  return (JSON.parse(payload) as { error: Record<string, unknown> }).error;
+  return JSON.parse(payload) as ResourceReadResponse;
+}
+
+/** The JSON-RPC `error` the client receives from a `resources/read` of `uri`. */
+export async function readItemResourceError(uri: string): Promise<Record<string, unknown>> {
+  return (await readItemResource(uri)).error;
 }

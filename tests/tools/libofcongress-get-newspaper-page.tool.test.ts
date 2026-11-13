@@ -26,6 +26,10 @@ import {
   BOOK_BLANK_PAGE_3_TEXT,
   BOOK_PAGE_11,
   BOOK_PAGE_11_TEXT,
+  FIRST_INAUGURAL_PAGE_1,
+  FIRST_INAUGURAL_TEI,
+  GETTYSBURG_NICOLAY_PAGE_1,
+  GETTYSBURG_NICOLAY_TEI,
   MANUSCRIPT_IMAGE_ONLY_PAGE_2,
   MANUSCRIPT_PAGE_3,
   MANUSCRIPT_PAGE_3_TEXT,
@@ -33,6 +37,8 @@ import {
   MANUSCRIPT_PAGE_4_TEXT,
   NEWSPAPER_ED2_PAGE_2,
   NEWSPAPER_PAGE_1,
+  RARE_BOOK_PAMPHLET_PAGE_1,
+  RARE_BOOK_PAMPHLET_TEI_EXCERPT,
 } from '../fixtures/loc-pages.js';
 import { TITANIC_OCR_EXCERPT } from '../fixtures/loc-text.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
@@ -594,7 +600,7 @@ describe('locGetNewspaperPage', () => {
       });
     });
 
-    it('marks a page without fulltext_service as having no text, whatever fulltext_file holds', async () => {
+    it('marks a page without fulltext_service as having no text when its fulltext_file is not a transcription', async () => {
       const { fulltext_service: _omit, ...withoutService } = MANUSCRIPT_PAGE_3;
       const spy = route({ '3': withoutService }, {});
 
@@ -734,7 +740,7 @@ describe('locGetNewspaperPage', () => {
         expect(sc).not.toHaveProperty('newspaper_title');
         expect(sc.item_id).toBe(itemId);
         const itemIdLine = itemId === undefined ? '' : `**Item ID:** ${itemId}\n`;
-        const head = `# ${title}\n**URL:** ${pageUrl}\n${itemIdLine}**Sequence:** ${sequence}\n**OCR available:** Yes\n\n`;
+        const head = `# ${title}\n**URL:** ${pageUrl}\n${itemIdLine}**Sequence:** ${sequence}\n**OCR available:** Yes\n**Text scope:** page\n\n`;
         const rendered = contentText(result);
         expect(rendered.slice(0, head.length)).toBe(head);
         expect(rendered).not.toContain('**Item title:**');
@@ -812,7 +818,7 @@ describe('locGetNewspaperPage', () => {
           `**Match count:** ${sc.match_count}`,
           ...(sc.matches as string[]).map((p, i) => `\n**Passage ${i + 1}**\n${fencedText(p)}`),
         ].join('\n');
-      const TRIBUNE_HEAD = `# New-York tribune\n**URL:** ${TRIBUNE_PAGE_1}\n**Item ID:** sn83030214/1912-04-16/ed-1\n**Item title:** New-York tribune (New York \\[N.Y.\\]), April 16, 1912\n**Date:** 1912-04-16\n**Place of publication:** New York \\[N.Y.\\]\n**States:** new york\n**Edition:** 1\n**Sequence:** 1 of 14\n**OCR available:** Yes\n`;
+      const TRIBUNE_HEAD = `# New-York tribune\n**URL:** ${TRIBUNE_PAGE_1}\n**Item ID:** sn83030214/1912-04-16/ed-1\n**Item title:** New-York tribune (New York \\[N.Y.\\]), April 16, 1912\n**Date:** 1912-04-16\n**Place of publication:** New York \\[N.Y.\\]\n**States:** new york\n**Edition:** 1\n**Sequence:** 1 of 14\n**OCR available:** Yes\n**Text scope:** page\n`;
 
       it('returns the passages around a phrase, across line breaks, instead of the page text, on both surfaces', async () => {
         const spy = servePage1();
@@ -1049,6 +1055,289 @@ describe('locGetNewspaperPage', () => {
         expect(String(locGetNewspaperPage.input.shape.match.description)).toMatch(
           /pass the query you gave libofcongress_search_newspapers/,
         );
+      });
+    });
+  });
+
+  describe('document transcriptions in resource.fulltext_file (#90)', () => {
+    const GETTYSBURG = 'https://www.loc.gov/resource/mal.4356500/';
+    const GETTYSBURG_FILE = GETTYSBURG_NICOLAY_PAGE_1.resource.fulltext_file;
+    const KNOX_COLLEGE =
+      'Transcribed and annotated by the Lincoln Studies Center, Knox College. Galesburg, Illinois.';
+    const RETRY_NOTICE =
+      "LOC holds a transcription of this page's document, but it was not returned this call. Retry libofcongress_get_newspaper_page; a persistent empty result means LOC's file service is temporarily unavailable.";
+    const UNPARSEABLE_NOTICE =
+      "LOC lists a transcription of this page's document, but the file it served could not be read as one (unparseable). Retrying will not change it; read the page's image at page_url instead.";
+    /** A tile.loc.gov answer: `body` raw, as tile.loc.gov sends a transcription. */
+    const tileFile =
+      (body: string, status = 200, contentType = 'text/xml') =>
+      () =>
+        new Response(body, { status, headers: { 'Content-Type': contentType } });
+    /**
+     * Serves every www.loc.gov page request with `page` and every tile.loc.gov request with `file`.
+     * Returns the stub; its calls list each requested URL.
+     */
+    function serveDocument(page: unknown, file: () => Response) {
+      const spy = vi.fn(async (input: string | URL | Request) => {
+        const { hostname } = new URL(String(input));
+        if (hostname === 'www.loc.gov') return new Response(JSON.stringify(page), { status: 200 });
+        if (hostname === 'tile.loc.gov') return file();
+        throw new Error(`unmocked fetch ${hostname}`);
+      });
+      vi.stubGlobal('fetch', spy);
+      return spy;
+    }
+    /** The tile.loc.gov URLs `spy` was asked for, in order. */
+    const tileRequests = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => new URL(url).hostname === 'tile.loc.gov');
+
+    it('returns the same address text on pages 1 and 3, without editors’ notes or footnote numerals, with its scope and attribution, on both surfaces', async () => {
+      const spy = serveDocument(GETTYSBURG_NICOLAY_PAGE_1, tileFile(GETTYSBURG_NICOLAY_TEI));
+
+      const page1 = await runToolContract(locGetNewspaperPage, { page_url: `${GETTYSBURG}?sp=1` });
+      const page3 = await runToolContract(locGetNewspaperPage, { page_url: `${GETTYSBURG}?sp=3` });
+
+      const sc1 = structured(page1);
+      expect(sc1).toMatchObject({
+        item_id: 'mal4356500',
+        sequence: 1,
+        segment_count: 4,
+        ocr_available: true,
+        text_scope: 'document',
+        text_attribution: KNOX_COLLEGE,
+      });
+      expect(sc1).not.toHaveProperty('notice');
+      const text = String(sc1.ocr_text);
+      expect(text).toContain(
+        'Four score and seven years ago our fathers brought forth, upon this continent, a new nation',
+      );
+      expect(text).toMatch(/shall not perish from the earth\.$/);
+      for (const absent of [
+        'President Lincoln was invited',
+        'This partial sentence',
+        'to stand here',
+        'Copy1',
+        'dedica-2',
+      ]) {
+        expect(text).not.toContain(absent);
+      }
+      expect(structured(page3)).toMatchObject({
+        sequence: 3,
+        ocr_text: text,
+        text_scope: 'document',
+        text_attribution: KNOX_COLLEGE,
+      });
+      const rendered = (sp: number) =>
+        `# Abraham Lincoln papers: Series 3. General Correspondence. 1837-1897: Abraham Lincoln, \\[November 1863\\] (Gettysburg Address: Nicolay Copy)\n**URL:** ${GETTYSBURG}?sp=${sp}\n**Item ID:** mal4356500\n**Sequence:** ${sp} of 4\n**OCR available:** Yes\n**Text scope:** document (a transcription of the whole document, the same on every page)\n**Text attribution:** ${KNOX_COLLEGE}\n\n${fencedText(text)}`;
+      expect(contentText(page1)).toBe(rendered(1));
+      expect(contentText(page3)).toBe(rendered(3));
+      expect(tileRequests(spy)).toEqual([GETTYSBURG_FILE, GETTYSBURG_FILE]);
+    });
+
+    it('returns a printed pamphlet’s transcription with its printed footnote and display type, and no attribution where LOC names none, on both surfaces', async () => {
+      const spy = serveDocument(
+        RARE_BOOK_PAMPHLET_PAGE_1,
+        tileFile(RARE_BOOK_PAMPHLET_TEI_EXCERPT),
+      );
+      const pageUrl = 'https://www.loc.gov/resource/rbaapc.20300/?sp=1';
+
+      const result = await runToolContract(locGetNewspaperPage, { page_url: pageUrl });
+
+      const sc = structured(result);
+      expect(sc).toMatchObject({
+        item_id: '12030032',
+        sequence: 1,
+        segment_count: 36,
+        ocr_available: true,
+        text_scope: 'document',
+      });
+      expect(sc).not.toHaveProperty('text_attribution');
+      expect(sc).not.toHaveProperty('notice');
+      const text = String(sc.ocr_text);
+      expect(text).toContain('which expresses my sentiments.*\n\n* New Orleans, June 6, 1865.\n\n');
+      expect(text).toContain('OFFICERS\nOF THE\nNational Lincoln Monument Association.');
+      expect(contentText(result)).toBe(
+        `# Celebration by the Colored People's Educational Monument Association in memory of Abraham Lincoln, on the Fourth of July, 1865, in the Presidential grounds, Washington, D.C.\n**URL:** ${pageUrl}\n**Item ID:** 12030032\n**Sequence:** 1 of 36\n**OCR available:** Yes\n**Text scope:** document (a transcription of the whole document, the same on every page)\n\n${fencedText(text)}`,
+      );
+      expect(tileRequests(spy)).toEqual([RARE_BOOK_PAMPHLET_PAGE_1.resource.fulltext_file]);
+    });
+
+    it.each([
+      {
+        name: 'the retry notice when the file read fails (a 404)',
+        file: tileFile('<html>Not Found</html>', 404, 'text/html'),
+        notice: RETRY_NOTICE,
+      },
+      {
+        name: 'the unparseable notice when the file is not a transcription (an ALTO file)',
+        file: tileFile('<?xml version="1.0"?><alto><Layout/></alto>'),
+        notice: UNPARSEABLE_NOTICE,
+      },
+    ])(
+      'returns the page with no text and $name, and under match no matches or match_count, on both surfaces',
+      async ({ file, notice }) => {
+        serveDocument(GETTYSBURG_NICOLAY_PAGE_1, file);
+
+        const whole = await runToolContract(locGetNewspaperPage, {
+          page_url: `${GETTYSBURG}?sp=1`,
+        });
+        const matched = await runToolContract(locGetNewspaperPage, {
+          page_url: `${GETTYSBURG}?sp=1`,
+          match: 'four score',
+        });
+
+        for (const result of [whole, matched]) {
+          expect(result.isError).toBeFalsy();
+          const sc = structured(result);
+          expect(sc).toMatchObject({
+            ocr_text: '',
+            ocr_available: true,
+            text_scope: 'document',
+            text_attribution: KNOX_COLLEGE,
+            notice,
+          });
+          expect(sc).not.toHaveProperty('matches');
+          expect(sc).not.toHaveProperty('match_count');
+          const text = contentText(result);
+          expect(text).toContain(
+            '**OCR available:** Yes\n**Text scope:** document (a transcription of the whole document, the same on every page)\n',
+          );
+          expect(text).toContain(notice);
+          expect(text).not.toContain('**Match count:**');
+          expect(text).not.toContain('```');
+          expect(text).not.toContain('image-only');
+        }
+      },
+    );
+
+    it('names the document in the empty-text notice for a transcription with an empty body, with or without match', async () => {
+      serveDocument(
+        GETTYSBURG_NICOLAY_PAGE_1,
+        tileFile('<tei2><text><body><div><p> </p></div></body></text></tei2>'),
+      );
+
+      const whole = await runToolContract(locGetNewspaperPage, { page_url: `${GETTYSBURG}?sp=1` });
+      const matched = await runToolContract(locGetNewspaperPage, {
+        page_url: `${GETTYSBURG}?sp=1`,
+        match: 'four score',
+      });
+
+      const notice = "LOC's transcription of this page's document is empty.";
+      expect(structured(whole)).toMatchObject({
+        ocr_text: '',
+        ocr_available: true,
+        text_scope: 'document',
+        notice,
+      });
+      expect(structured(matched)).toMatchObject({
+        ocr_text: '',
+        matches: [],
+        match_count: 0,
+        text_scope: 'document',
+        notice,
+      });
+      for (const result of [whole, matched]) {
+        expect(contentText(result)).toContain(notice);
+        expect(contentText(result)).not.toContain('```');
+      }
+    });
+
+    describe('match over the largest transcription found (mal0773800)', () => {
+      const FIRST_INAUGURAL = 'https://www.loc.gov/resource/mal.0773800/?sp=1';
+      const CUT_NOTICE =
+        'Showing 10 passages, chosen around the rarest match terms first; match_count counts every occurrence in the document. Omit match to read the whole transcription, which holds the rest; a narrower match (a quoted phrase or a rarer word) needs fewer passages.';
+      const NO_MATCH_NOTICE =
+        "Nothing in this document's transcription matched the match terms. This is a literal scan, and a word split across a line break can hide an occurrence; try another spelling or fewer words, or omit match to read the whole transcription.";
+
+      /** The document's whole reading text, as the tool returns it without match. */
+      async function wholeText() {
+        const result = await runToolContract(locGetNewspaperPage, { page_url: FIRST_INAUGURAL });
+        return String(structured(result).ocr_text);
+      }
+
+      /**
+       * The passage bounds the match description states: at most 10 passages, each at most 1,200
+       * characters, each holding a term, all cut from the document text in its order without
+       * overlapping. Each is rendered fenced in content[].
+       */
+      function expectPassageBounds(
+        result: Awaited<ReturnType<typeof runToolContract>>,
+        document: string,
+        terms: string[],
+      ) {
+        const sc = structured(result);
+        const passages = sc.matches as string[];
+        expect(passages.length).toBeGreaterThan(0);
+        expect(passages.length).toBeLessThanOrEqual(10);
+        let after = 0;
+        for (const passage of passages) {
+          expect(passage.length).toBeLessThanOrEqual(1200);
+          expect(terms.some((term) => passage.toLowerCase().includes(term))).toBe(true);
+          const at = document.indexOf(passage, after);
+          expect(at).toBeGreaterThanOrEqual(after);
+          after = at + passage.length;
+        }
+        const text = contentText(result);
+        expect(text).toContain(`**Match count:** ${sc.match_count}`);
+        passages.forEach((passage, i) => {
+          expect(text).toContain(`**Passage ${i + 1}**\n${fencedText(passage)}`);
+        });
+      }
+
+      it('returns the one passage around a rare word, with no notice', async () => {
+        serveDocument(FIRST_INAUGURAL_PAGE_1, tileFile(FIRST_INAUGURAL_TEI));
+        const document = await wholeText();
+
+        const result = await runToolContract(locGetNewspaperPage, {
+          page_url: FIRST_INAUGURAL,
+          match: 'battlefield',
+        });
+
+        const sc = structured(result);
+        expect(sc).toMatchObject({ ocr_text: '', match_count: 1, text_scope: 'document' });
+        expect(sc).not.toHaveProperty('notice');
+        expect(sc.matches).toHaveLength(1);
+        expect((sc.matches as string[])[0]).toContain(
+          'The mystic chords of memory, streching from every battlefield, and patriot grave',
+        );
+        expectPassageBounds(result, document, ['battlefield']);
+      });
+
+      it('cuts a stopword-heavy query to 10 bounded passages with the cut notice, counting every occurrence', async () => {
+        serveDocument(FIRST_INAUGURAL_PAGE_1, tileFile(FIRST_INAUGURAL_TEI));
+        const document = await wholeText();
+
+        const result = await runToolContract(locGetNewspaperPage, {
+          page_url: FIRST_INAUGURAL,
+          match: 'the people of the Union',
+        });
+
+        // "the" 360, "of" 152, "union" 21, "people" 20: literal, case-insensitive, inside words too.
+        const sc = structured(result);
+        expect(sc).toMatchObject({ ocr_text: '', match_count: 553, notice: CUT_NOTICE });
+        expect(sc.matches).toHaveLength(10);
+        expectPassageBounds(result, document, ['the', 'people', 'of', 'union']);
+        expect(contentText(result)).toContain(CUT_NOTICE);
+      });
+
+      it('names the document, not the page, when nothing in the transcription matches', async () => {
+        serveDocument(FIRST_INAUGURAL_PAGE_1, tileFile(FIRST_INAUGURAL_TEI));
+
+        const result = await runToolContract(locGetNewspaperPage, {
+          page_url: FIRST_INAUGURAL,
+          match: 'zeppelin',
+        });
+
+        expect(structured(result)).toMatchObject({
+          ocr_text: '',
+          matches: [],
+          match_count: 0,
+          text_scope: 'document',
+          notice: NO_MATCH_NOTICE,
+        });
+        expect(contentText(result)).toContain(NO_MATCH_NOTICE);
       });
     });
   });

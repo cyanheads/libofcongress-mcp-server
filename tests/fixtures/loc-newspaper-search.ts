@@ -1,7 +1,7 @@
 /**
  * @fileoverview `/newspapers/` search responses captured from www.loc.gov (`fo=json`), trimmed to
- * the first records and to the fields the search normalizer reads. Each body names the query and
- * the `dates`/`fa` it answered.
+ * the first records and to the fields the search normalizer reads; a facet block keeps the facet
+ * types named in its body's comment. Each body names the query and the `dates`/`fa` it answered.
  * @module tests/fixtures/loc-newspaper-search
  */
 
@@ -119,4 +119,252 @@ export const TITANIC_1912_WASHINGTON_STATE = JSON.stringify({
 export const TITANIC_1912_SHORT_TITLE_EMPTY = JSON.stringify({
   results: [],
   pagination: { current: 1, from: 0, of: 0, perpage: 1, results: '0 - 0', to: 0, total: 1 },
+});
+
+/**
+ * `q=lusitania&dates=1915-05-07/1915-05-09&at=results,pagination,facets&c=100` — 609 matches.
+ * Of LOC's 19 facet types, kept: the three the newspaper filters take (`partof_title`,
+ * `location_state`, `language`, each whole and in LOC order) and `subject_ethnicity`, whose
+ * `german` value is not a language. Each facet value keeps `value`, `count`, and display `title`.
+ */
+export const LUSITANIA_1915_FACETS = JSON.stringify({
+  results: [
+    {
+      url: 'https://www.loc.gov/resource/sn82014248/1915-05-08/ed-1/?sp=4&q=lusitania',
+      title: 'Image 4 of Daily Kennebec journal (Augusta, Me.), May 8, 1915',
+      date: '1915-05-08',
+      description: [
+        'BRITISH STR TRANSYLVANIA SAILS FROM N Y WITHIN FEW HOURS OF DISASTER 1 ___ New York Alay 7The British steamer Transylvania of the Anchor Line sailed late today ',
+      ],
+      location_state: ['maine'],
+      partof_title: ['daily kennebec journal (augusta, me.) 1870-1975 [microfilm reel]'],
+      language: ['english'],
+    },
+    {
+      url: 'https://www.loc.gov/resource/sn82014248/1915-05-08/ed-1/?sp=12&q=lusitania',
+      title: 'Image 12 of Daily Kennebec journal (Augusta, Me.), May 8, 1915',
+      date: '1915-05-08',
+      description: [
+        'ROYAL BAKING POWDER Absolutely Pure No Alum No Lime Phosphate LAWRENCE HIGH WINS THIRD STRAIGHT VICTORY Fairfield Me May 7SpecialLaw rence high school nine won ',
+      ],
+      location_state: ['maine'],
+      partof_title: ['daily kennebec journal (augusta, me.) 1870-1975 [microfilm reel]'],
+      language: ['english'],
+    },
+  ],
+  pagination: { current: 1, from: 1, of: 609, perpage: 100, results: '1 - 100', to: 100, total: 7 },
+  facets: [
+    {
+      type: 'partof_title',
+      title: 'Title',
+      filters: [
+        {
+          value:
+            'world war history : daily records and comments as appeared in american and foreign newspapers, 1914-1926 (new york) 1928-',
+          count: 153,
+          title:
+            'World War History : Daily Records and Comments as Appeared in American and Foreign Newspapers, 1914 to 1926 (New York) 1928',
+        },
+        {
+          value: 'evening star (washington, d.c.) 1854-1972',
+          count: 23,
+          title: 'Evening Star (Washington, D.C.) 1854 to 1972',
+        },
+        {
+          value: 'new-york tribune (new york [n.y.]) 1866-1924',
+          count: 21,
+          title: 'New-York Tribune (New York [N.Y.]) 1866 to 1924',
+        },
+        {
+          value: 'the montgomery advertiser (montgomery, ala.) 1885-1982',
+          count: 21,
+          title: 'The Montgomery Advertiser (Montgomery, Ala.) 1885 to 1982',
+        },
+        {
+          value: 'the birmingham age-herald (birmingham, ala.) 1902-1950',
+          count: 18,
+          title: 'The Birmingham Age-Herald (Birmingham, Ala.) 1902 to 1950',
+        },
+        {
+          value: 'the washington times (washington [d.c.]) 1902-1939',
+          count: 13,
+          title: 'The Washington Times (Washington [D.C.]) 1902 to 1939',
+        },
+        {
+          value: 'the sun (new york [n.y.]) 1833-1916',
+          count: 12,
+          title: 'The Sun (New York [N.Y.]) 1833 to 1916',
+        },
+        {
+          value: 'the washington herald (washington, d.c.) 1906-1939',
+          count: 11,
+          title: 'The Washington Herald (Washington, D.C.) 1906 to 1939',
+        },
+        {
+          value: 'omaha daily bee (omaha [neb.]) 187?-1922',
+          count: 9,
+          title: 'Omaha Daily Bee (Omaha [Neb.]) 187?-1922',
+        },
+        {
+          value: 'the daily telegram (clarksburg, w. va.) 1901-1926',
+          count: 9,
+          title: 'The Daily Telegram (Clarksburg, W. Va.) 1901 to 1926',
+        },
+      ],
+    },
+    {
+      type: 'location_state',
+      title: 'State/Province',
+      filters: [
+        { value: 'new york', count: 191, title: 'New York' },
+        { value: 'district of columbia', count: 47, title: 'District of Columbia' },
+        { value: 'alabama', count: 39, title: 'Alabama' },
+        { value: 'texas', count: 22, title: 'Texas' },
+        { value: 'illinois', count: 20, title: 'Illinois' },
+        { value: 'west virginia', count: 20, title: 'West Virginia' },
+        { value: 'connecticut', count: 19, title: 'Connecticut' },
+        { value: 'north dakota', count: 17, title: 'North Dakota' },
+        { value: 'iowa', count: 16, title: 'Iowa' },
+        { value: 'nebraska', count: 14, title: 'Nebraska' },
+      ],
+    },
+    {
+      type: 'subject_ethnicity',
+      title: 'Ethnicity',
+      filters: [
+        { value: 'german', count: 5, title: 'German' },
+        { value: 'polish', count: 4, title: 'Polish' },
+        { value: 'italian', count: 2, title: 'Italian' },
+      ],
+    },
+    {
+      type: 'language',
+      title: 'Language',
+      filters: [
+        { value: 'english', count: 498, title: 'English' },
+        { value: 'german', count: 52, title: 'German' },
+        { value: 'polish', count: 4, title: 'Polish' },
+        { value: 'spanish', count: 4, title: 'Spanish' },
+        { value: 'italian', count: 2, title: 'Italian' },
+        { value: 'lithuanian', count: 2, title: 'Lithuanian' },
+      ],
+    },
+  ],
+});
+
+/**
+ * The same search with `fa=language:german` — 71 matches, every row tagged `german`, a bilingual
+ * page tagged `english` too. The three filter facets narrow to the filtered set. Rows 1 and 3 of
+ * the page.
+ */
+export const LUSITANIA_1915_GERMAN = JSON.stringify({
+  results: [
+    {
+      url: 'https://www.loc.gov/resource/sn83045474/1915-05-08/ed-1/?sp=1&q=lusitania',
+      title: 'Image 1 of Tägliches Cincinnatier volksblatt (Cincinnati [Ohio]), May 8, 1915',
+      date: '1915-05-08',
+      description: [''],
+      location_state: ['ohio'],
+      partof_title: ['tägliches cincinnatier volksblatt (cincinnati [ohio]) 1885-1919'],
+      language: ['german'],
+    },
+    {
+      url: 'https://www.loc.gov/resource/sn83045081/1915-05-08/ed-1/?sp=6&q=lusitania',
+      title: 'Image 6 of Der Deutsche correspondent (Baltimore, Md.), May 8, 1915',
+      date: '1915-05-08',
+      description: [
+        'tretcicrr wt in 8I8titnt tklbr vastoi rccitlroiio uint 8cct1pe 8iUs8 128 i8t snxzv 1t8 vnelctcU Opiiiu Alcnptiin nncIl nnIki urtiti81n tlLQcZrcncttlxilo 128 vci',
+      ],
+      location_state: ['maryland'],
+      partof_title: ['der deutsche correspondent (baltimore, md.) 1841-1918'],
+      language: ['english', 'german'],
+    },
+  ],
+  pagination: { current: 1, from: 1, of: 71, perpage: 100, results: '1 - 71', to: 71, total: 1 },
+  facets: [
+    {
+      type: 'partof_title',
+      title: 'Title',
+      filters: [
+        {
+          value:
+            'world war history : daily records and comments as appeared in american and foreign newspapers, 1914-1926 (new york) 1928-',
+          count: 47,
+          title:
+            'World War History : Daily Records and Comments as Appeared in American and Foreign Newspapers, 1914 to 1926 (New York) 1928',
+        },
+        {
+          value: 'detroiter abend-post (detroit [mich.]) 18??-19??',
+          count: 11,
+          title: 'Detroiter Abend-Post (Detroit [Mich.]) 18??-19??',
+        },
+        {
+          value: 'der deutsche correspondent (baltimore, md.) 1841-1918',
+          count: 4,
+          title: 'Der Deutsche Correspondent (Baltimore, Md.) 1841 to 1918',
+        },
+        {
+          value: 'tägliches cincinnatier volksblatt (cincinnati [ohio]) 1885-1919',
+          count: 4,
+          title: 'Tägliches Cincinnatier Volksblatt (Cincinnati [Ohio]) 1885 to 1919',
+        },
+        {
+          value: 'freie presse für texas (san antonio, tex.) 1865-1945',
+          count: 3,
+          title: 'Freie Presse Für Texas (San Antonio, Tex.) 1865 to 1945',
+        },
+        {
+          value: 'tägliche omaha tribüne (omaha, nebr.) 1912-1926',
+          count: 2,
+          title: 'Tägliche Omaha Tribüne (Omaha, Nebr.) 1912 to 1926',
+        },
+      ],
+    },
+    {
+      type: 'location_state',
+      title: 'State/Province',
+      filters: [
+        { value: 'new york', count: 47, title: 'New York' },
+        { value: 'michigan', count: 11, title: 'Michigan' },
+        { value: 'maryland', count: 4, title: 'Maryland' },
+        { value: 'ohio', count: 4, title: 'Ohio' },
+        { value: 'texas', count: 3, title: 'Texas' },
+        { value: 'nebraska', count: 2, title: 'Nebraska' },
+      ],
+    },
+    {
+      type: 'language',
+      title: 'Language',
+      filters: [
+        { value: 'german', count: 71, title: 'German' },
+        { value: 'english', count: 40, title: 'English' },
+      ],
+    },
+  ],
+});
+
+/**
+ * `q=lusitania&dates=1915-05-07/1915-05-09&fa=language:klingon` — a language LOC has no pages in:
+ * `of` 0, and the facet block lists none of the three filter facets.
+ */
+export const LUSITANIA_1915_KLINGON_EMPTY = JSON.stringify({
+  results: [],
+  pagination: { current: 1, from: 0, of: 0, perpage: 100, results: '0 - 0', to: 0, total: 1 },
+  facets: [
+    {
+      type: 'object-type',
+      title: 'Display Level',
+      filters: [
+        { value: 'All', count: 0, title: 'All' },
+        { value: 'Titles', count: 0, title: 'Titles' },
+        { value: 'Issues', count: 0, title: 'Issues' },
+        { value: 'Pages (Full Text)', count: 0, title: 'Pages (Full Text)' },
+      ],
+    },
+    {
+      type: 'dates',
+      title: 'Date',
+      filters: [{ value: 'DAY', count: 0, title: '1915-05-07/1915-05-09' }],
+    },
+  ],
 });

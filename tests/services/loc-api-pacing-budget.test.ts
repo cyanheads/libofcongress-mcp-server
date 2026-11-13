@@ -212,6 +212,53 @@ describe('www.loc.gov request pacing', () => {
     expect(b.done && b.error === undefined).toBe(true);
   });
 
+  it.each([
+    {
+      leg: 'its text service',
+      resource: { url: 'https://www.loc.gov/resource/sn82014248/1912-04-18/ed-1/' },
+      fulltext_service: 'https://tile.loc.gov/text-services/full_text.json',
+      tileBody: JSON.stringify({ batch: { full_text: 'Text.' } }),
+    },
+    {
+      leg: "its document's transcription",
+      resource: {
+        url: 'https://www.loc.gov/resource/mal.4356500/',
+        fulltext_file:
+          'https://tile.loc.gov/storage-services/service/mss/mal/435/4356500/4356500.xml',
+      },
+      fulltext_service: {},
+      tileBody: '<tei2><text><body><p>Text.</p></body></text></tei2>',
+    },
+  ])(
+    "reads a page's text from $leg on tile.loc.gov at once, off the www.loc.gov queue",
+    async ({ resource, fulltext_service, tileBody }) => {
+      const t0 = Date.now();
+      const starts: { host: string; at: number }[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) => {
+          const { hostname } = new URL(url);
+          starts.push({ host: hostname, at: Date.now() - t0 });
+          return hostname === 'tile.loc.gov'
+            ? new Response(tileBody, { status: 200 })
+            : jsonResponse(JSON.stringify({ resource, fulltext_service }));
+        }),
+      );
+      const svc = await pacedService(3_000);
+      const page = track(svc.getNewspaperPage(`${resource.url}?sp=1`, createMockContext()));
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      // The text request follows the page fetch at once: tile.loc.gov is not www.loc.gov's queue.
+      expect(starts).toEqual([
+        { host: 'www.loc.gov', at: 0 },
+        { host: 'tile.loc.gov', at: 0 },
+      ]);
+      expect(page.done && page.error === undefined).toBe(true);
+      expect(page.value).toMatchObject({ ocr_text: 'Text.' });
+    },
+  );
+
   it('removes a queued caller at once when its request is cancelled, sending nothing for it', async () => {
     const fetchSpy = vi.fn(async (_url: string) => jsonResponse(SEARCH_BODY));
     vi.stubGlobal('fetch', fetchSpy);

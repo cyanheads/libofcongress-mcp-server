@@ -16,7 +16,13 @@ import { locBrowseCollections } from '@/mcp-server/tools/definitions/libofcongre
 import { initLocApiService } from '@/services/loc-api/loc-api-service.js';
 import { COLLECTION_ENTITY_ROWS } from '../fixtures/loc-text.js';
 import { serveByHost } from '../helpers/loc-fetch.js';
-import { contentText, renderedContentText, structured, wireError } from '../helpers/tool-result.js';
+import {
+  contentText,
+  contractRecovery,
+  renderedContentText,
+  structured,
+  wireError,
+} from '../helpers/tool-result.js';
 
 /**
  * Live-shaped LOC /collections/ payload: results point at an /about-this-collection/ subpage,
@@ -312,7 +318,8 @@ describe('locBrowseCollections', () => {
   it('returns empty result with enrichment.notice when out-of-range page (page > 1, pages === 0)', async () => {
     vi.stubGlobal('fetch', mockFetch('', 400));
     const ctx = createMockContext({ errors: locBrowseCollections.errors });
-    const input = locBrowseCollections.input.parse({ page: 5 });
+    // Page 5000 at the default 25 per page lies past the ~100k retrieval ceiling, where LOC 400s.
+    const input = locBrowseCollections.input.parse({ page: 5000 });
     const result = await locBrowseCollections.handler(input, ctx);
 
     expect(result.collections).toHaveLength(0);
@@ -321,6 +328,28 @@ describe('locBrowseCollections', () => {
     expect(enrichment.notice).toBeDefined();
     expect(String(enrichment.notice)).toContain('5');
   });
+
+  it.each([
+    [400, 1],
+    [400, 5],
+    [520, 1],
+  ])(
+    'fails HTTP %i on page %i (within the ceiling) as upstream_unavailable carrying the status, on both surfaces (#86)',
+    async (status, page) => {
+      vi.stubGlobal('fetch', mockFetch('', status));
+      const result = await runToolContract(locBrowseCollections, { query: 'jazz', page });
+
+      const error = wireError(result);
+      const hint = contractRecovery(locBrowseCollections, 'upstream_unavailable');
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_unavailable', status, recovery: { hint } },
+      });
+      const text = contentText(result);
+      expect(text).toContain(`Recovery: ${hint}`);
+      expect(text).not.toMatch(/No collections matched|out of range/);
+    },
+  );
 
   it('returns collections served beyond the computed count instead of discarding them (#33 Bug B)', async () => {
     // A page past the computed count can still carry real collections — the old guard discarded them.
