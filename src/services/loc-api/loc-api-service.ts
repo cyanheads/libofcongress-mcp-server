@@ -419,9 +419,11 @@ type RawFileGroup = NonNullable<RawItemResource['files']>[number];
  * so the two never disagree. The path is tested, not the whole string: a newspaper page's ALTO
  * text-service URL carries `.xml` only in its query. Book and By the People resources name a `.txt`
  * file, which is not read, and a file anywhere else is never fetched. The URL parser drops the
- * default port, so an explicit `:443` names the same request and passes.
+ * default port, so an explicit `:443` names the same request and passes. A value that is not a
+ * string names no file.
  */
-function isTranscriptionFile(fulltextFile: string): boolean {
+function isTranscriptionFile(fulltextFile: unknown): fulltextFile is string {
+  if (typeof fulltextFile !== 'string') return false;
   const link = normalizeUrl(fulltextFile);
   if (!URL.canParse(link)) return false;
   const { protocol, hostname, port, username, password, pathname } = new URL(link);
@@ -463,8 +465,7 @@ function itemPages(
       ...(typeof raw.download_restricted === 'boolean' && {
         download_restricted: raw.download_restricted,
       }),
-      ...(raw.fulltext_file &&
-        isTranscriptionFile(raw.fulltext_file) && { has_transcription: true }),
+      ...(isTranscriptionFile(raw.fulltext_file) && { has_transcription: true }),
     });
     if (!url) continue;
     groups.forEach((group, i) => {
@@ -1142,9 +1143,7 @@ export class LocApiService {
         ? data.fulltext_service
         : undefined;
     const transcription =
-      !textService &&
-      typeof res.fulltext_file === 'string' &&
-      isTranscriptionFile(res.fulltext_file)
+      !textService && isTranscriptionFile(res.fulltext_file)
         ? normalizeUrl(res.fulltext_file)
         : undefined;
     const attribution = transcription && extractFirstString(res.fulltext_attribution);

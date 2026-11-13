@@ -2516,7 +2516,7 @@ describe('LocApiService.getItem page window (#63)', () => {
   describe('has_transcription (#90)', () => {
     const manuscript = MANUSCRIPT_ITEM_MAL4356500.resources[0]!;
     /** The first resource getItem returns for mal4356500 with its fulltext_file set to `file`. */
-    const resourceWith = async (file: string | undefined) => {
+    const resourceWith = async (file: unknown) => {
       serve({
         ...MANUSCRIPT_ITEM_MAL4356500,
         resources: [{ ...manuscript, fulltext_file: file }],
@@ -2576,6 +2576,9 @@ describe('LocApiService.getItem page window (#63)', () => {
       ],
       ['an .xml file with a password alone', 'https://:secret@tile.loc.gov/4356500.xml'],
       ['a bare file name', '4356500.xml'],
+      // The page read finds no transcription in these, so the listing must not fail on them either.
+      ['a fulltext_file that is not a string', { url: manuscript.fulltext_file }],
+      ['a fulltext_file sent as a list', [manuscript.fulltext_file]],
       ['no fulltext_file', undefined],
     ])('leaves has_transcription absent for %s', async (_name, file) => {
       const resource = await resourceWith(file);
